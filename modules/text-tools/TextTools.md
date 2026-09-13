@@ -4,6 +4,10 @@
 library and its constrained command wrappers reuse Debian packages (`ripgrep`, `jq`, `mawk`, and
 `sed`). See [Operations](Operations.md) for the full matrix, schemas, signatures, and deferrals.
 
+![Text-tools automatic routing and incident report](text-tools-sample.png)
+
+*A release incident investigated with parallel, automatically routed `text-tools` operations.*
+
 The module accepts caller-provided text only. It does not accept paths, fetch URLs, run a shell, execute
 caller-supplied awk/sed programs, or create artifacts.
 
