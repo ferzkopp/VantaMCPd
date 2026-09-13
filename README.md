@@ -216,10 +216,12 @@ flowchart LR
 
 Inventory files:
 
-| File | Committed | Purpose |
+| File | What it is | Used by VantaMCPd? |
 | --- | --- | --- |
-| [cluster.config.example.json](cluster.config.example.json) | yes | Two-node template: one `worker`, one `worker+storage` |
-| `cluster.config.local.json` | no (gitignored) | Your real nodes. Created during bootstrap, wins over everything else |
+| [cluster.config.example.json](cluster.config.example.json) | Committed two-node template with one `worker` and one `worker+storage` | No; copy it to create your inventory |
+| `cluster.config.local.json` | Your private inventory containing the real nodes; ignored by Git | Yes, by default |
+
+Set `VANTA_CONFIG` when the daemon should load an inventory from a different path.
 
 ---
 
@@ -237,40 +239,59 @@ Once connected, ask the agent:
 **Health and triage**
 
 > Check the status of all cluster nodes
+>
 > Which node has the least free disk space, and what is using it?
+>
 > Are any systemd units failed anywhere in the cluster?
+>
 > Show me the CPU temperature and load of every node - is anything throttling?
+>
 > Has any node rebooted recently, or is a reboot pending?
+>
 > Show the last 50 ssh journal errors on cluster2
+>
 > Check dmesg on all nodes for USB or SD-card I/O errors
 
 **Inventory and hardware**
 
 > List the cluster nodes with their roles and recorded hardware
+>
 > Where can I watch what you are doing on the cluster?
+>
 > Re-probe the hardware on cluster4, I swapped a disk
+>
 > Which disks are unassigned, and what do you think they are for?
+>
 > How much swap does each node have, and is it persistent across reboots?
 
 **Packages and services**
 
 > Which nodes have pending apt upgrades?
+>
 > Do a dry run of upgrading all nodes, then tell me what would change
+>
 > Install htop and tmux on the workers only
+>
 > Is nfs-kernel-server running on the storage node? Restart it if not
+>
 > Disable the unattended-upgrades timer on all nodes and explain the trade-off
 
 **Storage and swap**
 
 > Mount the SSD on the storage node and share it to the rest of the cluster over NFS
+>
 > Is the NFS share mounted and writable on every worker?
+>
 > Point apt's cache at the shared SSD so the nodes stop re-downloading the same packages
+>
 > cluster4 lost its swap after a reboot - find out why and fix it
 
 **Files and config**
 
 > Show me /etc/fstab on every node side by side
+>
 > Back up /etc/exports from the storage node to my machine
+>
 > Add a 2GB swap file on the shared SSD for cluster1
 
 Destructive work (formatting, partitioning, reboots, `rm -rf`) is refused until you approve it
