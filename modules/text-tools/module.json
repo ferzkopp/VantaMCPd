@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "text-tools",
+  "name": "Text Tools",
+  "version": "0.2.0",
+  "description": "Bounded text transformation, extraction, analysis, conversion, developer, document, table, and command-wrapper tools.",
+  "entrypoint": ["python3", "server.py"],
+  "compatibility": {
+    "os": ["debian", "ubuntu"],
+    "architectures": ["armhf", "arm64", "amd64"],
+    "minCores": 1,
+    "minRamMb": 256,
+    "minDiskMb": 40,
+    "requiredCommands": ["bash", "python3", "rg", "jq", "awk", "sed"],
+    "accelerators": []
+  },
+  "packages": {
+    "apt": ["python3", "ripgrep", "jq", "mawk", "sed"]
+  },
+  "lifecycle": {
+    "install": "install.sh",
+    "uninstall": "uninstall.sh"
+  },
+  "deployment": {
+    "mode": "replicated",
+    "routing": "round-robin"
+  },
+  "runtime": {
+    "mode": "on-demand"
+  },
+  "limits": {
+    "startupMs": 10000,
+    "callMs": 30000,
+    "maxInputBytes": 262144,
+    "maxOutputBytes": 262144
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "vanta": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/dist/index.js"],
+      "env": {
+        "VANTA_CONFIG": "${workspaceFolder}/cluster.config.local.json",
+        "VANTA_ENV_FILE": "${workspaceFolder}/.env"
+      }
+    }
+  }
+}

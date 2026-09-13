@@ -1,0 +1,97 @@
+{
+  "_comment": [
+    "Template inventory for VantaMCPd - copy to cluster.config.local.json and edit.",
+    "cluster.config.local.json is gitignored and always wins over this file.",
+    "role: worker | worker+storage | control | control+worker | control+storage | storage.",
+    "Each '+'-separated token becomes a tag, so targets:['storage'] hits every storage node.",
+    "A node whose role includes 'storage' must also carry a 'storage' block.",
+    "The 'hardware' block is written by the daemon (or 'npm run discover') the first time it connects -",
+    "you never need to fill it in. Set defaults.autoDiscoverHardware to false to opt out.",
+    "Installed modules older than the local catalog are updated on startup by default. Set defaults.autoUpdateModules to false to opt out.",
+    "'diskRoles' is yours: it overrides disk-role detection and is never overwritten by a refresh."
+  ],
+  "defaults": {
+    "user": "configure",
+    "port": 22,
+    "auth": "key",
+    "privateKeyPath": "~/.ssh/vanta_cluster_ed25519",
+    "sudo": "nopasswd",
+    "connectTimeoutMs": 15000,
+    "commandTimeoutMs": 120000,
+    "maxConcurrency": 4,
+    "strictHostKeyChecking": true,
+    "autoDiscoverHardware": true,
+    "autoUpdateModules": true,
+    "nfsNetwork": "10.0.0.0/24"
+  },
+  "security": {
+    "allowArbitraryCommands": true,
+    "requireConfirmForDangerous": true,
+    "maxOutputBytes": 200000,
+    "extraDenyPatterns": []
+  },
+  "monitoring": {
+    "enabled": true,
+    "web": true,
+    "port": 7420,
+    "logDir": "~/.vanta/logs",
+    "maxEvents": 5000,
+    "maxLogMb": 64,
+    "logOutput": false
+  },
+  "nodes": [
+    {
+      "name": "cluster1",
+      "host": "10.0.0.11",
+      "role": "worker",
+      "tags": ["armv7"],
+      "description": "Plain worker node - no attached storage.",
+      "hardware": {
+        "_comment": "Auto-discovered and overwritten on refresh - shown here only as an example.",
+        "cpu": { "model": "ARMv7 Processor rev 5 (v7l)", "soc": "Allwinner sun8i Family", "arch": "armv7l", "packageArch": "armhf", "cores": 4, "maxMhz": 1200 },
+        "memory": {
+          "totalMb": 1006,
+          "swapTotalMb": 7915,
+          "swapDevices": [{ "name": "/dev/sdb1", "type": "partition", "sizeMb": 7787, "priority": -3, "persistent": true }],
+          "swapPotentialMb": 7787,
+          "swapPersistent": true
+        },
+        "accelerators": [],
+        "disks": [
+          {
+            "name": "mmcblk0", "sizeGb": 14.8, "rotational": false, "removable": false,
+            "role": "system", "roleSource": "detected",
+            "partitions": [{ "name": "mmcblk0p1", "sizeGb": 14.4, "fsType": "ext4", "mountpoint": "/" }]
+          },
+          {
+            "name": "sdb", "sizeGb": 7.6, "model": "USB Flash Drive", "removable": true,
+            "role": "swap", "roleSource": "detected",
+            "partitions": [{ "name": "sdb1", "sizeGb": 7.6, "fsType": "swap", "label": "clusterswap" }]
+          }
+        ],
+        "filesystems": [{ "mountpoint": "/", "device": "/dev/mmcblk0p1", "fsType": "ext4", "sizeGb": 14.4 }],
+        "os": { "name": "Armbian 24.5.1 bookworm", "id": "debian", "version": "12", "kernel": "6.6.31-current-sunxi", "armbian": "24.5.1", "board": "orangepipc", "boardModel": "Xunlong Orange Pi PC" },
+        "discoveredAt": "2026-01-01T00:00:00+01:00"
+      }
+    },
+    {
+      "name": "cluster2",
+      "host": "10.0.0.12",
+      "role": "worker+storage",
+      "tags": ["armv7"],
+      "description": "Worker that also exports an external disk to the rest of the cluster.",
+      "diskRoles": { "sdc": "storage" },
+      "storage": {
+        "device": "/dev/sda1",
+        "mountpoint": "/mnt/ssd",
+        "fsType": "ext4",
+        "label": "clusterssd",
+        "nfs": {
+          "enabled": true,
+          "network": "10.0.0.0/24",
+          "options": "rw,sync,no_subtree_check"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "name": "vantamcpd",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP daemon for managing a heterogeneous Debian/Armbian device cluster from any MCP-capable agent.",
+  "type": "module",
+  "bin": {
+    "vantamcpd": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "watch": "tsc -w -p tsconfig.json",
+    "start": "node dist/index.js",
+    "discover": "node dist/discover.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prereqs": "powershell -ExecutionPolicy Bypass -File scripts/install-prereqs.ps1",
+    "prereqs:check": "powershell -ExecutionPolicy Bypass -File scripts/install-prereqs.ps1 -Check",
+    "bootstrap": "powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1",
+    "prepare-nodes": "powershell -ExecutionPolicy Bypass -File scripts/prepare-nodes.ps1",
+    "prepare-nodes:check": "powershell -ExecutionPolicy Bypass -File scripts/prepare-nodes.ps1 -Check"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.0",
+    "ssh2": "^1.16.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ssh2": "^1.15.1",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20.11"
+  },
+  "allowScripts": {
+    "ssh2@1.17.0": true,
+    "cpu-features@0.0.10": true
+  }
+}

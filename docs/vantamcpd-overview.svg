@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title desc">
+  <title id="title">VantaMCPd architecture</title>
+  <desc id="desc">An agent connects through the VantaMCPd control plane to a heterogeneous cluster. Bootstrap provides secure node access and modules rapidly add reusable capabilities.</desc>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#27313a" stroke-width="1" opacity="0.42"/>
+    </pattern>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#161b22"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#58a6ff"/>
+      <stop offset="1" stop-color="#3fb950"/>
+    </linearGradient>
+    <linearGradient id="icon-edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f6feb"/>
+      <stop offset="1" stop-color="#3fb950"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="430" rx="8" fill="#090c10"/>
+  <rect width="1200" height="430" rx="8" fill="url(#grid)"/>
+
+  <text x="48" y="56" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="24" font-weight="650">One agent. Every machine useful.</text>
+  <text x="48" y="83" fill="#8b949e" font-family="Segoe UI, sans-serif" font-size="15">Bootstrap once for managed node access. Add capabilities as modules. Route work where it fits.</text>
+
+  <g filter="url(#shadow)">
+    <rect x="48" y="132" width="220" height="196" rx="8" fill="url(#panel)" stroke="#30363d"/>
+    <rect x="68" y="154" width="44" height="44" rx="6" fill="#1f6feb"/>
+    <path d="M80 168l8 8-8 8M92 184h10" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="128" y="173" fill="#8b949e" font-family="Segoe UI, sans-serif" font-size="12" font-weight="600" letter-spacing="1.4">AGENT</text>
+    <text x="128" y="194" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="18" font-weight="650">AI Agent</text>
+    <line x1="68" y1="220" x2="248" y2="220" stroke="#30363d"/>
+    <text x="68" y="249" fill="#c9d1d9" font-family="Consolas, monospace" font-size="13">inspect · decide · act</text>
+    <text x="68" y="278" fill="#8b949e" font-family="Segoe UI, sans-serif" font-size="13">Natural-language intent</text>
+    <text x="68" y="299" fill="#8b949e" font-family="Segoe UI, sans-serif" font-size="13">becomes bounded MCP calls</text>
+  </g>
+
+  <path d="M268 230H398" fill="none" stroke="#58a6ff" stroke-width="3" stroke-linecap="round"/>
+  <text x="291" y="213" fill="#79c0ff" font-family="Consolas, monospace" font-size="12">MCP / stdio</text>
+
+  <g filter="url(#shadow)">
+    <circle cx="516" cy="230" r="118" fill="#050608" stroke="#58a6ff" stroke-width="2.5"/>
+    <circle cx="516" cy="230" r="98" fill="none" stroke="#238636" stroke-width="1" opacity="0.7"/>
+    <circle cx="516" cy="230" r="78" fill="#0d1117" stroke="#30363d"/>
+    <g transform="translate(439 173) scale(.55)" aria-label="VantaMCPd icon">
+      <rect width="64" height="64" rx="14" fill="#0d1117"/>
+      <rect x="1.25" y="1.25" width="61.5" height="61.5" rx="12.75" fill="none" stroke="url(#icon-edge)" stroke-width="2.5" opacity=".85"/>
+      <g stroke="#58a6ff" stroke-width="2.5" stroke-linecap="round" opacity=".55">
+        <path d="M32 32 18 18"/>
+        <path d="M32 32 46 18"/>
+        <path d="M32 32 18 46"/>
+        <path d="M32 32 46 46"/>
+      </g>
+      <g fill="#58a6ff">
+        <circle cx="18" cy="18" r="5"/>
+        <circle cx="46" cy="18" r="5"/>
+        <circle cx="18" cy="46" r="5"/>
+      </g>
+      <circle cx="46" cy="46" r="5" fill="#3fb950"/>
+      <circle cx="32" cy="32" r="8.5" fill="#0d1117"/>
+      <circle cx="32" cy="32" r="8.5" fill="none" stroke="#58a6ff" stroke-width="3"/>
+      <circle cx="32" cy="32" r="3" fill="#e6edf3"/>
+    </g>
+    <text x="482" y="199" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="22" font-weight="700">VantaMCPd</text>
+    <text x="516" y="225" text-anchor="middle" fill="#3fb950" font-family="Consolas, monospace" font-size="12">CONTROL PLANE</text>
+    <text x="516" y="249" text-anchor="middle" fill="#8b949e" font-family="Segoe UI, sans-serif" font-size="12">policy · routing · audit</text>
+    <g aria-label="Web monitoring interface">
+      <rect x="459" y="265" width="114" height="28" rx="4" fill="#172a3a" stroke="#1f6feb"/>
+      <rect x="467" y="272" width="20" height="14" rx="2" fill="none" stroke="#79c0ff"/>
+      <line x1="467" y1="276" x2="487" y2="276" stroke="#79c0ff"/>
+      <circle cx="470.5" cy="274" r="1" fill="#79c0ff"/>
+      <circle cx="474" cy="274" r="1" fill="#79c0ff"/>
+      <text x="493" y="283" fill="#79c0ff" font-family="Consolas, monospace" font-size="10">WEB MONITOR</text>
+    </g>
+  </g>
+
+  <path d="M634 230H698" fill="none" stroke="#3fb950" stroke-width="3" stroke-linecap="round"/>
+  <path d="M698 230C724 230 720 152 758 152" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round"/>
+  <path d="M698 230C724 230 720 243 758 243" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round"/>
+  <path d="M698 230C724 230 720 334 758 334" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round"/>
+  <text x="642" y="213" fill="#56d364" font-family="Consolas, monospace" font-size="12">SSH</text>
+
+  <g filter="url(#shadow)">
+    <rect x="758" y="111" width="394" height="82" rx="7" fill="url(#panel)" stroke="#30363d"/>
+    <circle cx="786" cy="137" r="7" fill="#3fb950"/>
+    <text x="804" y="142" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="16" font-weight="650">Older ARM node</text>
+    <text x="1118" y="142" text-anchor="end" fill="#8b949e" font-family="Consolas, monospace" font-size="12">2 cores · 1 GB</text>
+    <rect x="780" y="159" width="80" height="22" rx="4" fill="#172a3a" stroke="#1f6feb"/>
+    <text x="820" y="174" text-anchor="middle" fill="#79c0ff" font-family="Consolas, monospace" font-size="10.5">text-tools</text>
+    <rect x="868" y="159" width="124" height="22" rx="4" fill="#163322" stroke="#238636"/>
+    <text x="930" y="174" text-anchor="middle" fill="#7ee787" font-family="Consolas, monospace" font-size="10.5">artifact-storage</text>
+    <rect x="1000" y="159" width="94" height="22" rx="4" fill="#2d2412" stroke="#9e6a03"/>
+    <text x="1047" y="174" text-anchor="middle" fill="#e3b341" font-family="Consolas, monospace" font-size="10.5">job-runner</text>
+
+    <rect x="758" y="202" width="394" height="82" rx="7" fill="url(#panel)" stroke="#30363d"/>
+    <circle cx="786" cy="231" r="7" fill="#3fb950"/>
+    <text x="804" y="236" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="16" font-weight="650">General-purpose x86 node</text>
+    <text x="1118" y="236" text-anchor="end" fill="#8b949e" font-family="Consolas, monospace" font-size="12">more capacity</text>
+    <rect x="780" y="250" width="104" height="22" rx="4" fill="#172a3a" stroke="#1f6feb"/>
+    <text x="832" y="265" text-anchor="middle" fill="#79c0ff" font-family="Consolas, monospace" font-size="10.5">python-kernel</text>
+    <rect x="892" y="250" width="105" height="22" rx="4" fill="#163322" stroke="#238636"/>
+    <text x="944.5" y="265" text-anchor="middle" fill="#7ee787" font-family="Consolas, monospace" font-size="10.5">numpy-scipy</text>
+    <rect x="1005" y="250" width="112" height="22" rx="4" fill="#2d2412" stroke="#9e6a03"/>
+    <text x="1061" y="265" text-anchor="middle" fill="#e3b341" font-family="Consolas, monospace" font-size="10.5">browserless</text>
+
+    <rect x="758" y="293" width="394" height="82" rx="7" fill="url(#panel)" stroke="#30363d"/>
+    <circle cx="786" cy="321" r="7" fill="#d29922"/>
+    <text x="804" y="326" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="16" font-weight="650">Future accelerator node</text>
+    <text x="1118" y="326" text-anchor="end" fill="#8b949e" font-family="Consolas, monospace" font-size="12">GPU · NPU</text>
+    <rect x="780" y="341" width="96" height="22" rx="4" fill="#172a3a" stroke="#1f6feb"/>
+    <text x="828" y="356" text-anchor="middle" fill="#79c0ff" font-family="Consolas, monospace" font-size="10.5">image-vision</text>
+    <rect x="884" y="341" width="112" height="22" rx="4" fill="#163322" stroke="#238636"/>
+    <text x="940" y="356" text-anchor="middle" fill="#7ee787" font-family="Consolas, monospace" font-size="10.5">model-inference</text>
+    <rect x="1004" y="341" width="126" height="22" rx="4" fill="#2d2412" stroke="#9e6a03"/>
+    <text x="1067" y="356" text-anchor="middle" fill="#e3b341" font-family="Consolas, monospace" font-size="10.5">vector-database</text>
+  </g>
+
+  <g font-family="Consolas, monospace" font-size="11" font-weight="600">
+    <rect x="330" y="365" width="372" height="28" rx="5" fill="#161b22" stroke="#30363d"/>
+    <text x="516" y="383" text-anchor="middle" fill="#c9d1d9">BOOTSTRAP ONCE · MANAGED NODE ACCESS · SCALE BY MODULE</text>
+  </g>
+</svg>

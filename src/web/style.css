@@ -1,0 +1,165 @@
+:root {
+  --bg: #0e1116;
+  --panel: #161b22;
+  --line: #2a3240;
+  --fg: #d7dde5;
+  --dim: #8b97a7;
+  --ok: #3fb950;
+  --bad: #f85149;
+  --warn: #d29922;
+  --accent: #58a6ff;
+}
+
+* { box-sizing: border-box }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.5 "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .3px }
+.brand { display: flex; align-items: center; gap: 9px }
+.brand img { width: 26px; height: 26px; display: block }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); display: inline-block }
+.dot.on { background: var(--ok) }
+
+input, select, button {
+  background: #0d1117;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 5px 8px;
+  font: inherit;
+}
+input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent) }
+button { cursor: pointer }
+button.active { border-color: var(--accent); color: var(--accent) }
+
+/* min-width lets the filter shrink so the header stays on one line. */
+.grow { flex: 1; min-width: 80px }
+.count { margin-left: auto }
+.cluster-count { color: var(--fg) }
+
+main { padding: 12px 14px; display: grid; gap: 12px }
+
+table { border-collapse: collapse; width: 100% }
+.table-scroll { overflow-x: auto }
+#summary { min-width: 940px }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap }
+th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .5px }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; overflow: hidden }
+.card h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  color: #cbd5e1;
+  margin: 0;
+  padding: 8px 10px;
+  background: #202b3a;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.card h2 .hint { color: var(--dim); font-weight: 400; text-transform: none; letter-spacing: 0 }
+
+#log { font-size: 12px; max-height: 52vh; overflow: auto }
+
+/* One grid definition shared by the header and the rows, so the columns stay aligned. */
+.row {
+  display: grid;
+  grid-template-columns: 74px 90px 190px 62px 80px 220px minmax(240px, 1fr);
+  gap: 8px;
+  padding: 3px 10px;
+  align-items: baseline;
+  min-width: 1020px;
+}
+#log .row { border-bottom: 1px solid #1d232c }
+#log .row:hover { background: #1b2230 }
+.loghead {
+  color: var(--dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  background: #151b24;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+}
+
+.cmd { white-space: pre-wrap; word-break: break-word; color: var(--fg) }
+.params { white-space: pre-wrap; word-break: break-word; color: var(--dim) }
+.err { color: var(--bad); white-space: pre-wrap; word-break: break-word }
+.ok { color: var(--ok) }
+.bad { color: var(--bad) }
+.dim { color: var(--dim) }
+.warn { color: var(--warn) }
+
+.pill { border: 1px solid var(--line); border-radius: 10px; padding: 0 6px; font-size: 11px; color: var(--dim) }
+.empty { padding: 14px 10px; color: var(--dim) }
+
+#summary tbody tr { cursor: pointer }
+#summary tbody tr:hover { background: #1b2230 }
+
+dialog {
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 0;
+  width: min(760px, 92vw);
+  max-height: 86vh;
+  font: inherit;
+}
+dialog::backdrop { background: rgba(0, 0, 0, .6) }
+
+.dlg-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #202b3a;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  position: sticky;
+  top: 0;
+}
+.dlg-head b { font-size: 14px }
+.dlg-body { padding: 12px 14px; overflow: auto; max-height: 72vh }
+/* Focus lands here on open so the close button does not show a ring. */
+.dlg-body:focus { outline: none }
+
+.sec { margin-bottom: 14px }
+.sec > h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--accent);
+  margin: 0 0 5px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--line);
+}
+.kv { display: grid; grid-template-columns: 150px 1fr; gap: 2px 10px }
+.kv dt { color: var(--dim) }
+.kv dd { margin: 0; word-break: break-word }
+
+.sub { margin: 5px 0 0 0; padding: 5px 8px; background: #0d1117; border: 1px solid var(--line); border-radius: 5px }
+.sub .t { color: var(--fg); margin-bottom: 2px }
+
+.x { margin-left: auto; background: none; border: none; color: var(--dim); font-size: 18px; line-height: 1; padding: 0 4px }
+.x:hover { color: var(--fg) }

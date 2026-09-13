@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Secrets & local state - never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_*
+vanta_cluster_ed25519*
+known_hosts.json
+.vanta/
+
+# The real inventory (hosts, users) stays local; cluster.config.example.json is the shareable template
+cluster.config.local.json
+cluster.config.json
+cluster.config.local.json.bak-*

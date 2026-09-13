@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VantaMCPd monitor</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header>
+  <span class="brand" title="VantaMCPd - the MCP daemon driving this cluster over SSH">
+    <img src="/icon.svg" alt="">
+    <h1>VantaMCPd monitor</h1>
+  </span>
+  <span title="Live connection to the daemon's event stream. Green means events are arriving in real time.">
+    <span class="dot" id="dot"></span> <span id="state" class="dim">connecting…</span>
+  </span>
+  <span class="pill cluster-count" id="cluster-count" title="Configured nodes in this cluster">… nodes</span>
+  <select id="node" title="Show only interactions with one node"><option value="">all nodes</option></select>
+  <select id="status" title="Show only interactions that ended with this result (built from what has actually occurred)"><option value="">any status</option></select>
+  <input id="q" class="grow" placeholder="filter text (command, tool, error)…" autocomplete="off"
+    title="Case-insensitive substring match across the command, the tool name and any error text">
+  <button id="follow" class="active" title="Pause or resume appending new interactions as they happen">following</button>
+  <button id="clear" title="Empty the list on screen. The stored log on disk is not touched.">clear</button>
+  <span class="pill count" id="count" title="Number of interactions currently listed below">0</span>
+</header>
+<main>
+  <div class="card">
+    <h2 title="Totals per node across the interactions held in memory">Per node <span class="hint">— click a row for configuration and hardware</span></h2>
+    <div class="table-scroll"><table id="summary"><thead><tr>
+      <th title="Node name from the inventory">node</th>
+      <th title="Configured role: worker, storage, control, or a combination">role</th>
+      <th title="Installed modules discovered from receipts on the node">modules</th>
+      <th title="Interactions recorded with this node">calls</th>
+      <th title="Interactions that returned a non-zero exit code or failed to connect">failed</th>
+      <th title="Mean round-trip time per interaction, in milliseconds">avg ms</th>
+      <th title="Summed round-trip time of every interaction, in milliseconds">total ms</th>
+      <th title="Total stdout + stderr returned by this node">bytes</th>
+      <th title="MCP tool behind the most recent interaction">last tool</th>
+      <th title="Local time of the most recent interaction">last seen</th>
+    </tr></thead><tbody></tbody></table></div>
+  </div>
+  <div class="card">
+    <h2 title="Every SSH command the daemon ran, newest first">Interactions <span class="hint" id="scope"></span></h2>
+    <div class="row loghead">
+      <div title="Local time the interaction completed">time</div>
+      <div title="Node the command ran on">node</div>
+      <div title="MCP tool that issued the command">tool</div>
+      <div title="ok, the exit code, or error when the connection itself failed">status</div>
+      <div title="Round-trip time; 'sudo' marks commands that ran as root">duration</div>
+      <div title="Validated MCP tool input, with sensitive values redacted">parameters</div>
+      <div title="The command as issued, with secrets redacted. Errors are shown in red instead.">command</div>
+    </div>
+    <div id="log"><div class="empty">waiting for activity…</div></div>
+  </div>
+</main>
+<dialog id="detail">
+  <div class="dlg-head">
+    <b id="dlg-title"></b>
+    <span class="pill" id="dlg-role" title="Configured role"></span>
+    <button class="x" id="dlg-x" title="Close (Esc)">✕</button>
+  </div>
+  <div class="dlg-body" id="dlg-body" tabindex="-1" autofocus></div>
+</dialog>
+</body>
+</html>
