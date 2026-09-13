@@ -10,6 +10,7 @@ export interface AuditEvent {
   node: string;
   host: string;
   kind: AuditKind;
+  module: string;
   tool?: string;
   parameters?: string;
   command?: string;
@@ -33,18 +34,34 @@ export interface AuditOptions {
 }
 
 /** Which MCP tool is on the stack, so an SSH call can be attributed without threading a parameter through every call site. */
-const toolContext = new AsyncLocalStorage<{ tool: string; parameters?: string }>();
+const toolContext = new AsyncLocalStorage<{ tool: string; module: string; parameters?: string }>();
+export const CORE_MODULE = "core";
+
+function moduleFromParameters(parameters: unknown): string {
+  if (typeof parameters !== "object" || parameters === null || Array.isArray(parameters)) return CORE_MODULE;
+  const moduleId = (parameters as Record<string, unknown>).moduleId;
+  return typeof moduleId === "string" && moduleId.length > 0 ? moduleId : CORE_MODULE;
+}
 
 export function withTool<T>(tool: string, fn: () => T): T {
-  return toolContext.run({ tool }, fn);
+  return toolContext.run({ tool, module: CORE_MODULE }, fn);
 }
 
 export function withToolParameters<T>(tool: string, parameters: unknown, fn: () => T): T {
-  return toolContext.run({ tool, parameters: formatParameters(parameters) }, fn);
+  return toolContext.run({ tool, module: moduleFromParameters(parameters), parameters: formatParameters(parameters) }, fn);
 }
 
 export function currentTool(): string | undefined {
   return toolContext.getStore()?.tool;
+}
+
+export function currentAuditAttribution(): Pick<AuditEvent, "module" | "tool" | "parameters"> {
+  const context = toolContext.getStore();
+  return {
+    module: context?.module ?? CORE_MODULE,
+    tool: context?.tool,
+    parameters: context?.parameters,
+  };
 }
 
 const COMMAND_MAX = 2000;
@@ -174,12 +191,17 @@ export class AuditLog {
   }
 
   record(
-    input: Omit<AuditEvent, "seq" | "ts" | "tool" | "parameters"> & { tool?: string; parameters?: string },
+    input: Omit<AuditEvent, "seq" | "ts" | "module" | "tool" | "parameters"> & {
+      module?: string;
+      tool?: string;
+      parameters?: string;
+    },
   ): AuditEvent {
     const now = new Date();
     const context = toolContext.getStore();
     const event: AuditEvent = {
       ...input,
+      module: input.module ?? context?.module ?? CORE_MODULE,
       tool: input.tool ?? context?.tool,
       parameters:
         input.parameters === undefined ? context?.parameters : clip(input.parameters, PARAMETERS_MAX),
@@ -208,15 +230,16 @@ export class AuditLog {
     return event;
   }
 
-  query(filter: { since?: number; node?: string; status?: string; q?: string; limit?: number }): AuditEvent[] {
+  query(filter: { since?: number; node?: string; module?: string; status?: string; q?: string; limit?: number }): AuditEvent[] {
     const needle = filter.q?.toLowerCase();
     const limit = Math.min(Math.max(filter.limit ?? 200, 1), 2000);
     const matched = this.events.filter((e) => {
       if (filter.since !== undefined && e.seq <= filter.since) return false;
       if (filter.node && e.node !== filter.node) return false;
+      if (filter.module && e.module !== filter.module) return false;
       if (filter.status && statusKey(e) !== filter.status) return false;
       if (needle) {
-        const hay = `${e.node} ${e.tool ?? ""} ${e.parameters ?? ""} ${e.command ?? ""} ${e.error ?? ""} ${e.preview ?? ""}`.toLowerCase();
+        const hay = `${e.node} ${e.module} ${e.tool ?? ""} ${e.parameters ?? ""} ${e.command ?? ""} ${e.error ?? ""} ${e.preview ?? ""}`.toLowerCase();
         if (!hay.includes(needle)) return false;
       }
       return true;
@@ -256,6 +279,14 @@ export class AuditLog {
 
   nodes(): string[] {
     return [...new Set(this.events.map((e) => e.node))].sort();
+  }
+
+  modules(): string[] {
+    return [...new Set(this.events.map((event) => event.module))].sort((a, b) => {
+      if (a === CORE_MODULE) return -1;
+      if (b === CORE_MODULE) return 1;
+      return a.localeCompare(b);
+    });
   }
 
   /** Observed status labels, "ok" first then exit codes ascending. */

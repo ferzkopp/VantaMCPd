@@ -242,8 +242,11 @@ test("install provisions declared apt dependencies when required commands are mi
     },
   };
   const manager = new ModuleManager({ maxConcurrency: 1 }, pool, path.join(root, "modules"));
+  let inventoryChanges = 0;
+  manager.onInventoryChanged(() => { inventoryChanges += 1; });
   const [result] = await manager.install("text-tools", [target]);
   assert.equal(result.ok, false);
+  assert.equal(inventoryChanges, 0);
   assert.match(result.error, /apt dependency installation failed/);
   assert.equal(commands.length, 1);
   assert.match(commands[0].command, /apt-get install/);
@@ -292,9 +295,12 @@ test("install stages, verifies, installs, writes a receipt, and cleans up", asyn
     }),
   };
   const manager = new ModuleManager({ maxConcurrency: 1 }, pool, path.join(root, "modules"));
+  let inventoryChanges = 0;
+  manager.onInventoryChanged(() => { inventoryChanges += 1; });
   manager.catalog.modules[0].manifest.runtime = { mode: "service", systemdUnit: "server.py" };
   const [result] = await manager.install("text-tools", [target]);
   assert.equal(result.ok, true);
+  assert.equal(inventoryChanges, 1);
   assert.equal(uploads.length, files.length);
   assert.equal(sftpEnded, true);
   assert.ok(commands.some((entry) => entry.command.includes("bash 'install.sh'") && entry.options.sudo === true));
@@ -342,6 +348,8 @@ test("uninstall validates the receipt before removing its payload and state", as
     },
   };
   const manager = new ModuleManager({ maxConcurrency: 1 }, pool, path.join(root, "modules"));
+  let inventoryChanges = 0;
+  manager.onInventoryChanged(() => { inventoryChanges += 1; });
   manager.catalog.modules[0].manifest.runtime = receipt.runtime;
   const [result] = await manager.uninstall("text-tools", [target]);
   assert.deepEqual(result, {
@@ -351,6 +359,7 @@ test("uninstall validates the receipt before removing its payload and state", as
     version: "0.2.0",
     removed: true,
   });
+  assert.equal(inventoryChanges, 1);
   assert.equal(commands.length, 2);
   assert.ok(commands[1].options.sudo);
   assert.match(commands[1].command, /uninstall\.sh/);

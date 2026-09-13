@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { AuditLog, withToolParameters } from "../dist/audit.js";
+import { AuditLog, currentAuditAttribution, withTool, withToolParameters } from "../dist/audit.js";
 
 test("attributes redacted tool parameters to downstream audit events", () => {
   const logDir = mkdtempSync(path.join(tmpdir(), "vantamcpd-audit-"));
@@ -33,10 +33,76 @@ test("attributes redacted tool parameters to downstream audit events", () => {
         }),
     );
 
+    assert.equal(event.module, "text-tools");
     assert.equal(event.tool, "cluster_install_module");
     assert.match(event.parameters, /"moduleId":"text-tools"/);
     assert.doesNotMatch(event.parameters, /do-not-log|also-secret/);
+    assert.equal(audit.query({ module: "text-tools" }).length, 1);
+    assert.equal(audit.query({ module: "core" }).length, 0);
     assert.equal(audit.query({ q: "text-tools" }).length, 1);
+  } finally {
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
+
+test("attributes non-module operations to core", () => {
+  const logDir = mkdtempSync(path.join(tmpdir(), "vantamcpd-audit-"));
+  try {
+    const audit = new AuditLog({ logDir, maxEvents: 10, maxLogMb: 1, logOutput: false });
+    const event = withToolParameters(
+      "cluster_status",
+      { targets: ["cluster1"] },
+      () =>
+        audit.record({
+          node: "cluster1",
+          host: "192.0.2.1",
+          kind: "exec",
+          command: "uptime",
+          sudo: false,
+          ok: true,
+          code: 0,
+          durationMs: 1,
+          bytesOut: 0,
+          bytesErr: 0,
+        }),
+    );
+
+    assert.equal(event.module, "core");
+    assert.deepEqual(audit.modules(), ["core"]);
+    assert.equal(audit.query({ module: "core" }).length, 1);
+    assert.equal(audit.query({ module: "text-tools" }).length, 0);
+  } finally {
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
+
+test("preserves captured attribution when work completes under another context", () => {
+  const logDir = mkdtempSync(path.join(tmpdir(), "vantamcpd-audit-"));
+  try {
+    const audit = new AuditLog({ logDir, maxEvents: 10, maxLogMb: 1, logOutput: false });
+    const attribution = withToolParameters(
+      "cluster_call_module_tool",
+      { moduleId: "text-tools" },
+      () => currentAuditAttribution(),
+    );
+    const event = withTool("dashboard_module_refresh", () =>
+      audit.record({
+        ...attribution,
+        node: "cluster1",
+        host: "192.0.2.1",
+        kind: "exec",
+        command: "python3 server.py",
+        sudo: false,
+        ok: true,
+        code: 0,
+        durationMs: 1,
+        bytesOut: 0,
+        bytesErr: 0,
+      }));
+
+    assert.equal(event.module, "text-tools");
+    assert.equal(event.tool, "cluster_call_module_tool");
+    assert.match(event.parameters, /"moduleId":"text-tools"/);
   } finally {
     rmSync(logDir, { recursive: true, force: true });
   }

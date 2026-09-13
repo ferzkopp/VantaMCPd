@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Client, type ClientChannel, type ConnectConfig, type SFTPWrapper } from "ssh2";
-import type { AuditLog } from "./audit.js";
+import { currentAuditAttribution, type AuditLog } from "./audit.js";
 import { ENV, type ClusterConfig, type ResolvedNode } from "./config.js";
 import { q } from "./security.js";
 
@@ -440,6 +440,7 @@ export class SshPool {
     opts: Pick<ExecOptions, "cwd" | "env"> = {},
   ): Promise<ClientChannel> {
     const started = Date.now();
+    const attribution = currentAuditAttribution();
     try {
       const stream = await this.session(node).openProcess(command, opts);
       let code: number | null = null;
@@ -463,6 +464,7 @@ export class SshPool {
       });
       stream.once("close", () => {
         this.audit?.record({
+          ...attribution,
           node: node.name,
           host: node.host,
           kind: "exec",
@@ -479,6 +481,7 @@ export class SshPool {
       return stream;
     } catch (err) {
       this.audit?.record({
+        ...attribution,
         node: node.name,
         host: node.host,
         kind: "exec",

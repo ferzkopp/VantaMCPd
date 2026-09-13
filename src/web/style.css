@@ -58,6 +58,7 @@ main { padding: 12px 14px; display: grid; gap: 12px }
 table { border-collapse: collapse; width: 100% }
 .table-scroll { overflow-x: auto }
 #summary { min-width: 940px }
+#modules { min-width: 760px }
 th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap }
 th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .5px }
 
@@ -77,17 +78,31 @@ th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: upper
   align-items: center;
 }
 .card h2 .hint { color: var(--dim); font-weight: 400; text-transform: none; letter-spacing: 0 }
+.section-link {
+  margin-left: auto;
+  color: var(--accent);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 2px 7px;
+  text-decoration: none;
+  text-transform: none;
+  letter-spacing: 0;
+  background: #0d1117;
+}
+.section-link:hover:not(:disabled) { border-color: var(--accent) }
+.section-link:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px }
+.section-link:disabled { color: var(--dim); cursor: default }
 
 #log { font-size: 12px; max-height: 52vh; overflow: auto }
 
 /* One grid definition shared by the header and the rows, so the columns stay aligned. */
 .row {
   display: grid;
-  grid-template-columns: 74px 90px 190px 62px 80px 220px minmax(240px, 1fr);
+  grid-template-columns: 190px 90px 110px 190px 62px 80px 220px minmax(240px, 1fr);
   gap: 8px;
   padding: 3px 10px;
   align-items: baseline;
-  min-width: 1020px;
+  min-width: 1254px;
 }
 #log .row { border-bottom: 1px solid #1d232c }
 #log .row:hover { background: #1b2230 }
@@ -114,7 +129,8 @@ th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: upper
 .empty { padding: 14px 10px; color: var(--dim) }
 
 #summary tbody tr { cursor: pointer }
-#summary tbody tr:hover { background: #1b2230 }
+#modules tbody tr[data-module] { cursor: pointer }
+#summary tbody tr:hover, #modules tbody tr[data-module]:hover { background: #1b2230 }
 
 dialog {
   background: var(--panel);
@@ -160,6 +176,17 @@ dialog::backdrop { background: rgba(0, 0, 0, .6) }
 
 .sub { margin: 5px 0 0 0; padding: 5px 8px; background: #0d1117; border: 1px solid var(--line); border-radius: 5px }
 .sub .t { color: var(--fg); margin-bottom: 2px }
+
+.api-tool p { color: var(--dim); margin: 2px 0 4px }
+.api-schema summary { color: var(--accent); cursor: pointer; font-size: 11px }
+.api-schema pre {
+  color: var(--dim);
+  margin: 6px 0 0;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 .x { margin-left: auto; background: none; border: none; color: var(--dim); font-size: 18px; line-height: 1; padding: 0 4px }
 .x:hover { color: var(--fg) }

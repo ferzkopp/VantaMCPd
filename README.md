@@ -286,13 +286,15 @@ The daemon records every SSH interaction and serves a live dashboard at **<http:
 
 ![VantaMCPd monitor dashboard](docs/monitor.png)
 
-- **Per node** — every configured node, installed-module count, calls, failures, timing, bytes moved,
+- **Nodes** — every configured node, installed-module count, calls, failures, timing, bytes moved,
   last tool and last activity. Click a row for configuration, module IDs and recorded hardware.
-- **Interactions** — a tail-following list of every command, attributed to the MCP tool that issued it,
-  with its redacted input parameters, exit status and duration. New rows appear live over SSE;
-  `following` pauses it.
-- **Filters** — by node, by status (`ok`, `exit 1`, `exit 4`, `error` … built from what actually happened),
-  and a free-text search across command, tool, parameters and error. They combine.
+- **Modules** — active module versions, node coverage, deployment, runtime and package size. Click a row
+  for manifest details and the live MCP tool API.
+- **Interactions** — a tail-following list of every command, attributed to its module and the MCP tool
+  that issued it, with redacted input parameters, exit status and duration. New rows appear live over SSE;
+  `following` pauses it, and `copy log path` copies today's persisted JSONL `file://` URL.
+- **Filters** — by node, module, status (`ok`, `exit 1`, `exit 4`, `error` … built from what actually
+  happened), and a free-text search across command, module, tool, parameters and error. They combine.
 
 It binds to **loopback only** and there is deliberately no setting to change that: the log contains your
 hostnames, usernames and full command lines. Events are also appended to `~/.vanta/logs/vanta-<date>.jsonl`

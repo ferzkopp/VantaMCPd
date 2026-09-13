@@ -139,9 +139,22 @@ a tool does can bypass it.
 
 ![Dashboard](monitor.png)
 
+The module filter is populated from observed interactions. Module-specific operations use their module
+ID, while built-in and generic operations use `core`. The **copy log path** button at the right of the
+**Interactions** heading copies the current day's persisted JSONL `file://` URL without asking the
+browser to navigate to a local resource.
+
+### Module detail
+
+The **Modules** table summarizes active installations using the dashboard's cached inventory. Clicking
+a row connects to one reachable installation and shows the module's live MCP server identity, advertised
+tools, descriptions, and input schemas.
+
+![Module MCP API](monitor-module.png)
+
 ### Node detail
 
-Clicking a row in **Per node** opens that node's configuration and recorded hardware — access settings,
+Clicking a row in **Nodes** opens that node's configuration and recorded hardware — access settings,
 CPU, memory and swap devices, the configured storage block, disks with their roles and partitions,
 mounted filesystems and OS.
 
@@ -163,6 +176,7 @@ non-secret data that is private to the cluster.
 | --- | --- |
 | `seq`, `ts` | Monotonic id and ISO timestamp |
 | `node`, `host` | Which node it went to |
+| `module` | Installed module responsible for the interaction, or `core` for built-in operations |
 | `tool` | The MCP tool that caused it, tracked through an `AsyncLocalStorage` context |
 | `parameters` | Validated MCP input as compact JSON, redacted and clipped to 1000 chars |
 | `kind` | `exec` or `sftp` |
@@ -189,7 +203,7 @@ One JSON object per line (JSONL), appended as each interaction completes, in
 `ConvertFrom-Json` all work without a parser.
 
 ```json
-{"node":"cluster1","host":"10.0.0.11","kind":"exec","command":"install text-tools","sudo":true,"ok":true,"code":0,"durationMs":36,"bytesOut":0,"bytesErr":0,"tool":"cluster_install_module","parameters":"{\"moduleId\":\"text-tools\",\"targets\":[\"cluster1\"],\"confirm\":true}","seq":1,"ts":"2026-09-13T00:10:55.609Z"}
+{"node":"cluster1","host":"10.0.0.11","kind":"exec","command":"install text-tools","sudo":true,"ok":true,"code":0,"durationMs":36,"bytesOut":0,"bytesErr":0,"module":"text-tools","tool":"cluster_install_module","parameters":"{\"moduleId\":\"text-tools\",\"targets\":[\"cluster1\"],\"confirm\":true}","seq":1,"ts":"2026-09-13T00:10:55.609Z"}
 ```
 
 | Field | Type | Meaning |
@@ -199,6 +213,7 @@ One JSON object per line (JSONL), appended as each interaction completes, in
 | `node` | string | Node name from the inventory |
 | `host` | string | Node address — present in the file, never sent to the dashboard |
 | `kind` | string | `exec` or `sftp` |
+| `module` | string | Module ID, or `core` for built-in and generic operations |
 | `tool` | string? | MCP tool that caused it, via an `AsyncLocalStorage` context |
 | `parameters` | string? | Validated MCP input as redacted compact JSON, clipped to 1000 chars |
 | `command` | string? | The command as issued, redacted and clipped to 2000 chars |

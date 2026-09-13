@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { withTool, type AuditLog } from "./audit.js";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { withTool, withToolParameters, type AuditLog } from "./audit.js";
 import type { ClusterConfig } from "./config.js";
 import type { ModuleManager, NodeModuleInventory } from "./modules/manager.js";
 
@@ -11,7 +11,7 @@ import type { ModuleManager, NodeModuleInventory } from "./modules/manager.js";
  * dashboard is never bound to a routable address and there is deliberately no option to change that.
  */
 const BIND_HOST = "127.0.0.1";
-const MODULE_REFRESH_MS = 60_000;
+const MODULE_REFRESH_MS = 60 * 60 * 1000;
 
 /**
  * Static assets live next to the compiled output (scripts/copy-assets.mjs puts them there). Serving
@@ -24,6 +24,7 @@ const ASSETS: Record<string, { file: string; type: string; cache: string }> = {
   "/index.html": { file: "index.html", type: "text/html; charset=utf-8", cache: "no-store" },
   "/style.css": { file: "style.css", type: "text/css; charset=utf-8", cache: "no-store" },
   "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8", cache: "no-store" },
+  "/time.js": { file: "time.js", type: "text/javascript; charset=utf-8", cache: "no-store" },
   "/icon.svg": { file: "icon.svg", type: "image/svg+xml; charset=utf-8", cache: "max-age=86400" },
 };
 
@@ -50,6 +51,11 @@ function json(res: ServerResponse, body: unknown, status = 200): void {
   res.end(JSON.stringify(body));
 }
 
+function currentLogFileUrl(logDir: string): string {
+  const filename = `vanta-${new Date().toISOString().slice(0, 10)}.jsonl`;
+  return pathToFileURL(path.join(logDir, filename)).href;
+}
+
 function intParam(value: string | null, fallback: number, min: number, max: number): number {
   // Number(null) is 0 and Number("") is 0, so an absent param must be rejected before parsing.
   if (value === null || value.trim() === "") return fallback;
@@ -73,9 +79,41 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
   const { port } = config.monitoring;
   const moduleInventory = new Map<string, NodeModuleInventory & { refreshedAt: string; stale?: boolean }>();
   let moduleRefresh: Promise<void> | undefined;
+  let moduleRefreshQueued = false;
 
-  const refreshModules = (): Promise<void> => {
-    if (moduleRefresh) return moduleRefresh;
+  const activeModules = () =>
+    modules.catalog.modules.flatMap((modulePackage) => {
+      const { manifest } = modulePackage;
+      const installedNodes = config.nodes.flatMap((node) => {
+        const inventory = moduleInventory.get(node.name);
+        if (!inventory) return [];
+        const version = inventory.moduleVersions?.[manifest.id];
+        if (version === undefined) return [];
+        return [{ node: node.name, version, reachable: inventory.reachable, stale: inventory.stale === true }];
+      });
+      if (installedNodes.length === 0) return [];
+      return [{
+        id: manifest.id,
+        name: manifest.name,
+        description: manifest.description,
+        catalogVersion: manifest.version,
+        installedVersions: [...new Set(installedNodes.map((node) => node.version))].sort(),
+        installedNodes,
+        nodeCount: installedNodes.length,
+        configuredNodeCount: config.nodes.length,
+        deployment: manifest.deployment,
+        runtime: manifest.runtime,
+        compatibility: manifest.compatibility,
+        packageFiles: modulePackage.files.length,
+        packageBytes: modulePackage.totalBytes,
+      }];
+    });
+
+  const refreshModules = (queueIfActive = false): Promise<void> => {
+    if (moduleRefresh) {
+      if (queueIfActive) moduleRefreshQueued = true;
+      return moduleRefresh;
+    }
     moduleRefresh = withTool("dashboard_module_refresh", async () => {
       const refreshedAt = new Date().toISOString();
       const results = await modules.installedModules(config.nodes);
@@ -90,6 +128,10 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
       }
     }).finally(() => {
       moduleRefresh = undefined;
+      if (moduleRefreshQueued) {
+        moduleRefreshQueued = false;
+        void refreshModules();
+      }
     });
     return moduleRefresh;
   };
@@ -104,6 +146,8 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
     );
     return undefined;
   }
+
+  const unsubscribeModuleChanges = modules.onInventoryChanged(() => void refreshModules(true));
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     // Validate Host header to prevent DNS rebinding attacks against loopback.
@@ -145,11 +189,14 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
       case "/api/events":
         json(res, {
           lastSeq: audit.lastSeq,
+          logFileUrl: currentLogFileUrl(config.monitoring.logDir),
           nodes: audit.nodes(),
+          modules: audit.modules(),
           statuses: audit.statuses(),
           events: audit.query({
             since: p.has("since") ? intParam(p.get("since"), 0, 0, Number.MAX_SAFE_INTEGER) : undefined,
             node: p.get("node") || undefined,
+            module: p.get("module") || undefined,
             status: p.get("status") || undefined,
             q: p.get("q") || undefined,
             limit: intParam(p.get("limit"), 200, 1, 2000),
@@ -186,9 +233,36 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
             };
           }),
           configured: config.nodes.map((n) => ({ name: n.name, role: n.role })),
+          modules: activeModules(),
+          moduleInventoryPending: config.nodes.some((node) => !moduleInventory.has(node.name)),
           lastSeq: audit.lastSeq,
         });
         return;
+
+      case "/api/module": {
+        const moduleId = p.get("id");
+        if (!moduleId) {
+          json(res, { error: "module id is required" }, 400);
+          return;
+        }
+        const moduleState = activeModules().find((item) => item.id === moduleId);
+        if (!moduleState) {
+          json(res, { error: "module is not installed" }, 404);
+          return;
+        }
+        const selectedNode = moduleState.installedNodes
+          .filter((item) => item.reachable && !item.stale)
+          .map((item) => config.nodes.find((node) => node.name === item.node))
+          .find((node) => node !== undefined);
+        if (!selectedNode) {
+          json(res, { error: "module has no reachable installation" }, 503);
+          return;
+        }
+        void withToolParameters("dashboard_module_api", { moduleId }, () => modules.listTools(moduleId, selectedNode))
+          .then((api) => json(res, { module: moduleState, api }))
+          .catch((err: unknown) => json(res, { error: (err as Error).message }, 502));
+        return;
+      }
 
       case "/api/node": {
         const node = config.nodes.find((n) => n.name === p.get("name"));
@@ -260,7 +334,10 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
   });
   const moduleRefreshTimer = setInterval(() => void refreshModules(), MODULE_REFRESH_MS);
   moduleRefreshTimer.unref();
-  server.once("close", () => clearInterval(moduleRefreshTimer));
+  server.once("close", () => {
+    clearInterval(moduleRefreshTimer);
+    unsubscribeModuleChanges();
+  });
   server.listen(port, BIND_HOST, () => {
     process.stderr.write(`monitor dashboard: http://${BIND_HOST}:${port}\n`);
   });

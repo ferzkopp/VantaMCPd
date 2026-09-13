@@ -1,15 +1,20 @@
+import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
+
 (function () {
   "use strict";
 
   const MAX_ROWS = 800;
+  const RELATIVE_TIME_UPDATE_MS = 15_000;
   const logEl = document.getElementById("log");
   const nodeSel = document.getElementById("node");
+  const moduleSel = document.getElementById("module");
   const statusSel = document.getElementById("status");
   const qEl = document.getElementById("q");
   const followBtn = document.getElementById("follow");
   const clearBtn = document.getElementById("clear");
   const countEl = document.getElementById("count");
   const scopeEl = document.getElementById("scope");
+  const logFileEl = document.getElementById("log-file");
   const dot = document.getElementById("dot");
   const state = document.getElementById("state");
   const clusterCountEl = document.getElementById("cluster-count");
@@ -17,9 +22,11 @@
   const dlgBody = document.getElementById("dlg-body");
 
   const knownNodes = new Set();
+  const knownModules = new Set();
   const knownStatuses = new Set();
   let following = true;
   let shown = 0;
+  let logFileUrl = "";
 
   // Undefined locale => the browser's own, so separators match what the reader expects.
   const num = new Intl.NumberFormat();
@@ -31,10 +38,11 @@
 
   function matches(e) {
     if (nodeSel.value && e.node !== nodeSel.value) return false;
+    if (moduleSel.value && (e.module || "core") !== moduleSel.value) return false;
     if (statusSel.value && statusOf(e) !== statusSel.value) return false;
     const needle = qEl.value.trim().toLowerCase();
     if (!needle) return true;
-    const hay = [e.node, e.tool || "", e.parameters || "", e.command || "", e.error || "", e.preview || ""]
+    const hay = [e.node, e.module || "core", e.tool || "", e.parameters || "", e.command || "", e.error || "", e.preview || ""]
       .join(" ")
       .toLowerCase();
     return hay.includes(needle);
@@ -50,14 +58,16 @@
   function addRow(e, prepend) {
     const row = document.createElement("div");
     row.className = "row";
+    const timestamp = formatUtcTimestamp(e.ts);
     row.title =
-      `${e.ts.replace("T", " ").slice(0, 19)}  ·  ${e.node}  ·  ${e.tool || e.kind}` +
+      `${timestamp}  ·  ${e.node}  ·  ${e.tool || e.kind}` +
       (e.parameters ? `\nparameters: ${e.parameters}` : "") +
       `\n${e.command || ""}` +
       (e.error ? `\n\nerror: ${e.error}` : "") +
       (e.preview ? `\n\noutput: ${e.preview}` : "");
-    row.appendChild(cell(e.ts.slice(11, 19), "dim"));
+    row.appendChild(cell(timestamp, "dim"));
     row.appendChild(cell(e.node));
+    row.appendChild(cell(e.module || "core", "dim"));
     row.appendChild(cell(e.tool || e.kind, "dim"));
     row.appendChild(cell(statusOf(e), e.ok ? "ok" : "bad"));
     row.appendChild(cell(e.durationMs + "ms" + (e.sudo ? " sudo" : ""), e.sudo ? "warn" : "dim"));
@@ -97,9 +107,90 @@
     sel.appendChild(o);
   }
 
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      const input = document.createElement("textarea");
+      input.value = text;
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.appendChild(input);
+      input.select();
+      const copied = document.execCommand("copy");
+      input.remove();
+      if (!copied) throw new Error("copy failed");
+    }
+  }
+
+  function updateRelativeTimes() {
+    document.querySelectorAll("#summary [data-last-seen]").forEach((element) => {
+      element.textContent = formatRelativeTime(element.dataset.lastSeen);
+    });
+  }
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return num.format(bytes) + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KiB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MiB";
+  }
+
+  function renderModules(modules, pending) {
+    const tb = document.querySelector("#modules tbody");
+    tb.textContent = "";
+    modules.forEach((module) => {
+      const tr = document.createElement("tr");
+      tr.dataset.module = module.id;
+      tr.dataset.name = module.name;
+      tr.title = module.description;
+      const deployment = module.deployment.routing
+        ? `${module.deployment.mode} · ${module.deployment.routing}`
+        : module.deployment.mode;
+      const runtime = module.runtime.mode === "service" ? "service" : "on demand";
+      const installedVersions = module.installedVersions.join(", ") || "-";
+      const values = [
+        module.name,
+        installedVersions,
+        `${module.nodeCount} / ${module.configuredNodeCount}`,
+        deployment,
+        runtime,
+        `${num.format(module.packageFiles)} files · ${formatBytes(module.packageBytes)}`,
+      ];
+      values.forEach((value, index) => {
+        const td = document.createElement("td");
+        td.textContent = value;
+        if (index === 0) td.title = `${module.id} · ${module.description}`;
+        if (index === 1 && module.installedVersions.some((version) => version !== module.catalogVersion)) {
+          td.className = "warn";
+          td.title = `Local catalog version: ${module.catalogVersion}`;
+        }
+        if (index === 2) {
+          td.title = module.installedNodes
+            .map((node) => `${node.node}@${node.version}${node.stale ? " (stale)" : ""}`)
+            .join(", ");
+          if (module.installedNodes.some((node) => node.stale || !node.reachable)) td.className = "warn";
+        }
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+
+    if (!modules.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 6;
+      td.className = "empty";
+      td.textContent = pending ? "discovering installed modules…" : "no active modules";
+      tr.appendChild(td);
+      tb.appendChild(tr);
+    }
+  }
+
   function updateScope() {
     const bits = [];
     if (nodeSel.value) bits.push(nodeSel.value);
+    if (moduleSel.value) bits.push(moduleSel.value);
     if (statusSel.value) bits.push(statusSel.value);
     if (qEl.value.trim()) bits.push(`"${qEl.value.trim()}"`);
     scopeEl.textContent = bits.length ? "— filtered by " + bits.join(" · ") : "";
@@ -110,13 +201,18 @@
     updateScope();
     const p = new URLSearchParams({ limit: "500" });
     if (nodeSel.value) p.set("node", nodeSel.value);
+    if (moduleSel.value) p.set("module", moduleSel.value);
     if (statusSel.value) p.set("status", statusSel.value);
     if (qEl.value.trim()) p.set("q", qEl.value.trim());
 
     fetch("/api/events?" + p)
       .then((r) => r.json())
       .then((d) => {
+        logFileUrl = d.logFileUrl;
+        logFileEl.disabled = !logFileUrl;
+        logFileEl.title = `Copy ${logFileUrl}`;
         d.nodes.forEach((n) => addOption(nodeSel, knownNodes, n));
+        (d.modules || []).forEach((module) => addOption(moduleSel, knownModules, module));
         (d.statuses || []).forEach((s) => addOption(statusSel, knownStatuses, s));
         if (!d.events.length) {
           placeholder("no matching interactions yet…");
@@ -155,7 +251,7 @@
             num.format(n.totalMs),
             (n.bytes / 1024).toFixed(1) + "k",
             n.lastTool || "-",
-            n.lastTs ? n.lastTs.slice(11, 19) : "-",
+            n.lastTs ? formatRelativeTime(n.lastTs) : "-",
           ].forEach((v, i) => {
             const td = document.createElement("td");
             td.textContent = v;
@@ -164,6 +260,10 @@
               if (n.moduleReachable === false) td.className = "warn";
             }
             if (i === 4 && n.failed > 0) td.className = "bad";
+            if (i === 9 && n.lastTs) {
+              td.dataset.lastSeen = n.lastTs;
+              td.title = formatUtcTimestamp(n.lastTs);
+            }
             tr.appendChild(td);
           });
           tb.appendChild(tr);
@@ -178,6 +278,7 @@
           tr.appendChild(td);
           tb.appendChild(tr);
         }
+        renderModules(d.modules || [], d.moduleInventoryPending === true);
       })
       .catch(() => void 0);
   }
@@ -221,6 +322,33 @@
       b.appendChild(d);
     });
     parent.appendChild(b);
+  }
+
+  function apiTool(parent, tool) {
+    const item = document.createElement("div");
+    item.className = "sub api-tool";
+    const name = document.createElement("div");
+    name.className = "t";
+    name.textContent = tool.name || "unnamed tool";
+    item.appendChild(name);
+    const description = document.createElement("p");
+    description.textContent = tool.description || "No description advertised.";
+    item.appendChild(description);
+
+    const details = document.createElement("details");
+    details.className = "api-schema";
+    const summary = document.createElement("summary");
+    summary.textContent = "input schema";
+    details.appendChild(summary);
+    const schema = document.createElement("pre");
+    try {
+      schema.textContent = JSON.stringify(tool.inputSchema || {}, null, 2);
+    } catch {
+      schema.textContent = "schema unavailable";
+    }
+    details.appendChild(schema);
+    item.appendChild(details);
+    parent.appendChild(item);
   }
 
   function renderNode(n) {
@@ -340,6 +468,57 @@
     }
   }
 
+  function renderModule(data) {
+    const module = data.module;
+    const api = data.api;
+    document.getElementById("dlg-title").textContent = module.name;
+    document.getElementById("dlg-role").textContent = module.id;
+    dlgBody.textContent = "";
+
+    const overview = section("Overview");
+    kv(overview.dl, "description", module.description);
+    kv(overview.dl, "catalog version", module.catalogVersion);
+    kv(overview.dl, "installed versions", module.installedVersions.join(", "));
+    kv(
+      overview.dl,
+      "deployment",
+      module.deployment.routing
+        ? `${module.deployment.mode} (${module.deployment.routing})`
+        : module.deployment.mode,
+    );
+    kv(overview.dl, "runtime", module.runtime.mode);
+    kv(overview.dl, "package", `${num.format(module.packageFiles)} files · ${formatBytes(module.packageBytes)}`);
+    dlgBody.appendChild(overview);
+
+    const installations = section("Installations");
+    kv(installations.dl, "nodes", `${module.nodeCount} of ${module.configuredNodeCount}`);
+    module.installedNodes.forEach((node) => {
+      kv(
+        installations.dl,
+        node.node,
+        `${node.version}${node.stale ? " · stale" : node.reachable ? " · reachable" : " · unreachable"}`,
+      );
+    });
+    dlgBody.appendChild(installations);
+
+    const requirements = section("Requirements");
+    kv(requirements.dl, "operating systems", module.compatibility.os?.join(", "));
+    kv(requirements.dl, "architectures", module.compatibility.architectures?.join(", "));
+    kv(requirements.dl, "minimum cores", module.compatibility.minCores);
+    kv(requirements.dl, "minimum RAM", module.compatibility.minRamMb ? `${module.compatibility.minRamMb} MB` : undefined);
+    kv(requirements.dl, "minimum disk", module.compatibility.minDiskMb ? `${module.compatibility.minDiskMb} MB` : undefined);
+    kv(requirements.dl, "commands", module.compatibility.requiredCommands?.join(", "));
+    dlgBody.appendChild(requirements);
+
+    const tools = Array.isArray(api.tools) ? api.tools : [];
+    const mcp = section(`MCP API · ${tools.length} ${tools.length === 1 ? "tool" : "tools"}`);
+    kv(mcp.dl, "served by", api.node);
+    kv(mcp.dl, "server", api.server ? `${api.server.name}@${api.server.version}` : undefined);
+    kv(mcp.dl, "module version", api.version);
+    dlgBody.appendChild(mcp);
+    tools.forEach((tool) => apiTool(mcp, tool));
+  }
+
   // ---- wiring ---------------------------------------------------------------
 
   document.querySelector("#summary tbody").addEventListener("click", (ev) => {
@@ -353,6 +532,32 @@
         dlg.showModal();
       })
       .catch(() => void 0);
+  });
+  document.querySelector("#modules tbody").addEventListener("click", (ev) => {
+    const tr = ev.target.closest("tr[data-module]");
+    if (!tr) return;
+    document.getElementById("dlg-title").textContent = tr.dataset.name;
+    document.getElementById("dlg-role").textContent = "MCP API";
+    dlgBody.textContent = "";
+    const loading = document.createElement("div");
+    loading.className = "empty";
+    loading.textContent = "loading module API…";
+    dlgBody.appendChild(loading);
+    dlg.showModal();
+    fetch("/api/module?id=" + encodeURIComponent(tr.dataset.module))
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "could not load module API");
+        return data;
+      })
+      .then(renderModule)
+      .catch((error) => {
+        dlgBody.textContent = "";
+        const message = document.createElement("div");
+        message.className = "empty";
+        message.textContent = error.message;
+        dlgBody.appendChild(message);
+      });
   });
   document.getElementById("dlg-x").onclick = () => dlg.close();
   dlg.addEventListener("click", (ev) => {
@@ -371,6 +576,7 @@
   es.onmessage = (ev) => {
     const e = JSON.parse(ev.data);
     addOption(nodeSel, knownNodes, e.node);
+    addOption(moduleSel, knownModules, e.module || "core");
     addOption(statusSel, knownStatuses, statusOf(e));
     if (!following || !matches(e)) return;
     if (logEl.querySelector(".empty")) resetLog();
@@ -384,7 +590,20 @@
     if (following) load();
   };
   clearBtn.onclick = resetLog;
+  logFileEl.onclick = () => {
+    if (!logFileUrl) return;
+    copyText(logFileUrl)
+      .then(() => {
+        logFileEl.textContent = "copied";
+        setTimeout(() => { logFileEl.textContent = "copy log path"; }, 1500);
+      })
+      .catch(() => {
+        logFileEl.textContent = "copy failed";
+        setTimeout(() => { logFileEl.textContent = "copy log path"; }, 1500);
+      });
+  };
   nodeSel.onchange = load;
+  moduleSel.onchange = load;
   statusSel.onchange = load;
 
   let debounce;
@@ -396,4 +615,5 @@
   load();
   summary();
   setInterval(summary, 4000);
+  setInterval(updateRelativeTimes, RELATIVE_TIME_UPDATE_MS);
 })();

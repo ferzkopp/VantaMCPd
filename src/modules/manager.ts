@@ -78,6 +78,8 @@ export interface ModuleUpdateResult {
   error?: string;
 }
 
+type ModuleInventoryChangeListener = () => void;
+
 const InstallationReceiptSchema = z.object({
   schemaVersion: z.literal(1),
   moduleId: z.string(),
@@ -124,6 +126,7 @@ export class ModuleManager {
   readonly catalog: ModuleCatalog;
   private readonly moduleMutations = new Map<string, Promise<void>>();
   private readonly routeCursors = new Map<string, number>();
+  private readonly inventoryChangeListeners = new Set<ModuleInventoryChangeListener>();
 
   constructor(
     private readonly config: ClusterConfig,
@@ -138,6 +141,11 @@ export class ModuleManager {
     if (modulePackage) return modulePackage;
     const known = this.catalog.modules.map((item) => item.manifest.id).join(", ") || "none";
     throw new Error(`Unknown module: ${moduleId}. Available modules: ${known}.`);
+  }
+
+  onInventoryChanged(listener: ModuleInventoryChangeListener): () => void {
+    this.inventoryChangeListeners.add(listener);
+    return () => this.inventoryChangeListeners.delete(listener);
   }
 
   async list(nodes: ResolvedNode[]): Promise<object> {
@@ -279,6 +287,7 @@ export class ModuleManager {
         return this.installOnNode(modulePackage, node, timeoutMs);
       });
       this.routeCursors.delete(moduleId);
+      if (results.some((result) => result.ok)) this.notifyInventoryChanged();
       return results;
     });
   }
@@ -292,6 +301,7 @@ export class ModuleManager {
         (node) => this.uninstallOnNode(modulePackage, node, timeoutMs),
       );
       this.routeCursors.delete(moduleId);
+      if (results.some((result) => result.ok && result.removed)) this.notifyInventoryChanged();
       return results;
     });
   }
@@ -512,6 +522,10 @@ export class ModuleManager {
 
   private async waitForModuleMutation(moduleId: string): Promise<void> {
     await this.moduleMutations.get(moduleId)?.catch(() => undefined);
+  }
+
+  private notifyInventoryChanged(): void {
+    for (const listener of this.inventoryChangeListeners) listener();
   }
 
   private async withClient<T>(
