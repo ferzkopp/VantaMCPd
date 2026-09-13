@@ -55,6 +55,18 @@
     </tr></thead><tbody><tr><td colspan="6" class="empty">discovering installed modules…</td></tr></tbody></table></div>
   </div>
   <div class="card">
+    <h2 title="Durable operations that continue independently of this MCP connection">Jobs <span class="hint">— active and recent background work</span></h2>
+    <div class="table-scroll"><table id="jobs"><thead><tr>
+      <th title="Trusted operation represented by the job">operation</th>
+      <th title="Node executing the job">target</th>
+      <th title="Current durable state">status</th>
+      <th title="Current operation phase">phase</th>
+      <th title="Bounded progress reported by the operation">progress</th>
+      <th title="Elapsed runtime or final duration">duration</th>
+      <th title="Time since the most recent remote heartbeat">updated</th>
+    </tr></thead><tbody><tr><td colspan="7" class="empty">discovering durable jobs…</td></tr></tbody></table></div>
+  </div>
+  <div class="card">
     <h2 title="Every SSH command the daemon ran, newest first">
       Interactions <span class="hint" id="scope"></span>
       <button class="section-link" id="log-file" type="button" disabled title="Copy today's persisted JSONL file URL">copy log path</button>

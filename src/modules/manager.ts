@@ -5,6 +5,8 @@ import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { ClusterConfig, ResolvedNode } from "../config.js";
 import { parseKeyValueLines } from "../format.js";
+import { isTerminalJobStatus } from "../jobs/types.js";
+import type { JobManager } from "../jobs/manager.js";
 import { q } from "../security.js";
 import { mapLimit, type ExecResult, type SshPool } from "../ssh.js";
 import { loadModuleCatalog, type ModuleCatalog, type ModulePackage } from "./catalog.js";
@@ -16,6 +18,11 @@ export interface ModuleNodeCheck {
   compatibility: CompatibilityResult;
   reachable?: boolean;
   diskAvailableMb?: number;
+  storageAvailableMb?: number;
+  storageMountpoint?: string;
+  storageMounted?: boolean;
+  storageWritable?: boolean;
+  storageDistinctFromRoot?: boolean;
   missingCommands?: string[];
   error?: string;
 }
@@ -25,6 +32,8 @@ export interface ModuleInstallResult {
   ok: boolean;
   moduleId: string;
   version: string;
+  state?: "installed" | "provisioning";
+  jobId?: string;
   error?: string;
 }
 
@@ -74,6 +83,8 @@ export interface ModuleUpdateResult {
   fromVersion: string;
   toVersion: string;
   updated: boolean;
+  provisioning?: boolean;
+  jobId?: string;
   oldVersionRemoved?: boolean;
   error?: string;
 }
@@ -132,6 +143,7 @@ export class ModuleManager {
     private readonly config: ClusterConfig,
     private readonly pool: SshPool,
     moduleRoot?: string,
+    private readonly jobs?: JobManager,
   ) {
     this.catalog = loadModuleCatalog(moduleRoot);
   }
@@ -150,6 +162,7 @@ export class ModuleManager {
 
   async list(nodes: ResolvedNode[]): Promise<object> {
     const inventory = await this.installedModules(nodes);
+    const jobInventory = this.jobs ? await this.jobs.list(nodes) : undefined;
     const byNode = new Map(inventory.map((item) => [item.node, item]));
     return {
       errors: this.catalog.errors,
@@ -174,6 +187,9 @@ export class ModuleManager {
         requirements: item.manifest.compatibility,
         nodes: nodes.map((node) => {
           const state = byNode.get(node.name);
+          const lifecycleJob = jobInventory?.jobs.find(
+            (job) => job.targetNode === node.name && job.moduleId === item.manifest.id && !isTerminalJobStatus(job.status),
+          );
           return {
             node: node.name,
             ...evaluateCompatibility(item.manifest, node),
@@ -184,6 +200,7 @@ export class ModuleManager {
               ? undefined
               : compareSemanticVersions(state.moduleVersions[item.manifest.id] as string, item.manifest.version) < 0,
             inventoryError: state?.error,
+            provisioningJob: lifecycleJob,
           };
         }),
       })),
@@ -196,8 +213,22 @@ export class ModuleManager {
     const commandChecks = requiredCommands
       .map((command) => `if command -v ${q(command)} >/dev/null 2>&1; then echo ${q(`command_${command}|present`)}; else echo ${q(`command_${command}|missing`)}; fi`)
       .join("\n");
-    const script = `${commandChecks}\necho "disk_available_mb|$(df -Pm / | awk 'NR==2{print $4}')"`;
-    const results = await this.pool.execMany(nodes, script, { timeoutMs });
+    const storageChecks = (node: ResolvedNode) => modulePackage.manifest.persistentData
+      ? [
+          `storage_mountpoint=${q(node.storage?.mountpoint ?? "/__vantamcpd_missing_storage__")}`,
+          "if findmnt -rn -M \"$storage_mountpoint\" >/dev/null 2>&1; then echo 'storage_mounted|yes'; else echo 'storage_mounted|no'; fi",
+          "echo \"storage_available_mb|$(df -Pm \"$storage_mountpoint\" 2>/dev/null | awk 'NR==2{print $4}')\"",
+          "if [ -w \"$storage_mountpoint\" ]; then echo 'storage_writable|yes'; else echo 'storage_writable|no'; fi",
+          "root_source=$(findmnt -rn -o SOURCE -M / 2>/dev/null || true)",
+          "storage_source=$(findmnt -rn -o SOURCE -M \"$storage_mountpoint\" 2>/dev/null || true)",
+          "if [ -n \"$root_source\" ] && [ \"$root_source\" != \"$storage_source\" ]; then echo 'storage_distinct|yes'; else echo 'storage_distinct|no'; fi",
+        ].join("\n")
+      : "";
+    const baseScript = `${commandChecks}\necho "disk_available_mb|$(df -Pm / | awk 'NR==2{print $4}')"`;
+    const results = modulePackage.manifest.persistentData
+      ? await mapLimit(nodes, this.config.maxConcurrency, (node) =>
+          this.pool.exec(node, `${baseScript}\n${storageChecks(node)}`, { timeoutMs }))
+      : await this.pool.execMany(nodes, baseScript, { timeoutMs });
 
     return results.map((result, index) => {
       const node = nodes[index] as ResolvedNode;
@@ -224,6 +255,24 @@ export class ModuleManager {
           `requires ${minDiskMb} MB free disk; node has ${diskAvailableMb} MB`,
         );
       }
+      const data = modulePackage.manifest.persistentData;
+      const storageAvailableMb = Number(values.storage_available_mb);
+      const storageMounted = values.storage_mounted === "yes";
+      const storageWritable = values.storage_writable === "yes";
+      const storageDistinctFromRoot = values.storage_distinct === "yes";
+      if (data) {
+        if (!node.storage) {
+          if (!reasons.includes("requires configured node-local storage")) reasons.push("requires configured node-local storage");
+        } else {
+          if (!storageMounted) reasons.push(`configured storage mount ${node.storage.mountpoint} is not mounted`);
+          if (storageMounted && !storageDistinctFromRoot) reasons.push(`configured storage mount ${node.storage.mountpoint} resolves to the root filesystem`);
+          if (storageMounted && !storageWritable) reasons.push(`configured storage mount ${node.storage.mountpoint} is not writable by ${node.user}`);
+          if (Number.isFinite(storageAvailableMb) && storageAvailableMb < data.minFreeMb) {
+            reasons.push(`requires ${data.minFreeMb} MB free storage; node has ${storageAvailableMb} MB`);
+          }
+          if (!Number.isFinite(storageAvailableMb)) reasons.push(`cannot determine free space on ${node.storage.mountpoint}`);
+        }
+      }
       return {
         node: node.name,
         compatibility: {
@@ -233,6 +282,11 @@ export class ModuleManager {
         },
         reachable: true,
         diskAvailableMb: Number.isFinite(diskAvailableMb) ? diskAvailableMb : undefined,
+        storageAvailableMb: Number.isFinite(storageAvailableMb) ? storageAvailableMb : undefined,
+        storageMountpoint: node.storage?.mountpoint,
+        storageMounted: data ? storageMounted : undefined,
+        storageWritable: data ? storageWritable : undefined,
+        storageDistinctFromRoot: data ? storageDistinctFromRoot : undefined,
         missingCommands,
       };
     });
@@ -295,6 +349,7 @@ export class ModuleManager {
   async uninstall(moduleId: string, nodes: ResolvedNode[], timeoutMs = 300_000): Promise<ModuleUninstallResult[]> {
     return this.withModuleMutation(moduleId, async () => {
       const modulePackage = this.get(moduleId);
+      await this.assertNoActiveLifecycleJobs(moduleId, nodes);
       const results = await mapLimit(
         nodes,
         this.config.maxConcurrency,
@@ -303,6 +358,29 @@ export class ModuleManager {
       this.routeCursors.delete(moduleId);
       if (results.some((result) => result.ok && result.removed)) this.notifyInventoryChanged();
       return results;
+    });
+  }
+
+  async purgeData(moduleId: string, node: ResolvedNode): Promise<{ node: string; moduleId: string; removed: boolean }> {
+    return this.withModuleMutation(moduleId, async () => {
+      const modulePackage = this.get(moduleId);
+      const data = modulePackage.manifest.persistentData;
+      if (!data) throw new Error(`Module ${moduleId} does not declare persistent data.`);
+      if (!node.storage) throw new Error(`Node ${node.name} does not have configured storage.`);
+      await this.assertNoActiveLifecycleJobs(moduleId, [node]);
+      const inventory = await this.installedModules([node]);
+      if (inventory[0]?.modules?.includes(moduleId)) {
+        throw new Error(`Uninstall ${moduleId} from ${node.name} before purging its retained data.`);
+      }
+      const dataDirectory = path.posix.join(node.storage.mountpoint, data.relativePath);
+      const marker = `${dataDirectory}/.vantamcpd-module`;
+      const command =
+        `set -e; if [ ! -e ${q(dataDirectory)} ]; then printf '%s' '__ABSENT__'; exit 0; fi; ` +
+        `test -d ${q(dataDirectory)} && test ! -L ${q(dataDirectory)} && test -f ${q(marker)} && test ! -L ${q(marker)}; ` +
+        `[ "$(cat ${q(marker)})" = ${q(moduleId)} ]; rm -rf -- ${q(dataDirectory)}; printf '%s' '__REMOVED__'`;
+      const result = await this.pool.exec(node, command, { sudo: true, timeoutMs: 120_000, maxOutputBytes: 64 * 1024 });
+      if (!result.ok) throw new Error(`Refusing to purge unmarked module data: ${resultError(result)}`);
+      return { node: node.name, moduleId, removed: result.stdout === "__REMOVED__" };
     });
   }
 
@@ -397,6 +475,19 @@ export class ModuleManager {
           continue;
         }
 
+        if (install.state === "provisioning") {
+          results.push({
+            node: install.node,
+            moduleId: install.moduleId,
+            fromVersion,
+            toVersion: install.version,
+            updated: false,
+            provisioning: true,
+            jobId: install.jobId,
+          });
+          continue;
+        }
+
         const node = targets.find((candidate) => candidate.name === install.node) as ResolvedNode;
         const oldDirectory = `/opt/vantamcpd/modules/${install.moduleId}/${fromVersion}`;
         const currentLink = `/opt/vantamcpd/modules/${install.moduleId}/current`;
@@ -479,6 +570,15 @@ export class ModuleManager {
         `Module ${modulePackage.manifest.id} is singleton and is already installed on ${elsewhere.join(", ")}.`,
       );
     }
+  }
+
+  private async assertNoActiveLifecycleJobs(moduleId: string, nodes: ResolvedNode[]): Promise<void> {
+    if (!this.jobs) return;
+    const inventory = await this.jobs.list(nodes);
+    const active = inventory.jobs.find(
+      (job) => job.moduleId === moduleId && !isTerminalJobStatus(job.status),
+    );
+    if (active) throw new Error(`Module ${moduleId} is busy with job ${active.jobId} (${active.status}).`);
   }
 
   private async selectInstalledNode(modulePackage: ModulePackage, advance: boolean): Promise<ResolvedNode> {
@@ -690,6 +790,7 @@ export class ModuleManager {
     const currentLink = `${moduleBase}/current`;
     const receiptPath = `/var/lib/vantamcpd/modules/${id}.json`;
     const baseResult = { node: node.name, moduleId: id, version };
+    let stageMoved = false;
 
     try {
       const directories = new Set(
@@ -754,9 +855,16 @@ export class ModuleManager {
           `systemctl disable --now ${q(serviceUnitName)} 2>/dev/null || true; rm -f -- ${q(serviceUnitPath)}; ` +
           `rm -f -- ${q(receiptPath)}; systemctl daemon-reload; rollback; exit 1; fi; `
         : "";
+      const data = modulePackage.manifest.persistentData;
+      const dataDirectory = data && node.storage ? path.posix.join(node.storage.mountpoint, data.relativePath) : undefined;
+      const dataSetup = dataDirectory
+        ? `install -d -m 0750 ${q(dataDirectory)}; chown ${q(node.user)}:$(id -gn ${q(node.user)}) ${q(dataDirectory)}; ` +
+          `printf '%s' ${q(id)} > ${q(`${dataDirectory}/.vantamcpd-module`)}; chmod 0644 ${q(`${dataDirectory}/.vantamcpd-module`)}; `
+        : "";
       const lifecycleCommand =
         `previous=$(readlink ${q(currentLink)} 2>/dev/null || true); ` +
         `rollback() { if [ -n "$previous" ]; then ln -sfn "$previous" ${q(currentLink)}; else rm -f ${q(currentLink)}; fi; }; ` +
+        dataSetup +
         `if ! bash ${q(modulePackage.manifest.lifecycle.install)}; then rollback; exit 1; fi; ` +
         `if ! chown -R root:root ${q(installDirectory)} || ! chmod 0755 ${q(installDirectory)}; then rollback; exit 1; fi; ` +
         `if ! (set -e; install -d -m 0755 ${q(receiptDirectory)}; ` +
@@ -764,27 +872,73 @@ export class ModuleManager {
         `printf '%s' ${q(encodedReceipt)} | base64 -d > "$tmp"; chmod 0644 "$tmp"; ` +
         `mv -f "$tmp" ${q(receiptPath)}; trap - EXIT); then rollback; exit 1; fi; ` +
         serviceActivation;
+      const lifecycleEnvironment = {
+        VANTA_MODULE_STAGE: stage,
+        VANTA_MODULE_INSTALL_DIR: installDirectory,
+        VANTA_MODULE_CURRENT_LINK: currentLink,
+        ...(dataDirectory && node.storage
+          ? {
+              VANTA_MODULE_DATA_DIR: dataDirectory,
+              VANTA_MODULE_DATA_MOUNT: node.storage.mountpoint,
+              VANTA_MODULE_RUN_AS: node.user,
+            }
+          : {}),
+      };
+
+      if (modulePackage.manifest.lifecycle.execution?.mode === "job") {
+        if (!this.jobs) throw new Error("durable job manager is unavailable");
+        const durableStage = `/var/lib/vantamcpd/module-staging/${id}-${randomUUID()}`;
+        const scriptPath = `${durableStage}/.vantamcpd-lifecycle.sh`;
+        const script =
+          `#!/usr/bin/env bash\nset -e\n` +
+          `cleanup() { status=$?; if [ "$status" -ne 75 ]; then rm -rf -- ${q(durableStage)}; fi; exit "$status"; }\n` +
+          `trap cleanup EXIT\ntrap 'exit 75' TERM INT\n${lifecycleCommand}\n`;
+        const encodedScript = Buffer.from(script, "utf8").toString("base64");
+        const moveResult = await this.pool.exec(
+          node,
+          `set -e; install -d -m 0700 /var/lib/vantamcpd/module-staging; rm -rf -- ${q(durableStage)}; ` +
+            `mv ${q(stage)} ${q(durableStage)}; printf '%s' ${q(encodedScript)} | base64 -d > ${q(scriptPath)}; ` +
+            `chmod 0700 ${q(scriptPath)}; chown -R root:root ${q(durableStage)}`,
+          { sudo: true, timeoutMs: Math.min(timeoutMs, 30_000), maxOutputBytes: 64 * 1024 },
+        );
+        if (!moveResult.ok) throw new Error(`cannot preserve job staging directory: ${resultError(moveResult)}`);
+        stageMoved = true;
+        try {
+          const job = await this.jobs.submit(node, {
+            kind: "module-install",
+            moduleId: id,
+            resourceKeys: [`module:${id}:${node.name}`],
+            command: ["/bin/bash", scriptPath],
+            cwd: durableStage,
+            environment: {
+              ...lifecycleEnvironment,
+              VANTA_MODULE_STAGE: durableStage,
+            },
+            timeoutMs: modulePackage.manifest.lifecycle.execution.timeoutMs,
+          });
+          return { ...baseResult, ok: true, state: "provisioning", jobId: job.jobId };
+        } catch (error) {
+          await this.pool.exec(node, `rm -rf -- ${q(durableStage)}`, { sudo: true, timeoutMs: 30_000 });
+          throw error;
+        }
+      }
       const installResult = await this.pool.exec(
         node,
         lifecycleCommand,
         {
           sudo: true,
           cwd: stage,
-          env: {
-            VANTA_MODULE_STAGE: stage,
-            VANTA_MODULE_INSTALL_DIR: installDirectory,
-            VANTA_MODULE_CURRENT_LINK: currentLink,
-          },
+          env: lifecycleEnvironment,
           timeoutMs,
         },
       );
       if (!installResult.ok) throw new Error(`installation lifecycle failed: ${resultError(installResult)}`);
 
-      return { ...baseResult, ok: true };
+      return { ...baseResult, ok: true, state: "installed" };
     } catch (err) {
       return { ...baseResult, ok: false, error: (err as Error).message };
     } finally {
-      await this.pool.exec(node, `rm -rf -- ${q(stage)}`, { timeoutMs: 30_000 });
+      if (!stageMoved) await this.pool.exec(node, `rm -rf -- ${q(stage)}`, { timeoutMs: 30_000 });
     }
   }
 

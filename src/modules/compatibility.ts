@@ -76,6 +76,16 @@ export function evaluateCompatibility(manifest: ModuleManifest, node: ResolvedNo
     else if (actual < requirements.minRamMb) reasons.push(`requires ${requirements.minRamMb} MB RAM; node has ${actual} MB`);
   }
 
+  if (manifest.persistentData?.storage === "node") {
+    if (!node.storage) {
+      reasons.push("requires configured node-local storage");
+    } else if (hardware.filesystems === undefined) {
+      unknown.push("filesystem inventory is not recorded");
+    } else if (!hardware.filesystems.some((filesystem) => filesystem.mountpoint === node.storage?.mountpoint)) {
+      unknown.push(`configured storage mount ${node.storage.mountpoint} is not present in recorded inventory`);
+    }
+  }
+
   if (requirements.accelerators.length > 0) {
     if (hardware.accelerators === undefined) {
       unknown.push("accelerator inventory is not recorded");

@@ -168,11 +168,19 @@ const MonitoringSchema = z.object({
   logOutput: z.boolean().default(false),
 });
 
+const JobsSchema = z.object({
+  retentionDays: z.number().int().min(1).max(365).default(7),
+  pollIntervalMs: z.number().int().min(1_000).max(300_000).default(10_000),
+  cancelGraceMs: z.number().int().min(1_000).max(120_000).default(5_000),
+  maxLogBytes: z.number().int().min(1_024).max(100_000_000).default(1_000_000),
+});
+
 const ConfigSchema = z.object({
   $schema: z.string().optional(),
   defaults: DefaultsSchema.default({}),
   security: SecuritySchema.default({}),
   monitoring: MonitoringSchema.default({}),
+  jobs: JobsSchema.default({}),
   nodes: z.array(NodeSchema).min(1),
 });
 
@@ -180,6 +188,7 @@ export type RawConfig = z.infer<typeof ConfigSchema>;
 export type StorageConfig = z.infer<typeof StorageSchema>;
 export type SecurityConfig = z.infer<typeof SecuritySchema>;
 export type MonitoringConfig = z.infer<typeof MonitoringSchema>;
+export type JobsConfig = z.infer<typeof JobsSchema>;
 export type NodeHardware = z.infer<typeof HardwareSchema>;
 export type AcceleratorInfo = z.infer<typeof AcceleratorSchema>;
 export type DiskInfo = z.infer<typeof DiskSchema>;
@@ -209,6 +218,7 @@ export interface ClusterConfig {
   nodes: ResolvedNode[];
   security: SecurityConfig;
   monitoring: MonitoringConfig;
+  jobs: JobsConfig;
   maxConcurrency: number;
   autoDiscoverHardware: boolean;
   autoUpdateModules: boolean;
@@ -345,6 +355,7 @@ export function loadConfig(explicitPath?: string): ClusterConfig {
     nodes,
     security: raw.security,
     monitoring: { ...raw.monitoring, logDir: path.resolve(expandHome(raw.monitoring.logDir)) },
+    jobs: raw.jobs,
     maxConcurrency: d.maxConcurrency,
     autoDiscoverHardware: d.autoDiscoverHardware,
     autoUpdateModules: d.autoUpdateModules,

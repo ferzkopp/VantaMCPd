@@ -4,12 +4,15 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { AuditLog, withToolParameters } from "./audit.js";
 import { loadConfig, loadEnvFile } from "./config.js";
 import { discoverMissingHardware } from "./hardware.js";
+import { JobManager } from "./jobs/manager.js";
+import { JobRegistry } from "./jobs/registry.js";
 import { ModuleManager } from "./modules/manager.js";
 import { SshPool } from "./ssh.js";
 import type { ToolContext } from "./tools/context.js";
 import { registerExecTools } from "./tools/exec.js";
 import { registerFileTools } from "./tools/files.js";
 import { registerLogTools } from "./tools/logs.js";
+import { registerJobTools } from "./tools/jobs.js";
 import { registerModuleTools } from "./tools/modules.js";
 import { registerPackageTools } from "./tools/packages.js";
 import { registerServiceTools } from "./tools/services.js";
@@ -39,8 +42,11 @@ async function main(): Promise<void> {
       })
     : undefined;
   const pool = new SshPool(config, audit);
-  const modules = new ModuleManager(config, pool);
-  const ctx: ToolContext = { config, pool, modules };
+  const jobRegistry = new JobRegistry();
+  jobRegistry.register("module-install");
+  const jobs = new JobManager(config, pool, jobRegistry);
+  const modules = new ModuleManager(config, pool, undefined, jobs);
+  const ctx: ToolContext = { config, pool, jobs, modules };
 
   const server = new McpServer(
     { name: "vantamcpd", version: "0.1.0" },
@@ -70,9 +76,10 @@ async function main(): Promise<void> {
   registerFileTools(server, ctx);
   registerStorageTools(server, ctx);
   registerSwapTools(server, ctx);
+  registerJobTools(server, ctx);
   registerModuleTools(server, ctx);
 
-  const web = audit && config.monitoring.web ? startWebServer(config, audit, modules) : undefined;
+  const web = audit && config.monitoring.web ? startWebServer(config, audit, modules, jobs) : undefined;
   // Only advertise the dashboard once the socket is genuinely bound - it may lose a port race.
   web?.once("listening", () => {
     ctx.monitor = { url: `http://127.0.0.1:${config.monitoring.port}`, logDir: config.monitoring.logDir };
@@ -80,6 +87,7 @@ async function main(): Promise<void> {
 
   const shutdown = () => {
     web?.close();
+    jobs.dispose();
     pool.disposeAll();
     process.exit(0);
   };
@@ -92,6 +100,12 @@ async function main(): Promise<void> {
 
   // Complete discovery and module reconciliation without delaying MCP availability.
   void (async () => {
+    try {
+      await jobs.reconcile();
+      jobs.start();
+    } catch (err) {
+      process.stderr.write(`job reconciliation failed: ${(err as Error).message}\n`);
+    }
     if (config.autoDiscoverHardware) await discoverMissingHardware(config, pool);
     if (!config.autoUpdateModules) return;
     try {

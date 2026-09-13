@@ -1,11 +1,13 @@
 import { z } from "zod";
 import type { ClusterConfig } from "../config.js";
+import type { JobManager } from "../jobs/manager.js";
 import type { ModuleManager } from "../modules/manager.js";
 import type { SshPool } from "../ssh.js";
 
 export interface ToolContext {
   config: ClusterConfig;
   pool: SshPool;
+  jobs: JobManager;
   modules: ModuleManager;
   /** Set once the dashboard is actually listening, so tools report what is really running. */
   monitor?: { url: string; logDir: string };

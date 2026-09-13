@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "id": "corpus-search",
+  "name": "Scientific Corpus Search",
+  "version": "0.1.0",
+  "description": "Provision and search a compact, provenance-aware arXiv metadata corpus with SQLite FTS5/BM25.",
+  "entrypoint": ["python3", "server.py"],
+  "compatibility": {
+    "os": ["debian", "ubuntu"],
+    "architectures": ["armhf", "arm64", "amd64"],
+    "minCores": 1,
+    "minRamMb": 256,
+    "minDiskMb": 40,
+    "requiredCommands": ["bash", "python3", "sqlite3"],
+    "accelerators": []
+  },
+  "packages": { "apt": ["python3", "sqlite3", "ca-certificates"] },
+  "lifecycle": {
+    "install": "install.sh",
+    "uninstall": "uninstall.sh",
+    "execution": { "mode": "job", "timeoutMs": 21600000 }
+  },
+  "persistentData": {
+    "storage": "node",
+    "relativePath": "vantamcpd/corpora/corpus-search",
+    "minFreeMb": 512,
+    "retainOnUninstall": true
+  },
+  "deployment": { "mode": "singleton" },
+  "runtime": { "mode": "on-demand" },
+  "limits": {
+    "startupMs": 10000,
+    "callMs": 30000,
+    "maxInputBytes": 65536,
+    "maxOutputBytes": 262144
+  }
+}

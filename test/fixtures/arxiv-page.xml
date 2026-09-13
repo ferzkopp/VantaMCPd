@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2609.00001v2</id>
+    <published>2026-09-01T10:00:00Z</published>
+    <updated>2026-09-10T10:00:00Z</updated>
+    <title>Retrieval systems for compact language models</title>
+    <summary>We study efficient document retrieval and ranking for constrained language models.</summary>
+    <author><name>Ada Example</name></author>
+    <author><name>Lin Example</name></author>
+    <category term="cs.IR" />
+    <category term="cs.LG" />
+    <arxiv:primary_category term="cs.IR" />
+    <arxiv:doi>10.1000/example.1</arxiv:doi>
+    <link href="https://arxiv.org/abs/2609.00001v2" rel="alternate" type="text/html" />
+    <link href="https://arxiv.org/pdf/2609.00001v2" rel="related" title="pdf" type="application/pdf" />
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2609.00002v1</id>
+    <published>2026-09-02T11:00:00Z</published>
+    <updated>2026-09-02T11:00:00Z</updated>
+    <title>Reliable distributed databases on small computers</title>
+    <summary>A storage design for resilient database services on resource-constrained computers.</summary>
+    <author><name>Sam Example</name></author>
+    <category term="cs.DB" />
+    <category term="cs.DC" />
+    <arxiv:primary_category term="cs.DB" />
+    <link href="https://arxiv.org/abs/2609.00002v1" rel="alternate" type="text/html" />
+    <link href="https://arxiv.org/pdf/2609.00002v1" rel="related" title="pdf" type="application/pdf" />
+  </entry>
+</feed>

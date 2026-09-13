@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "compact-arxiv-cs",
+  "description": "A compact recent arXiv snapshot emphasizing AI/ML/IR with broader computer-science coverage.",
+  "source": "arxiv-api",
+  "pageSize": 500,
+  "maxRecords": 10000,
+  "slices": [
+    {
+      "id": "ai-ml-ir",
+      "maxRecords": 5000,
+      "categories": ["cs.AI", "cs.LG", "cs.CL", "cs.IR", "stat.ML"]
+    },
+    {
+      "id": "broader-cs",
+      "maxRecords": 5000,
+      "categories": ["cs.CV", "cs.RO", "cs.SE", "cs.DB", "cs.DC", "cs.CR", "cs.NE", "cs.HC", "cs.PL", "cs.OS"]
+    }
+  ]
+}

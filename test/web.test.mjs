@@ -129,7 +129,26 @@ test("dashboard lists cached active modules and loads their advertised MCP API",
     },
     subscribe: () => () => {},
   };
-  const server = startWebServer({ monitoring: { port: 0, logDir }, nodes }, audit, modules);
+  const jobs = {
+    snapshot: () => ({
+      refreshedAt: "2026-09-13T12:00:00.000Z",
+      jobs: [{
+        schemaVersion: 1,
+        jobId: "12345678-1234-4234-8234-123456789abc",
+        kind: "module-install",
+        status: "running",
+        targetNode: "cluster1",
+        moduleId: "corpus-search",
+        resourceKeys: ["module:corpus-search:cluster1"],
+        phase: "download",
+        progress: { current: 500, total: 10000, unit: "records" },
+        createdAt: "2026-09-13T11:59:00.000Z",
+        startedAt: "2026-09-13T11:59:01.000Z",
+        heartbeatAt: "2026-09-13T12:00:00.000Z",
+      }],
+    }),
+  };
+  const server = startWebServer({ monitoring: { port: 0, logDir }, nodes }, audit, modules, jobs);
   assert.ok(server);
   try {
     await once(server, "listening");
@@ -154,6 +173,11 @@ test("dashboard lists cached active modules and loads their advertised MCP API",
     assert.equal(detail.body.api.tools[0].name, "regex_extract");
     assert.equal(selectedNode, nodes[0]);
     assert.equal(inventoryCalls, 1);
+
+    const jobList = await getJson(server, "/api/jobs");
+    assert.equal(jobList.status, 200);
+    assert.equal(jobList.body.jobs[0].moduleId, "corpus-search");
+    assert.equal(jobList.body.jobs[0].progress.current, 500);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(logDir, { recursive: true, force: true });

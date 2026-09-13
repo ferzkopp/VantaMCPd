@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { withTool, withToolParameters, type AuditLog } from "./audit.js";
 import type { ClusterConfig } from "./config.js";
+import type { JobManager } from "./jobs/manager.js";
 import type { ModuleManager, NodeModuleInventory } from "./modules/manager.js";
 
 /**
@@ -75,7 +76,7 @@ function withoutAddresses<T>(value: T): T {
   return JSON.parse(JSON.stringify(value).replace(IPV4, "x.x.x.x")) as T;
 }
 
-export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: ModuleManager): Server | undefined {
+export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: ModuleManager, jobs?: JobManager): Server | undefined {
   const { port } = config.monitoring;
   const moduleInventory = new Map<string, NodeModuleInventory & { refreshedAt: string; stale?: boolean }>();
   let moduleRefresh: Promise<void> | undefined;
@@ -237,6 +238,10 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
           moduleInventoryPending: config.nodes.some((node) => !moduleInventory.has(node.name)),
           lastSeq: audit.lastSeq,
         });
+        return;
+
+      case "/api/jobs":
+        json(res, jobs?.snapshot() ?? { jobs: [] });
         return;
 
       case "/api/module": {

@@ -114,11 +114,17 @@ for Claude Code, Hermes Agent, OpenClaw, and generic MCP clients are in [MCP cli
 > Check whether text-tools is compatible with cluster1 and cluster2.
 >
 > Install text-tools on cluster1 and cluster2.
+>
+> Install corpus-search on the storage node, then show its job progress.
 
 The install prompt requires your approval before VantaMCPd calls `cluster_install_module` with
 `confirm: true`. Installations always use explicit node names or tags; they never default to the entire
 cluster. Replicated modules such as Text Tools may be installed on multiple compatible nodes, while
 singleton modules reject a second installation.
+
+Long-running module activation returns a durable job ID instead of holding the MCP request open. The
+job continues under systemd on the target node across SSH disconnects and VantaMCPd restarts. Use the
+job tools or the dashboard to follow phase, progress, heartbeat, logs, and the terminal result.
 
 At daemon startup, validated module receipts are compared with the local catalog. Installed older
 versions are upgraded automatically after hardware discovery; absent modules are not installed and
@@ -311,6 +317,8 @@ The daemon records every SSH interaction and serves a live dashboard at **<http:
   last tool and last activity. Click a row for configuration, module IDs and recorded hardware.
 - **Modules** — active module versions, node coverage, deployment, runtime and package size. Click a row
   for manifest details and the live MCP tool API.
+- **Jobs** — active and recent durable operations with target, status, phase, progress, duration, and
+  heartbeat freshness. The dashboard is read-only; cancellation remains a confirmed MCP operation.
 - **Interactions** — a tail-following list of every command, attributed to its module and the MCP tool
   that issued it, with redacted input parameters, exit status and duration. New rows appear live over SSE;
   `following` pauses it, and `copy log path` copies today's persisted JSONL `file://` URL.
@@ -352,8 +360,13 @@ discover them with `cluster_list_module_tools` and invoke them through `cluster_
 | `cluster_check_module` | Run recorded and live compatibility checks for a module |
 | `cluster_install_module` | Install a compatible module on explicit targets (always requires `confirm: true`) |
 | `cluster_uninstall_module` | Remove an installed module and receipt from explicit targets (always requires `confirm: true`) |
+| `cluster_purge_module_data` | Permanently remove marked retained module data after uninstall (always requires `confirm: true`) |
 | `cluster_list_module_tools` | List tools from an explicit node or an automatically selected installation |
 | `cluster_call_module_tool` | Call a module tool with normalized output and explicit routing metadata |
+| `cluster_list_jobs` | List durable background jobs, phases, progress, and terminal results |
+| `cluster_get_job` | Refresh one durable job by ID |
+| `cluster_get_job_log` | Read the bounded tail of a durable job log |
+| `cluster_cancel_job` | Cancel a running durable job (always requires `confirm: true`) |
 
 `targets` accepts node names (`["cluster1","cluster4"]`), roles/tags (`["storage"]`, `["worker"]`), or is
 omitted / `["all"]` to hit every node. Commands fan out with bounded concurrency (default 4).

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // tsc only emits .js, so the dashboard's static files are copied into dist/ alongside it.
-import { cpSync, existsSync, readdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,4 +14,8 @@ if (!existsSync(from)) {
 }
 
 cpSync(from, to, { recursive: true });
+const jobsFrom = path.join(root, "src", "jobs", "remote-runner.py");
+const jobsTo = path.join(root, "dist", "jobs", "remote-runner.py");
+mkdirSync(path.dirname(jobsTo), { recursive: true });
+cpSync(jobsFrom, jobsTo);
 console.log(`copied ${readdirSync(to).join(", ")} -> dist/web`);

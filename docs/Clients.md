@@ -155,9 +155,9 @@ Then try a read-only status request:
 
 > Check the status of all cluster nodes.
 
-VantaMCPd marks destructive operations and module installation with explicit `confirm` parameters, but
-the client decides how and when to present its own tool-approval UI. Review the target list and proposed
-action before approving a modifying call.
+VantaMCPd marks destructive operations, module installation, retained-data purge, and job cancellation
+with explicit `confirm` parameters, but the client decides how and when to present its own tool-approval
+UI. Review the target list, job ID, and proposed action before approving a modifying call.
 
 ## Multiple Clients
 

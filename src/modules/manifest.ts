@@ -33,9 +33,25 @@ const ModuleDeploymentSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("singleton") }).strict(),
 ]);
 
+const JobLifecycleSchema = z
+  .object({
+    mode: z.literal("job"),
+    timeoutMs: z.number().int().min(60_000).max(7 * 24 * 60 * 60 * 1_000),
+  })
+  .strict();
+
+const PersistentDataSchema = z
+  .object({
+    storage: z.literal("node"),
+    relativePath: RelativePathSchema,
+    minFreeMb: z.number().int().positive(),
+    retainOnUninstall: z.literal(true),
+  })
+  .strict();
+
 export const ModuleManifestSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
     id: z.string().regex(MODULE_ID, "must be a lowercase kebab-case module ID"),
     name: z.string().min(1).max(100),
     version: z.string().regex(SEMVER, "must be a semantic version"),
@@ -66,8 +82,10 @@ export const ModuleManifestSchema = z
       .object({
         install: RelativePathSchema,
         uninstall: RelativePathSchema,
+        execution: JobLifecycleSchema.optional(),
       })
       .strict(),
+    persistentData: PersistentDataSchema.optional(),
     deployment: ModuleDeploymentSchema,
     runtime: ModuleRuntimeSchema.default({ mode: "on-demand" }),
     limits: z
@@ -80,7 +98,24 @@ export const ModuleManifestSchema = z
       .strict()
       .default({}),
   })
-  .strict();
+  .strict()
+  .superRefine((manifest, context) => {
+    if (manifest.schemaVersion === 1) {
+      if (manifest.lifecycle.execution !== undefined) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["lifecycle", "execution"], message: "requires schemaVersion 2" });
+      }
+      if (manifest.persistentData !== undefined) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["persistentData"], message: "requires schemaVersion 2" });
+      }
+      return;
+    }
+    if (manifest.lifecycle.execution === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["lifecycle", "execution"], message: "is required for schemaVersion 2" });
+    }
+    if (manifest.persistentData === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["persistentData"], message: "is required for schemaVersion 2" });
+    }
+  });
 
 export type ModuleManifest = z.infer<typeof ModuleManifestSchema>;
 export type AcceleratorRequirement = z.infer<typeof AcceleratorRequirementSchema>;

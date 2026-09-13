@@ -45,6 +45,10 @@ function receiptLine(moduleId, version = "0.2.0") {
   return `${moduleId}|${Buffer.from(JSON.stringify(receipt)).toString("base64")}\n`;
 }
 
+function textToolsPackage() {
+  return loadModuleCatalog(path.join(root, "modules")).modules.find((item) => item.manifest.id === "text-tools");
+}
+
 test("compares semantic versions for startup update decisions", () => {
   assert.equal(compareSemanticVersions("0.1.0", "0.2.0"), -1);
   assert.equal(compareSemanticVersions("1.0.0", "1.0.0"), 0);
@@ -92,14 +96,15 @@ test("startup reconciliation updates only older installations and then removes t
 test("loads the text-tools package deterministically", () => {
   const catalog = loadModuleCatalog(path.join(root, "modules"));
   assert.deepEqual(catalog.errors, []);
-  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["text-tools"]);
-  assert.ok(catalog.modules[0].files.some((file) => file.relativePath === "server.py"));
-  assert.deepEqual(catalog.modules[0].manifest.deployment, { mode: "replicated", routing: "round-robin" });
-  assert.deepEqual(catalog.modules[0].manifest.runtime, { mode: "on-demand" });
+  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["corpus-search", "text-tools"]);
+  const textTools = catalog.modules.find((item) => item.manifest.id === "text-tools");
+  assert.ok(textTools.files.some((file) => file.relativePath === "server.py"));
+  assert.deepEqual(textTools.manifest.deployment, { mode: "replicated", routing: "round-robin" });
+  assert.deepEqual(textTools.manifest.runtime, { mode: "on-demand" });
 });
 
 test("accepts singleton module deployment declarations", () => {
-  const manifest = loadModuleCatalog(path.join(root, "modules")).modules[0].manifest;
+  const manifest = textToolsPackage().manifest;
   const parsed = parseModuleManifest({
     ...manifest,
     id: "state-database",
@@ -108,14 +113,55 @@ test("accepts singleton module deployment declarations", () => {
   assert.deepEqual(parsed.deployment, { mode: "singleton" });
 });
 
+test("accepts schema v2 job lifecycle and retained node storage", () => {
+  const manifest = textToolsPackage().manifest;
+  const parsed = parseModuleManifest({
+    ...manifest,
+    schemaVersion: 2,
+    id: "corpus-search",
+    lifecycle: {
+      ...manifest.lifecycle,
+      execution: { mode: "job", timeoutMs: 21_600_000 },
+    },
+    persistentData: {
+      storage: "node",
+      relativePath: "vantamcpd/corpora/corpus-search",
+      minFreeMb: 512,
+      retainOnUninstall: true,
+    },
+    deployment: { mode: "singleton" },
+  });
+  assert.equal(parsed.schemaVersion, 2);
+  assert.equal(parsed.lifecycle.execution.timeoutMs, 21_600_000);
+  assert.equal(parsed.persistentData.relativePath, "vantamcpd/corpora/corpus-search");
+});
+
+test("keeps schema v1 manifests unchanged and rejects v2-only fields", () => {
+  const manifest = textToolsPackage().manifest;
+  assert.equal(manifest.lifecycle.execution, undefined);
+  assert.equal(manifest.persistentData, undefined);
+  assert.throws(
+    () => parseModuleManifest({
+      ...manifest,
+      persistentData: {
+        storage: "node",
+        relativePath: "corpus",
+        minFreeMb: 10,
+        retainOnUninstall: true,
+      },
+    }),
+    /requires schemaVersion 2/,
+  );
+});
+
 test("requires every module to choose a deployment policy", () => {
-  const manifest = loadModuleCatalog(path.join(root, "modules")).modules[0].manifest;
+  const manifest = textToolsPackage().manifest;
   const { deployment: _deployment, ...withoutDeployment } = manifest;
   assert.throws(() => parseModuleManifest(withoutDeployment), /deployment: Required/);
 });
 
 test("accepts boot-persistent service runtime declarations", () => {
-  const manifest = loadModuleCatalog(path.join(root, "modules")).modules[0].manifest;
+  const manifest = textToolsPackage().manifest;
   const parsed = parseModuleManifest({
     ...manifest,
     id: "example-service",
@@ -140,7 +186,7 @@ test("reports malformed packages without hiding valid packages", () => {
 });
 
 test("evaluates the current ARM profile without making it a global default", () => {
-  const manifest = loadModuleCatalog(path.join(root, "modules")).modules[0].manifest;
+  const manifest = textToolsPackage().manifest;
   const result = evaluateCompatibility(manifest, node({
     cpu: { arch: "armv7l", packageArch: "armhf", cores: 2 },
     memory: { totalMb: 1000 },
@@ -151,7 +197,7 @@ test("evaluates the current ARM profile without making it a global default", () 
 });
 
 test("evaluates an x86-64 node through the same manifest", () => {
-  const manifest = loadModuleCatalog(path.join(root, "modules")).modules[0].manifest;
+  const manifest = textToolsPackage().manifest;
   const result = evaluateCompatibility(manifest, node({
     cpu: { arch: "x86_64", packageArch: "amd64", cores: 16 },
     memory: { totalMb: 32768 },
@@ -161,8 +207,29 @@ test("evaluates an x86-64 node through the same manifest", () => {
   assert.equal(result.status, "compatible");
 });
 
+test("requires configured storage for persistent-data modules", () => {
+  const base = textToolsPackage().manifest;
+  const manifest = parseModuleManifest({
+    ...base,
+    schemaVersion: 2,
+    id: "corpus-search",
+    lifecycle: { ...base.lifecycle, execution: { mode: "job", timeoutMs: 60_000 } },
+    persistentData: { storage: "node", relativePath: "corpora/search", minFreeMb: 512, retainOnUninstall: true },
+    deployment: { mode: "singleton" },
+  });
+  const result = evaluateCompatibility(manifest, node({
+    cpu: { packageArch: "armhf", cores: 2 },
+    memory: { totalMb: 1000 },
+    os: { id: "debian" },
+    filesystems: [{ mountpoint: "/", device: "/dev/mmcblk0p1", sizeGb: 14 }],
+    accelerators: [],
+  }));
+  assert.equal(result.status, "incompatible");
+  assert.match(result.reasons.join("; "), /node-local storage/);
+});
+
 test("matches declared GPU capabilities and rejects an insufficient GPU", () => {
-  const base = loadModuleCatalog(path.join(root, "modules")).modules[0].manifest;
+  const base = textToolsPackage().manifest;
   const manifest = {
     ...base,
     compatibility: {
@@ -183,7 +250,7 @@ test("matches declared GPU capabilities and rejects an insufficient GPU", () => 
 });
 
 test("does not confuse missing accelerator discovery with no accelerator", () => {
-  const base = loadModuleCatalog(path.join(root, "modules")).modules[0].manifest;
+  const base = textToolsPackage().manifest;
   const manifest = { ...base, compatibility: { ...base.compatibility, accelerators: [{ kind: "gpu" }] } };
   const result = evaluateCompatibility(manifest, node({
     cpu: { packageArch: "amd64", cores: 8 },
@@ -262,7 +329,8 @@ test("install stages, verifies, installs, writes a receipt, and cleans up", asyn
     accelerators: [],
   });
   const catalog = loadModuleCatalog(path.join(root, "modules"));
-  const files = catalog.modules[0].files;
+  const textTools = catalog.modules.find((item) => item.manifest.id === "text-tools");
+  const files = textTools.files;
   const commands = [];
   const uploads = [];
   let sftpEnded = false;
@@ -297,7 +365,7 @@ test("install stages, verifies, installs, writes a receipt, and cleans up", asyn
   const manager = new ModuleManager({ maxConcurrency: 1 }, pool, path.join(root, "modules"));
   let inventoryChanges = 0;
   manager.onInventoryChanged(() => { inventoryChanges += 1; });
-  manager.catalog.modules[0].manifest.runtime = { mode: "service", systemdUnit: "server.py" };
+  manager.catalog.modules.find((item) => item.manifest.id === "text-tools").manifest.runtime = { mode: "service", systemdUnit: "server.py" };
   const [result] = await manager.install("text-tools", [target]);
   assert.equal(result.ok, true);
   assert.equal(inventoryChanges, 1);
@@ -309,6 +377,80 @@ test("install stages, verifies, installs, writes a receipt, and cleans up", asyn
   assert.ok(commands.some((entry) => entry.command.includes("/var/lib/vantamcpd/modules/text-tools.json") && entry.options.sudo === true));
   assert.ok(commands.some((entry) => entry.command.includes("rollback()") && entry.options.sudo === true));
   assert.match(commands.at(-1).command, /^rm -rf -- /);
+});
+
+test("schema v2 installation submits a durable job after verified staging", async () => {
+  const target = {
+    ...node({
+      cpu: { packageArch: "amd64", cores: 8 },
+      memory: { totalMb: 16384 },
+      os: { id: "debian", version: "12" },
+      filesystems: [{ mountpoint: "/", device: "/dev/mmcblk0p1" }, { mountpoint: "/mnt/ssd", device: "/dev/sda1" }],
+      accelerators: [],
+    }),
+    role: "worker+storage",
+    tags: ["worker", "storage"],
+    storage: { device: "/dev/sda1", mountpoint: "/mnt/ssd", fsType: "ext4", label: "clusterssd", nfs: { enabled: false, network: "10.0.0.0/24", options: "rw,sync,no_subtree_check" } },
+  };
+  const corpus = loadModuleCatalog(path.join(root, "modules")).modules.find((item) => item.manifest.id === "corpus-search");
+  const commands = [];
+  const ok = (stdout = "") => ({ node: target.name, host: target.host, ok: true, code: 0, stdout, stderr: "", durationMs: 1, truncated: false, timedOut: false });
+  const pool = {
+    execMany: async () => [ok("")],
+    exec: async (_node, command, options = {}) => {
+      commands.push({ command, options });
+      if (command.includes("storage_mountpoint=")) {
+        return ok("command_bash|present\ncommand_python3|present\ncommand_sqlite3|present\ndisk_available_mb|1000\nstorage_mounted|yes\nstorage_available_mb|2000\nstorage_writable|yes\nstorage_distinct|yes\n");
+      }
+      if (command.includes("sha256sum")) return ok(corpus.files.map((file) => `${file.relativePath}|${file.sha256}`).join("\n"));
+      return ok();
+    },
+    sftp: async () => ({ fastPut: (_local, _remote, callback) => callback(null), end: () => void 0 }),
+  };
+  const submitted = [];
+  const jobs = {
+    submit: async (targetNode, input) => {
+      submitted.push({ targetNode, input });
+      return { jobId: "12345678-1234-4234-8234-123456789abc", status: "queued" };
+    },
+    list: async () => ({ jobs: [], unreachableNodes: [], invalidStates: [] }),
+  };
+  const manager = new ModuleManager({ maxConcurrency: 1, nodes: [target] }, pool, path.join(root, "modules"), jobs);
+  const [result] = await manager.install("corpus-search", [target]);
+  assert.equal(result.ok, true);
+  assert.equal(result.state, "provisioning");
+  assert.equal(result.jobId, "12345678-1234-4234-8234-123456789abc");
+  assert.equal(submitted.length, 1);
+  assert.equal(submitted[0].input.kind, "module-install");
+  assert.equal(submitted[0].input.environment.VANTA_MODULE_DATA_DIR, "/mnt/ssd/vantamcpd/corpora/corpus-search");
+  assert.ok(commands.some((entry) => entry.command.includes("/var/lib/vantamcpd/module-staging/corpus-search-")));
+  assert.ok(!commands.at(-1).command.startsWith("rm -rf -- /tmp/vantamcpd-corpus-search-"));
+});
+
+test("persistent data purge requires uninstall and a module marker", async () => {
+  const target = {
+    ...node({}),
+    role: "worker+storage",
+    tags: ["worker", "storage"],
+    storage: { device: "/dev/sda1", mountpoint: "/mnt/ssd", fsType: "ext4", label: "clusterssd", nfs: { enabled: false, network: "10.0.0.0/24", options: "rw,sync,no_subtree_check" } },
+  };
+  const commands = [];
+  const ok = (stdout = "") => ({ node: target.name, host: target.host, ok: true, code: 0, stdout, stderr: "", durationMs: 1, truncated: false, timedOut: false });
+  const pool = {
+    execMany: async () => [ok("")],
+    exec: async (_node, command) => {
+      commands.push(command);
+      return ok("__REMOVED__");
+    },
+  };
+  const jobs = { list: async () => ({ jobs: [], unreachableNodes: [], invalidStates: [] }) };
+  const manager = new ModuleManager({ maxConcurrency: 1, nodes: [target] }, pool, path.join(root, "modules"), jobs);
+  const result = await manager.purgeData("corpus-search", target);
+  assert.deepEqual(result, { node: target.name, moduleId: "corpus-search", removed: true });
+  assert.match(commands[0], /^set -e;/);
+  assert.match(commands[0], /\.vantamcpd-module/);
+  assert.match(commands[0], /vantamcpd\/corpora\/corpus-search/);
+  assert.match(commands[0], /test ! -L/);
 });
 
 test("uninstall validates the receipt before removing its payload and state", async () => {
@@ -350,7 +492,7 @@ test("uninstall validates the receipt before removing its payload and state", as
   const manager = new ModuleManager({ maxConcurrency: 1 }, pool, path.join(root, "modules"));
   let inventoryChanges = 0;
   manager.onInventoryChanged(() => { inventoryChanges += 1; });
-  manager.catalog.modules[0].manifest.runtime = receipt.runtime;
+  manager.catalog.modules.find((item) => item.manifest.id === "text-tools").manifest.runtime = receipt.runtime;
   const [result] = await manager.uninstall("text-tools", [target]);
   assert.deepEqual(result, {
     node: "test-node",
@@ -529,7 +671,7 @@ test("singleton installation rejects an existing instance on another node", asyn
     { execMany: async () => [result(first, ""), result(second, receiptLine("text-tools"))] },
     path.join(root, "modules"),
   );
-  manager.catalog.modules[0].manifest.deployment = { mode: "singleton" };
+  manager.catalog.modules.find((item) => item.manifest.id === "text-tools").manifest.deployment = { mode: "singleton" };
 
   await assert.rejects(manager.install("text-tools", [first]), /already installed on second-node/);
 });
@@ -547,7 +689,7 @@ test("singleton installation fails closed when cluster placement cannot be verif
     },
     path.join(root, "modules"),
   );
-  manager.catalog.modules[0].manifest.deployment = { mode: "singleton" };
+  manager.catalog.modules.find((item) => item.manifest.id === "text-tools").manifest.deployment = { mode: "singleton" };
 
   await assert.rejects(manager.install("text-tools", [first]), /unreachable nodes: offline-node/);
 });
@@ -560,7 +702,7 @@ test("concurrent singleton installations are serialized per module", async () =>
     {},
     path.join(root, "modules"),
   );
-  const modulePackage = manager.catalog.modules[0];
+  const modulePackage = manager.catalog.modules.find((item) => item.manifest.id === "text-tools");
   modulePackage.manifest.deployment = { mode: "singleton" };
   let installedNode;
   manager.installedModules = async () => [first, second].map((target) => ({
@@ -623,12 +765,13 @@ test("discovers installed module receipt counts per node", async () => {
     error: "offline",
   });
   const listing = await manager.list([first, second]);
+  const textTools = listing.modules.find((item) => item.id === "text-tools");
   assert.equal(listing.inventoryComplete, false);
   assert.deepEqual(listing.unreachableNodes, ["offline-node"]);
-  assert.deepEqual(listing.modules[0].installedNodes, ["test-node"]);
-  assert.deepEqual(listing.modules[0].installedVersions, { "test-node": "0.2.0" });
-  assert.equal(listing.modules[0].nodes[0].installed, true);
-  assert.equal(listing.modules[0].nodes[0].installedVersion, "0.2.0");
-  assert.equal(listing.modules[0].nodes[0].updateAvailable, false);
-  assert.equal(listing.modules[0].nodes[1].installed, undefined);
+  assert.deepEqual(textTools.installedNodes, ["test-node"]);
+  assert.deepEqual(textTools.installedVersions, { "test-node": "0.2.0" });
+  assert.equal(textTools.nodes[0].installed, true);
+  assert.equal(textTools.nodes[0].installedVersion, "0.2.0");
+  assert.equal(textTools.nodes[0].updateAvailable, false);
+  assert.equal(textTools.nodes[1].installed, undefined);
 });

@@ -26,8 +26,13 @@ The currently implemented user-facing management tools are:
 | `cluster_check_module` | Available | Check recorded capabilities, required commands, free disk, and reachability |
 | `cluster_install_module` | Available | Install a compatible package on explicit targets after `confirm: true` |
 | `cluster_uninstall_module` | Available | Remove the payload and receipt safely from explicit targets after `confirm: true` |
+| `cluster_purge_module_data` | Available | Permanently remove marked retained data after uninstall and `confirm: true` |
 | `cluster_list_module_tools` | Available | Discover tools on an explicit or automatically selected installation |
 | `cluster_call_module_tool` | Available | Call a tool on an explicit installation or use manifest-defined routing |
+| `cluster_list_jobs` | Available | List durable jobs with phase, progress, heartbeat, and result |
+| `cluster_get_job` | Available | Refresh one durable job by ID |
+| `cluster_get_job_log` | Available | Read a bounded remote job-log tail |
+| `cluster_cancel_job` | Available | Cancel a running job after `confirm: true` |
 
 After pulling module changes, run `npm run build` and restart the `vanta` MCP server in your client so it
 reloads the local catalog.
@@ -37,11 +42,13 @@ reloads the local catalog.
 | Module | Package version | Requirements | Included tools | Guide |
 | --- | --- | --- | --- | --- |
 | Text Tools (`text-tools`) | `0.2.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | Four compatibility tools plus 11 bounded category tools | [Text Tools](../modules/text-tools/TextTools.md) |
+| Scientific Corpus Search (`corpus-search`) | `0.1.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 512 MB free, Python 3, SQLite 3 | Search, exact record lookup, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
 
 ### Activate a Module
 
-Activation currently means installing the versioned package on one or more nodes. Modules are launched
-on demand and do not run as persistent services. Start with these requests in any connected MCP agent:
+Activation installs the versioned package on one or more nodes. Runtime can be on demand or a persistent
+service, and a manifest can move a long-running installation into a durable job. Start with these
+requests in any connected MCP agent:
 
 > List the available node modules for cluster1.
 
@@ -56,6 +63,11 @@ must obtain approval before calling `cluster_install_module` with `confirm: true
 package over SFTP, verifies every SHA-256 hash, runs its trusted installer, switches the active version,
 and writes a root-owned receipt. When commands are missing, declared apt packages are installed first
 and preflight is repeated. A failed activation retains the previous active version.
+
+Schema-v2 job-backed activation returns `state: "provisioning"` and a `jobId` after verified staging.
+The remote systemd oneshot owns the lifecycle operation from that point, so it survives an MCP or SSH
+disconnect and a local daemon restart. The module receipt and active symlink are written only after the
+installer succeeds. An existing version remains active while an update job provisions its replacement.
 
 After installation, discover and use its tools with requests such as:
 
@@ -135,8 +147,12 @@ Deactivate an installed module with a request such as:
 The agent must use explicit node names or tags and obtain approval before calling
 `cluster_uninstall_module` with `confirm: true`. VantaMCPd validates the root-owned receipt before it
 runs the package's trusted uninstall script, removes the active payload and receipt, and leaves unrelated
-versions and node data untouched. Repeating the request when the module is already absent succeeds
-without changing the node. Modules are on-demand processes, so there is no persistent service to stop.
+versions and declared retained data untouched. Repeating the request when the module is already absent
+succeeds without changing the node. Service modules are stopped by their uninstaller.
+
+For a module with `retainOnUninstall: true`, purge is a separate destructive operation. It is allowed
+only after uninstall, requires `confirm: true`, rejects symbolic-link targets, and removes only a data
+directory carrying the expected VantaMCPd module marker.
 
 ### Runtime and Restart Behavior
 
@@ -200,7 +216,6 @@ Missing or stale required facts produce an `unknown` result and a request to ref
 - Explicit rollback commands or dependency sharing between modules.
 - Opening module service ports on cluster nodes.
 - Browser-based install or uninstall actions.
-- Generic long-running job scheduling, progress, cancellation, or resumption.
 - Shared artifact upload/download APIs.
 - Vector search or local embedding generation.
 
@@ -235,6 +250,7 @@ The first release uses generic proxy tools. Dynamic registration of every remote
 | Live free capacity | Installation preflight on the target node |
 | Installed module/version | Receipt on the target node |
 | Module health and tools | Probe of the installed entrypoint |
+| Durable job state and log | `/var/lib/vantamcpd/jobs/<job-id>/` on the target node |
 
 Installed-module state is mutable remote state and must not be copied into `cluster.config.local.json`.
 
@@ -287,7 +303,7 @@ The manifest will be validated with Zod before any remote operation. Its initial
 }
 ```
 
-Manifest IDs and relative paths use conservative character sets. Package loading rejects unsupported schema versions, duplicate IDs, missing files, symbolic links, path traversal, malformed versions, oversized packages, and unknown manifest properties.
+Manifest IDs and relative paths use conservative character sets. Package loading rejects unsupported schema versions, duplicate IDs, missing files, symbolic links, path traversal, malformed versions, oversized packages, and unknown manifest properties. Schema v2 adds `lifecycle.execution` for job-backed installation and `persistentData` for a contained path under the target node's configured storage mount; schema v1 remains supported unchanged.
 
 Compatibility fields are optional constraints rather than a fixed list of node classes. Future manifest revisions may describe CPU instruction sets, GPU vendor/model, minimum VRAM, CUDA/ROCm versions, neural accelerators, container runtimes, or other named capabilities. Hardware discovery and compatibility evaluation must version these facts explicitly; they must not infer capability from node names, roles, or architecture alone.
 
@@ -359,7 +375,8 @@ The installed MCP SDK supports removable registered tools and `notifications/too
 - Existing audit attribution records deployment, probes, and module execution.
 - Package count, package bytes, execution time, input bytes, and output bytes are capped.
 - A module that processes untrusted input must implement its own domain limits.
-- Long-running work will eventually use job handles rather than holding an MCP call and SSH channel open for hours.
+- Long-running lifecycle work uses allowlisted systemd jobs with durable state, bounded logs, resource
+  locks, heartbeat monitoring, cancellation, timeout enforcement, and expiration cleanup.
 
 ## Minimal Module: Text Tools
 
@@ -383,6 +400,18 @@ collections, and result bytes are bounded. Python regex matching/replacement run
 external commands have fixed argument shapes and a five-second timeout. The complete API and deferred
 features are documented in [Text Tools operations](../modules/text-tools/Operations.md).
 
+## Scientific Corpus Search
+
+`corpus-search` is a singleton, on-demand module installed directly on a configured storage node. Its
+compact `compact-arxiv-cs` profile provisions at most 10,000 deduplicated arXiv computer-science
+metadata records into SQLite FTS5 and ranks searches with BM25. It stores titles, abstracts, authors,
+categories, identifiers, provenance, and external links; it does not mirror papers or PDFs.
+
+Provisioning is a durable job, makes one arXiv API request at a time with at least three seconds between
+requests, checkpoints pages for resume, and atomically activates only a validated replacement database.
+The tools are `corpus_search`, `corpus_get`, and `corpus_info`. See
+[Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) for usage and data lifecycle.
+
 ## Current-node Feasibility Snapshot
 
 Ratings below describe a useful implementation on the current ARMv7/1 GB nodes only. They are not global module ratings. The same manifests may evaluate differently on future x86-64, arm64, high-memory, GPU, or accelerator-backed nodes.
@@ -391,14 +420,14 @@ Ratings below describe a useful implementation on the current ARMv7/1 GB nodes o
 | --- | --- | --- |
 | Regex, parsing, and extraction | High | Python standard library; selected MVP |
 | Artifact storage | High | Local filesystem or existing NFS, with quotas and retention |
-| Documentation/scientific corpus | High for subsets | SQLite FTS5/BM25 with curated metadata; no embeddings initially |
+| Documentation/scientific corpus | Implemented for a compact subset | SQLite FTS5/BM25 over up to 10,000 arXiv metadata records; no embeddings |
 | Image processing | High for basic transforms | Pillow or ImageMagick resize/crop/filter; no neural models |
 | Python execution | Medium | Basic Python only; needs sandbox and resource limits |
 | NumPy/SciPy compute | Medium | Prefer Debian armhf packages and OpenBLAS; memory limits apply |
 | Screenshot and OCR | Medium for OCR | Tesseract on supplied images; browser capture is a separate blocker |
 | PDF parsing | Medium for text extraction | pdfminer.six or command-line tools; tables/OCR can be expensive |
 | Geospatial compute | Medium for basic operations | Shapely/GeoJSON only; PostGIS is too heavy for the MVP |
-| Job queue/task runner | Medium with a custom lightweight runner | Celery/Redis adds avoidable resident services and memory use |
+| Durable job runner | Implemented for trusted lifecycle work | systemd oneshots and node-local JSON state; no arbitrary command submission |
 | Wikipedia knowledge store | Low for full English corpus | Use a curated SQLite/Kiwix subset on large storage first |
 | Browserless webpage retrieval | Low | Current Playwright support covers x86-64/arm64, not ARMv7 |
 | Vision/ML inference | Low on current nodes | PyTorch, Transformers, CLIP, YOLO, and vLLM exceed the current profile; capable GPU nodes may qualify |
@@ -408,7 +437,7 @@ Intel MKL is not an option for the current ARM nodes; OpenBLAS is appropriate fo
 
 ## Future Module Catalog
 
-Every module below is a future candidate. A future proposal should narrow each one to a resource budget, tool contract, data policy, and supported architectures before implementation.
+The sections below remain design candidates except where an implemented baseline is explicitly noted.
 
 ### Compute kernels
 
@@ -448,9 +477,11 @@ Possible capabilities include keyword or semantic search and article snippets wi
 
 A curated Kiwix or SQLite subset is more realistic than a full Wikipedia vector database on current storage. Wikimedia now recommends content exports over legacy XML database dumps for new bulk consumers. Downloads must follow Wikimedia's User-Agent and connection policies.
 
-#### Documentation and Knowledge Corpus
+#### Documentation and Knowledge Corpus Extensions
 
-This reusable corpus service could contain curated technical documentation, internal engineering documents, scientific metadata, or other approved collections. Candidate orchestration libraries include [Haystack](https://haystack.deepset.ai/), [LangChain](https://python.langchain.com/), and [Hugging Face Datasets](https://huggingface.co/docs/datasets/).
+The implemented `corpus-search` baseline uses SQLite FTS5/BM25 and a compact arXiv metadata profile.
+Future adapters could add curated technical documentation, internal engineering documents, or other
+approved collections. Candidate orchestration libraries include [Haystack](https://haystack.deepset.ai/), [LangChain](https://python.langchain.com/), and [Hugging Face Datasets](https://huggingface.co/docs/datasets/).
 
 The first storage backend should be SQLite FTS5 with BM25. Optional future backends include [Qdrant](https://qdrant.tech/documentation/), [Milvus](https://milvus.io/docs), and [Weaviate](https://docs.weaviate.io/weaviate). Those vector systems are not assumed to support or fit the current nodes, but remain candidates for compatible future nodes. Embeddings may be generated locally on a qualifying accelerator node or on another capable machine and copied with the corpus.
 
@@ -490,9 +521,11 @@ Basic Pillow or ImageMagick transforms are feasible. CLIP and YOLO model inferen
 
 ### Agent infrastructure
 
-#### Job Queue and Task Runner
+#### General Job Queue and Task Runner
 
-Long-running work should eventually return a job ID and expose submit, status, cancel, logs, result, and cleanup tools. Candidate technologies include [Celery](https://docs.celeryq.dev/), [RQ](https://python-rq.org/), and [Dramatiq](https://dramatiq.io/).
+Trusted module lifecycle work now returns a job ID and exposes status, cancel, logs, result, and cleanup
+through a lightweight systemd runner. General caller-defined jobs and arbitrary command submission are
+not supported. Candidate technologies for a broader queue include [Celery](https://docs.celeryq.dev/), [RQ](https://python-rq.org/), and [Dramatiq](https://dramatiq.io/).
 
 For the current cluster, a small SQLite-backed runner managed by systemd may be a better first implementation than a resident Redis deployment. Queue semantics, recovery, cancellation, quotas, and artifact ownership must be specified first.
 
@@ -502,52 +535,13 @@ Compute and job modules need a shared way to return outputs too large for MCP to
 
 Candidate backends include the local filesystem, the existing NFS storage node, [MinIO](https://min.io/), and [IPFS](https://ipfs.tech/). Local/NFS storage is the appropriate first backend; MinIO and IPFS add services and operational cost that are not justified for the lifecycle MVP.
 
-## Implementation Plan
+## Implemented Lifecycle
 
-### Phase 1: Manifest, catalog, and compatibility
-
-1. Add a Zod manifest schema and safe package-path validation.
-2. Discover immediate `modules/*/module.json` packages relative to the installed VantaMCPd package, independent of process working directory.
-3. Evaluate recorded hardware constraints and live node preflight checks.
-4. Add focused tests for valid and invalid manifests, duplicate IDs, path containment, deterministic ordering, the current ARMv7 profile, a general x86-64 profile, and a GPU-capable profile.
-
-### Phase 2: Deployment and remote state
-
-1. Stage package files through the existing SFTP layer.
-2. Verify SHA-256 hashes before running lifecycle scripts.
-3. Implement atomic, idempotent install and uninstall behavior.
-4. Discover receipts and probe entrypoint health without changing cluster config.
-5. Cache per-node state for management tools and the dashboard.
-
-### Phase 3: MCP over SSH
-
-1. Add an audited, bounded SSH process/channel abstraction.
-2. Implement the MCP SDK `Transport` interface over that channel.
-3. Implement initialize, `tools/list`, and `tools/call` through an SDK client.
-4. Add timeout, cancellation, result-size, malformed-message, and cleanup tests.
-
-### Phase 4: Text Tools module
-
-1. Implement the Python standard-library MCP server and four bounded tools.
-2. Add idempotent install/uninstall scripts and a smoke test.
-3. Add protocol and behavior tests, including regex timeout containment.
-
-### Phase 5: VantaMCPd tools and dashboard
-
-1. Register the six management/proxy tools.
-2. Add module management to the shared tool context and shutdown path.
-3. Add a read-only `GET /api/modules` endpoint backed by cached status.
-4. Add compact module state, version, health, stale, empty, and error states to the existing dashboard without adding mutation controls.
-
-### Phase 6: Documentation and acceptance
-
-1. Update the operator README and technical reference.
-2. Run type checking, unit/integration tests, and the production build.
-3. Refresh hardware and check compatibility on all nodes.
-4. On one node, verify rejection without confirmation, install `text-tools`, list its four compatibility
-  tools and 11 category tools, call representative operations, inspect dashboard/audit state, and
-  uninstall it.
-5. Verify the receipt and payload are gone and unrelated node state is unchanged.
+The repository implements validated local packages, recorded and live compatibility checks, SFTP
+staging with SHA-256 verification, root-owned receipts, replicated/singleton placement, MCP-over-SSH
+proxying, startup updates, durable lifecycle jobs, retained storage, explicit purge, and read-only
+module/job dashboard views. Automated tests use offline corpus fixtures; live acceptance remains an
+operator action because it changes a configured node and the corpus source is networked.
 
 ## Acceptance Criteria
 
@@ -567,12 +561,12 @@ The first release is complete when:
 ## Deferred Roadmap
 
 1. Promote healthy remote tools to dynamic first-class VantaMCPd tools and send `tools/list_changed` notifications after lifecycle changes.
-2. Add upgrade, rollback, retained-data, and garbage-collection policies.
+2. Add explicit rollback and old-version garbage-collection policies.
 3. Add signed packages and an authenticated remote registry.
 4. Add persistent service modules and narrowly scoped network exposure rules.
-5. Add the job API with progress, cancellation, restart recovery, and quotas.
+5. Extend trusted lifecycle jobs with quotas and additional allowlisted job kinds.
 6. Add shared artifact storage and retention controls.
 7. Add dashboard lifecycle actions only after authentication, authorization, CSRF, and confirmation UX are designed.
-8. Implement SQLite FTS5 corpus search and source-specific metadata adapters.
+8. Add corpus adapters beyond the implemented compact arXiv metadata profile.
 9. Add precomputed embeddings and vector backends only for compatible node profiles.
 10. Add more capable arm64/x86-64 or accelerator-backed nodes for browser and ML modules; discover their capabilities through the same inventory and evaluate them through the same manifest contract.

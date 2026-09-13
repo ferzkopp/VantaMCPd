@@ -125,7 +125,7 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
   }
 
   function updateRelativeTimes() {
-    document.querySelectorAll("#summary [data-last-seen]").forEach((element) => {
+    document.querySelectorAll("#summary [data-last-seen], #jobs [data-last-seen]").forEach((element) => {
       element.textContent = formatRelativeTime(element.dataset.lastSeen);
     });
   }
@@ -185,6 +185,59 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
       tr.appendChild(td);
       tb.appendChild(tr);
     }
+  }
+
+  function renderJobs(data) {
+    const tb = document.querySelector("#jobs tbody");
+    tb.textContent = "";
+    (data.jobs || []).forEach((job) => {
+      const tr = document.createElement("tr");
+      const progress = job.progress;
+      const progressText = progress
+        ? `${num.format(progress.current || 0)}${progress.total ? ` / ${num.format(progress.total)}` : ""}${progress.unit ? ` ${progress.unit}` : ""}`
+        : "-";
+      const started = Date.parse(job.startedAt || job.createdAt);
+      const ended = Date.parse(job.finishedAt || new Date().toISOString());
+      const duration = Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, Math.round((ended - started) / 1000)) + "s" : "-";
+      const values = [
+        job.moduleId ? `${job.kind} · ${job.moduleId}` : job.kind,
+        job.targetNode,
+        job.status,
+        job.phase || "-",
+        progressText,
+        duration,
+        job.heartbeatAt ? formatRelativeTime(job.heartbeatAt) : "-",
+      ];
+      values.forEach((value, index) => {
+        const td = document.createElement("td");
+        td.textContent = value;
+        if (index === 2) td.className = job.status === "succeeded" ? "ok" : job.status === "failed" || job.status === "canceled" ? "bad" : "warn";
+        if (index === 4 && progress?.message) td.title = progress.message;
+        if (index === 6 && job.heartbeatAt) {
+          td.dataset.lastSeen = job.heartbeatAt;
+          td.title = formatUtcTimestamp(job.heartbeatAt);
+        }
+        tr.appendChild(td);
+      });
+      tr.title = job.error || job.result?.summary || job.jobId;
+      tb.appendChild(tr);
+    });
+    if (!(data.jobs || []).length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 7;
+      td.className = "empty";
+      td.textContent = data.refreshedAt ? "no durable jobs" : "discovering durable jobs…";
+      tr.appendChild(td);
+      tb.appendChild(tr);
+    }
+  }
+
+  function loadJobs() {
+    fetch("/api/jobs")
+      .then((response) => response.json())
+      .then(renderJobs)
+      .catch(() => void 0);
   }
 
   function updateScope() {
@@ -614,6 +667,8 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
 
   load();
   summary();
+  loadJobs();
   setInterval(summary, 4000);
+  setInterval(loadJobs, 4000);
   setInterval(updateRelativeTimes, RELATIVE_TIME_UPDATE_MS);
 })();

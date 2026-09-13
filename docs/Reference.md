@@ -152,6 +152,13 @@ tools, descriptions, and input schemas.
 
 ![Module MCP API](monitor-module.png)
 
+### Durable jobs
+
+The **Jobs** table reads the job manager's refreshed cache and shows active and recent trusted
+background work: operation/module, target, status, phase, bounded progress, duration, and heartbeat
+freshness. It does not run an SSH scan per browser request and deliberately has no mutation controls.
+Use `cluster_cancel_job` with `confirm: true` to stop a running job.
+
 ### Node detail
 
 Clicking a row in **Nodes** opens that node's configuration and recorded hardware — access settings,
@@ -297,6 +304,7 @@ browser, and only `GET` is accepted.
 | `GET /` | The dashboard (single self-contained page, no external fetches) |
 | `GET /api/events` | `?node=` `?status=` `?q=` `?since=` `?limit=` (default 200, max 2000) |
 | `GET /api/summary` | Every configured node with activity and cached installed-module counts; addresses omitted |
+| `GET /api/jobs` | Cached active and recent durable jobs; read-only and no remote scan per request |
 | `GET /api/node` | `?name=` — configuration, module inventory and hardware, address-scrubbed |
 | `GET /api/stream` | Server-sent events, one JSON event per frame — what drives tail-following |
 
@@ -316,6 +324,17 @@ browser, and only `GET` is accepted.
 
 Set `"enabled": false` to turn the whole thing off, or `"web": false` to keep the file log without the
 HTTP server.
+
+Durable jobs have a separate top-level configuration block:
+
+```jsonc
+"jobs": {
+  "retentionDays": 7,       // retain terminal state/logs before cleanup
+  "pollIntervalMs": 10000,  // refresh remote state for MCP and dashboard views
+  "cancelGraceMs": 5000,    // graceful stop window before process-group termination
+  "maxLogBytes": 1000000    // upper bound accepted by job-log reads
+}
+```
 
 ---
 

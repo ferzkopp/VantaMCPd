@@ -115,6 +115,29 @@ export function registerModuleTools(server: McpServer, ctx: ToolContext): void {
   );
 
   server.registerTool(
+    "cluster_purge_module_data",
+    {
+      title: "Purge retained node module data",
+      description:
+        "Permanently remove a module's retained data from one explicit storage node. The module must be uninstalled, " +
+        "no lifecycle job may be active, and confirm=true is required.",
+      inputSchema: {
+        moduleId: z.string().describe("Module ID from cluster_list_modules."),
+        target: z.string().describe("One explicit storage node name."),
+        confirm: z.boolean().optional().describe("Must be true to authorize permanent data removal."),
+      },
+    },
+    async ({ moduleId, target, confirm }) => {
+      try {
+        if (confirm !== true) throw new Error("Persistent data purge requires confirm: true.");
+        return json(await ctx.modules.purgeData(moduleId, resolveSingleTarget(ctx, target)));
+      } catch (err) {
+        return errorText(err);
+      }
+    },
+  );
+
+  server.registerTool(
     "cluster_list_module_tools",
     {
       title: "List tools from an installed node MCP module",
