@@ -20,21 +20,22 @@ test("names known node addresses and masks every other IPv4 in a payload", () =>
       { name: "byname", host: "storage.local" },
     ],
   });
-
-  const scrubbed = scrub({
+  const scrubbed = JSON.parse(scrub(JSON.stringify({
     host: "192.168.42.39",
     description: "NFS client of 192.168.42.36:/mnt/ssd.",
     networkMounts: [{ source: "192.168.42.36:/mnt/ssd" }],
     exports: "192.168.42.0/24(rw)",
+    error: "SSH connect to cluster2 (192.168.42.38:22) failed: Timed out while waiting for handshake",
     kernel: "4.14.14-sunxi",
     version: "1.2.3.4",
-  });
+  })));
 
   assert.equal(scrubbed.host, "cluster1");
   assert.equal(scrubbed.description, "NFS client of cluster4:/mnt/ssd.");
   assert.equal(scrubbed.networkMounts[0].source, "cluster4:/mnt/ssd");
-  // An unconfigured address, such as an export CIDR, is still masked rather than named.
+  // An unconfigured address, such as an export CIDR or an unlisted node, is masked rather than named.
   assert.equal(scrubbed.exports, "x.x.x.x/24(rw)");
+  assert.match(scrubbed.error, /\(x\.x\.x\.x:22\)/);
   assert.equal(scrubbed.kernel, "4.14.14-sunxi", "a kernel version is not an address");
   assert.equal(scrubbed.version, "x.x.x.x", "four small dotted groups are indistinguishable from an address");
 });

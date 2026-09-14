@@ -44,13 +44,13 @@ function loadAssets(): Map<string, Buffer> {
   return cache;
 }
 
-function json(res: ServerResponse, body: unknown, status = 200): void {
+function sendJson(res: ServerResponse, body: unknown, status: number, scrub: (serialized: string) => string): void {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
   });
-  res.end(JSON.stringify(body));
+  res.end(scrub(JSON.stringify(body)));
 }
 
 function currentLogFileUrl(logDir: string): string {
@@ -69,29 +69,28 @@ function intParam(value: string | null, fallback: number, min: number, max: numb
 const IPV4 = /\b\d{1,3}(?:\.\d{1,3}){3}\b/g;
 
 /**
- * Builds a scrubber that rewrites every IPv4 address in a payload, wherever it is nested. Addresses reach
- * the node detail from more places than the obvious `host`: NFS mount sources in `filesystems` and
- * `networkMounts`, hand-written descriptions, export CIDRs. An allow-list of fields cannot catch those,
- * so scrub the whole structure. A configured node's address becomes its node name, which reads better
- * than a mask and keeps the relationship between nodes visible.
+ * Builds a scrubber that rewrites every IPv4 address in a serialized dashboard payload. Addresses arrive
+ * from places an allow-list cannot anticipate — NFS mount sources, export CIDRs, hand-written
+ * descriptions, command text and SSH error messages — so the substitution runs over the whole response
+ * rather than chosen fields. A configured node's address becomes its node name, which reads better than a
+ * mask and keeps the relationship between nodes visible. The on-disk audit log keeps the raw host.
  */
-export function addressScrubber(config: ClusterConfig): <T>(value: T) => T {
+export function addressScrubber(config: ClusterConfig): (serialized: string) => string {
   const names = new Map(
     config.nodes
       .filter((node) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(node.host))
       .map((node) => [node.host, node.name] as const),
   );
-  return <T>(value: T): T =>
-    JSON.parse(
-      // Four dotted groups are not necessarily an address: kernel and package versions look the same.
-      JSON.stringify(value).replace(IPV4, (match) =>
-        match.split(".").every((octet) => Number(octet) <= 255) ? names.get(match) ?? "x.x.x.x" : match,
-      ),
-    ) as T;
+  return (serialized) =>
+    // Four dotted groups are not necessarily an address: kernel and package versions look the same.
+    serialized.replace(IPV4, (match) =>
+      match.split(".").every((octet) => Number(octet) <= 255) ? names.get(match) ?? "x.x.x.x" : match,
+    );
 }
 
 export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: ModuleManager, jobs?: JobManager): Server | undefined {
-  const withoutAddresses = addressScrubber(config);
+  const scrubAddresses = addressScrubber(config);
+  const json = (res: ServerResponse, body: unknown, status = 200): void => sendJson(res, body, status, scrubAddresses);
   const { port } = config.monitoring;
   const moduleInventory = new Map<string, NodeModuleInventory & { refreshedAt: string; stale?: boolean }>();
   let moduleRefresh: Promise<void> | undefined;
@@ -314,22 +313,19 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
               nfs: { enabled: node.storage.nfs.enabled, options: node.storage.nfs.options },
             }
           : undefined;
-        json(
-          res,
-          withoutAddresses({
-            name: node.name,
-            role: node.role,
-            tags: node.tags,
-            description: node.description,
-            port: node.port,
-            auth: node.auth,
-            sudo: node.sudo,
-            diskRoles: node.diskRoles,
-            storage,
-            hardware: node.hardware,
-            modules: moduleInventory.get(node.name),
-          }),
-        );
+        json(res, {
+          name: node.name,
+          role: node.role,
+          tags: node.tags,
+          description: node.description,
+          port: node.port,
+          auth: node.auth,
+          sudo: node.sudo,
+          diskRoles: node.diskRoles,
+          storage,
+          hardware: node.hardware,
+          modules: moduleInventory.get(node.name),
+        });
         return;
       }
 
@@ -342,7 +338,8 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
         });
         res.write("retry: 2000\n\n");
         const unsubscribe = audit.subscribe((event) => {
-          res.write(`data: ${JSON.stringify(event)}\n\n`);
+          // Live events bypass json(), so they need the same substitution the polled endpoints get.
+          res.write(`data: ${scrubAddresses(JSON.stringify(event))}\n\n`);
         });
         // Keeps intermediaries and idle sockets from dropping the stream.
         const ping = setInterval(() => res.write(": ping\n\n"), 25_000);

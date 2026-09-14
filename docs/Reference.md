@@ -299,12 +299,16 @@ mounted filesystems and OS.
 
 The payload behind it is built as an **allow-list**, so a field added to the inventory later cannot leak
 by accident. Deliberately excluded: the node's address, `privateKeyPath` (it can contain the local host
-username) and the SSH user. Every remaining value is then passed through an IPv4 scrub, because
-addresses arrive from places an allow-list cannot anticipate — NFS mount sources in `filesystems` and
-`networkMounts`, export CIDRs, and hand-written `description` text. An address belonging to a configured
+username) and the SSH user.
+
+Every dashboard response is then passed through an IPv4 substitution during serialization, covering the
+polled endpoints and the live event stream alike. Addresses arrive from places an allow-list cannot
+anticipate — NFS mount sources in `filesystems` and `networkMounts`, export CIDRs, hand-written
+`description` text, recorded command text, and SSH error messages. An address belonging to a configured
 node is replaced by that node's name, so `192.168.42.36:/mnt/ssd` reads as `cluster4:/mnt/ssd` and the
 relationship between nodes stays visible; every other address renders as `x.x.x.x`. Dotted groups whose
-parts are not valid octets, such as a quad-dotted kernel or package version, are left alone.
+parts are not valid octets, such as a quad-dotted kernel or package version, are left alone. The
+substitution is presentation only: the on-disk JSONL log retains the raw host for anyone who needs it.
 
 This makes the node-detail view safe to screenshot. The **Interactions** list retains operational detail:
 commands and MCP input parameters are stored after redaction and clipping, but can still contain
