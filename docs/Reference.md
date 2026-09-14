@@ -569,7 +569,8 @@ mismatch would silently target the wrong machine.
 
 `modules.<module-id>.installOptions` supplies persistent defaults for that module's manual and automatic
 installs. Values are validated against the module manifest before SSH work, and options passed directly
-to `cluster_install_module` take precedence. Corpus Search accepts `small-arxiv-cs`, `medium-arxiv-cs`,
+to `cluster_install_module` take precedence. Editing them does not reconfigure an installed node; they
+apply to the next install that runs. Corpus Search accepts `small-arxiv-cs`, `medium-arxiv-cs`,
 or `large-arxiv-cs`; its optional `categories` list replaces the packaged topic list. See the
 [Corpus Search quickstart](../modules/corpus-search/CorpusSearch.md#quickstart) for profile behavior and
 installation verification.

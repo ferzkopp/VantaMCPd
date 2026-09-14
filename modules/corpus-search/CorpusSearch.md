@@ -138,25 +138,50 @@ runs `ANALYZE`, and performs integrity checks. Completion is indicated only by t
 
 > Show the status and recent log output for the corpus-search installation job.
 
-Because deployment is singleton, change its profile, topics, or node by uninstalling the current instance
-first and then reinstalling with the desired options. Uninstall retains the corpus data. A matching
-profile and snapshot can seed OAI catch-up from the retained database; changing either rebuilds and
-verifies the sampled corpus from the extracted snapshot JSON before activation.
+## Change the Profile, Topics, or Node
 
-To make a profile the default for manual and automatic installs, add it to `cluster.config.local.json`:
+Deployment is singleton, so there is no in-place reconfiguration: uninstall the current instance, then
+reinstall with the desired options.
 
-```json
-{
-	"modules": {
-		"corpus-search": {
-			"installOptions": { "profileId": "medium-arxiv-cs" }
+Editing `installOptions` alone changes nothing on an installed node. Automatic module updates compare
+only the module version, so a node already running the catalog version is skipped before install options
+are read. Configured options apply to the next install that actually runs.
+
+To switch cluster4 from Medium to Large:
+
+1. Set the profile in `cluster.config.local.json`:
+
+	```json
+	{
+		"modules": {
+			"corpus-search": {
+				"installOptions": { "profileId": "large-arxiv-cs" }
+			}
 		}
 	}
-}
-```
+	```
 
-Restart the VantaMCPd MCP server after editing the inventory; configuration is loaded once at startup.
-Explicit `cluster_install_module` options override configured defaults.
+2. Restart the VantaMCPd MCP server. Configuration is loaded once at startup.
+3. Uninstall the current instance. This removes the service, install directory, and receipt, and retains
+	the corpus data directory on the storage mount.
+
+	> Uninstall corpus-search from cluster4.
+
+4. Reinstall on the same node. This starts a new durable provisioning job.
+
+	> Install corpus-search on cluster4.
+
+Steps 1 and 2 are only needed to change the default. To reinstall without editing the inventory, pass the
+options on the install call instead; explicit `cluster_install_module` options override configured
+defaults.
+
+Changing the profile or topics changes the profile hash, so the retained database cannot seed OAI
+catch-up. Provisioning rebuilds and verifies the sampled corpus from the retained snapshot JSON before
+activation, which skips the download and extract phases when those source files are still on disk. A
+reinstall with a matching profile and snapshot reuses the existing database and only runs catch-up.
+
+Uninstall never deletes corpus data. Use `cluster_purge_module_data` to reclaim the storage mount, and
+only when the corpus is no longer wanted.
 
 ## Tools
 

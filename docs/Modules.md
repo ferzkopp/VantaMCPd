@@ -83,6 +83,10 @@ editing the inventory because configuration is loaded once at startup:
 }
 ```
 
+These defaults apply to the next install that runs; they do not reconfigure an already-installed node.
+Automatic updates compare versions only, so a node already running the catalog version is skipped before
+options are read. To apply changed options to a current installation, uninstall and reinstall it.
+
 Schema-v2 job-backed activation returns `state: "provisioning"` and a `jobId` after verified staging.
 The remote systemd oneshot owns the lifecycle operation from that point, so it survives an MCP or SSH
 disconnect and a local daemon restart. The module receipt and active symlink are written only after the
