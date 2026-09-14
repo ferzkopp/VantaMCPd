@@ -291,7 +291,7 @@ export class ModuleManager {
       const minDiskMb = modulePackage.manifest.compatibility.minDiskMb;
       if (minDiskMb !== undefined && Number.isFinite(diskAvailableMb) && diskAvailableMb < minDiskMb) {
         reasons.push(
-          `requires ${minDiskMb} MB free disk; node has ${diskAvailableMb} MB`,
+          `requires ${minDiskMb} MB free on the root filesystem; node has ${diskAvailableMb} MB`,
         );
       }
       const data = modulePackage.manifest.persistentData;
@@ -733,12 +733,20 @@ export class ModuleManager {
     const expectedInstallDirectory = `${moduleBase}/${receipt.version}`;
     if (
       receipt.moduleId !== id ||
-      receipt.version !== version ||
       receipt.installDirectory !== expectedInstallDirectory ||
       receipt.currentLink !== currentLink ||
       JSON.stringify(receipt.entrypoint) !== JSON.stringify(modulePackage.manifest.entrypoint)
     ) {
-      throw new Error(`Installed ${id} receipt does not match local catalog version ${version}.`);
+      throw new Error(`Installed ${id} receipt on ${node.name} is inconsistent with the local catalog.`);
+    }
+    // A pending update is an expected, temporary state and must not read as a corrupted installation.
+    if (receipt.version !== version) {
+      throw new Error(
+        compareSemanticVersions(receipt.version, version) < 0
+          ? `Module ${id} on ${node.name} is running ${receipt.version} and the catalog provides ${version}: ` +
+            `a version update is in progress. Tool calls resume once the update activates; follow it with cluster_list_jobs.`
+          : `Module ${id} on ${node.name} is running ${receipt.version}, which is newer than the local catalog version ${version}.`,
+      );
     }
     const activeResult = await this.pool.exec(
       node,

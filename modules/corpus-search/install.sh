@@ -14,10 +14,17 @@ for command in python3 sqlite3; do
 done
 
 export PYTHONDONTWRITEBYTECODE=1
+# FTS rebuild and ANALYZE spill a file the size of the index. Without this they land in /var/tmp on the
+# root filesystem, which on an SBC is a fraction of the storage volume holding the corpus.
+export SQLITE_TMPDIR="$VANTA_MODULE_DATA_DIR/tmp"
+export TMPDIR="$SQLITE_TMPDIR"
+mkdir -p "$SQLITE_TMPDIR"
 python3 -c "import sqlite3; assert sqlite3.connect(':memory:').execute(\"select sqlite_compileoption_used('ENABLE_FTS5')\").fetchone()[0] == 1"
 python3 "$VANTA_MODULE_STAGE/provision.py" \
 	--data-dir "$VANTA_MODULE_DATA_DIR" \
 	--profile-dir "$VANTA_MODULE_STAGE/profiles"
+# SQLite unlinks its own spill files; this only clears anything left by an interrupted run.
+rm -rf "$SQLITE_TMPDIR"
 
 parent=$(dirname "$VANTA_MODULE_INSTALL_DIR")
 mkdir -p "$parent"

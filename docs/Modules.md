@@ -42,7 +42,7 @@ reloads the local catalog.
 | Module | Package version | Requirements | Included tools | Guide |
 | --- | --- | --- | --- | --- |
 | Text Tools (`text-tools`) | `0.4.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | 111 bounded operations across twelve category tools | [Text Tools](../modules/text-tools/TextTools.md) |
-| Scientific Corpus Search (`corpus-search`) | `0.4.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 10 GiB free, Python 3, SQLite 3 | Phrase/exclusion/field search, exact record lookup, category resolution, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
+| Scientific Corpus Search (`corpus-search`) | `0.4.1` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 10 GiB free, Python 3, SQLite 3 | Phrase/exclusion/field search, exact record lookup, category resolution, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
 
 ### Activate a Module
 
@@ -352,7 +352,13 @@ The manifest will be validated with Zod before any remote operation. Its initial
 
 Manifest IDs and relative paths use conservative character sets. Package loading rejects unsupported schema versions, duplicate IDs, missing files, symbolic links, path traversal, malformed versions, oversized packages, and unknown manifest properties. Schema v2 adds `lifecycle.execution` for job-backed installation and `persistentData` for a contained path under the target node's configured storage mount; schema v1 remains supported unchanged.
 
-Compatibility fields are optional constraints rather than a fixed list of node classes. Future manifest revisions may describe CPU instruction sets, GPU vendor/model, minimum VRAM, CUDA/ROCm versions, neural accelerators, container runtimes, or other named capabilities. Hardware discovery and compatibility evaluation must version these facts explicitly; they must not infer capability from node names, roles, or architecture alone.
+Compatibility fields are optional constraints rather than a fixed list of node classes. `minDiskMb` is
+free space on the **root** filesystem, where the versioned payload, job staging, and any missing apt
+packages land; a module that declares `persistentData` sizes its data volume separately with
+`persistentData.minFreeMb`. Size `minDiskMb` for what installation itself writes, including any large
+temporary file a lifecycle script produces, because a full root filesystem takes a node read-only.
+
+Future manifest revisions may describe CPU instruction sets, GPU vendor/model, minimum VRAM, CUDA/ROCm versions, neural accelerators, container runtimes, or other named capabilities. Hardware discovery and compatibility evaluation must version these facts explicitly; they must not infer capability from node names, roles, or architecture alone.
 
 ## Installation Layout and Lifecycle
 

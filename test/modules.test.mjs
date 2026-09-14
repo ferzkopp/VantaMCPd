@@ -346,7 +346,7 @@ test("live preflight rejects missing commands and insufficient disk", async () =
   assert.equal(result.compatibility.status, "incompatible");
   assert.deepEqual(result.missingCommands, ["python3", "rg", "jq", "awk", "sed"]);
   assert.match(result.compatibility.reasons.join("\n"), /missing required commands/);
-  assert.match(result.compatibility.reasons.join("\n"), /40 MB free disk/);
+  assert.match(result.compatibility.reasons.join("\n"), /40 MB free on the root filesystem/);
 });
 
 test("install provisions declared apt dependencies when required commands are missing", async () => {
@@ -825,6 +825,62 @@ test("concurrent singleton installations are serialized per module", async () =>
   assert.equal(firstInstall.status, "fulfilled");
   assert.equal(secondInstall.status, "rejected");
   assert.match(secondInstall.reason.message, /already installed on test-node/);
+});
+
+test("distinguishes a pending version update from a corrupted installation", async () => {
+  const target = node({
+    cpu: { cores: 4, arch: "x86_64", packageArch: "amd64" },
+    memory: { totalMb: 16384 },
+    os: { id: "debian", version: "12" },
+    accelerators: [],
+  });
+  const stale = {
+    schemaVersion: 1,
+    moduleId: "text-tools",
+    version: "0.0.1",
+    installedAt: "2026-09-12T00:00:00.000Z",
+    installDirectory: "/opt/vantamcpd/modules/text-tools/0.0.1",
+    currentLink: "/opt/vantamcpd/modules/text-tools/current",
+    entrypoint: ["python3", "server.py"],
+    files: [],
+  };
+  const reply = (stdout) => ({
+    node: target.name,
+    host: target.host,
+    ok: true,
+    code: 0,
+    stdout,
+    stderr: "",
+    durationMs: 1,
+    truncated: false,
+    timedOut: false,
+  });
+  const receiptFor = (receipt) => ({
+    exec: async (_node, command) => reply(command.startsWith("cat ") ? JSON.stringify(receipt) : ""),
+    execMany: async () => [reply(receiptLine("text-tools", receipt.version))],
+    openProcess: async () => { throw new Error("must not launch a mismatched module"); },
+  });
+
+  const older = new ModuleManager({ maxConcurrency: 1, nodes: [target] }, receiptFor(stale), path.join(root, "modules"));
+  await assert.rejects(
+    () => older.callTool("text-tools", target, "regex_extract", {}),
+    /is running 0\.0\.1 and the catalog provides .*a version update is in progress/s,
+  );
+
+  const ahead = { ...stale, version: "99.0.0", installDirectory: "/opt/vantamcpd/modules/text-tools/99.0.0" };
+  const newer = new ModuleManager({ maxConcurrency: 1, nodes: [target] }, receiptFor(ahead), path.join(root, "modules"));
+  await assert.rejects(
+    () => newer.callTool("text-tools", target, "regex_extract", {}),
+    /is newer than the local catalog version/,
+  );
+
+  // A path that does not belong to the receipt's own version is a real inconsistency, not an update.
+  const broken = { ...stale, version: TEXT_TOOLS_VERSION, installDirectory: "/opt/vantamcpd/modules/text-tools/elsewhere" };
+  const corrupt = new ModuleManager({ maxConcurrency: 1, nodes: [target] }, receiptFor(broken), path.join(root, "modules"));
+  await assert.rejects(
+    () => corrupt.callTool("text-tools", target, "regex_extract", {}),
+    /receipt on test-node is inconsistent with the local catalog/,
+  );
 });
 
 test("discovers installed module receipt counts per node", async () => {

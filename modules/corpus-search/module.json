@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "corpus-search",
   "name": "Scientific Corpus Search",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Provision and search a sampled, provenance-aware arXiv metadata corpus with SQLite FTS5/BM25.",
   "capabilities": [
     "search scientific paper metadata by topic, category and date",
@@ -17,7 +17,7 @@
     "architectures": ["armhf", "arm64", "amd64"],
     "minCores": 1,
     "minRamMb": 256,
-    "minDiskMb": 40,
+    "minDiskMb": 512,
     "requiredCommands": ["bash", "python3", "sqlite3"],
     "accelerators": []
   },

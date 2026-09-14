@@ -124,10 +124,13 @@ async function main(): Promise<void> {
     try {
       const updates = await modules.updateOutdatedModules();
       for (const update of updates) {
+        // A job-backed module reports "provisioning", not "updated": the durable job owns the rest.
         const detail = update.updated
           ? `updated ${update.fromVersion} -> ${update.toVersion}` +
             (update.oldVersionRemoved ? "" : `; ${update.error ?? "old version was not removed"}`)
-          : `update ${update.fromVersion} -> ${update.toVersion} failed: ${update.error ?? "unknown error"}`;
+          : update.provisioning
+            ? `update ${update.fromVersion} -> ${update.toVersion} provisioning in job ${update.jobId}`
+            : `update ${update.fromVersion} -> ${update.toVersion} failed: ${update.error ?? "unknown error"}`;
         process.stderr.write(`module discovery: ${update.moduleId} on ${update.node}: ${detail}\n`);
       }
     } catch (err) {

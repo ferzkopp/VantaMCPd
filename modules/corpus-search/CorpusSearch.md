@@ -110,6 +110,10 @@ metadata snapshot, its approximately 5.15 GiB uncompressed form, and the generat
 The module declares `bash`, Python 3, SQLite, and CA certificates; VantaMCPd installs missing declared
 packages during preflight.
 
+FTS index rebuilding and `ANALYZE` spill a temporary file roughly the size of the index. The installer
+points `SQLITE_TMPDIR` at the storage volume so that this lands beside the corpus rather than in
+`/var/tmp` on the root filesystem, which on a single-board computer is typically a small SD card.
+
 The durable job timeout is six hours. Actual duration depends on network, CPU, storage, profile, and
 snapshot size. Small and Medium still download and extract the complete source snapshot; profile size
 primarily changes ingestion and FTS indexing time.
@@ -375,7 +379,7 @@ result in `output`:
 	"ok": true,
 	"node": "cluster4",
 	"moduleId": "corpus-search",
-	"moduleVersion": "0.4.0",
+	"moduleVersion": "0.4.1",
 	"toolName": "corpus_search",
 	"deployment": { "mode": "singleton" },
 	"selection": "explicit",
@@ -525,6 +529,7 @@ abstract and PDF pages.
 | Job appears paused after `catchup` reaches all topics | Check its heartbeat and log; FTS rebuild, analysis, and integrity verification do not currently emit separate progress markers |
 | Install fails or is canceled | Read the job log, correct the cause, and reinstall with the same profile to reuse retained downloads and checkpoints |
 | Search returns no results | Inspect `corpus_info` for profile/topics and `corpus_categories` for the identifier; check the response for a `corrections` array, then broaden with `OR` or a prefix term |
+| Root filesystem fills during provisioning | Confirm the installed version is 0.4.1 or later; earlier versions let SQLite spill its index rebuild into `/var/tmp` on the root filesystem instead of the storage volume |
 | Dashboard shows an old catalog or module version | Run `npm run build`, restart the local VantaMCPd MCP server, then refresh the dashboard; the inventory and catalog are loaded by that process |
 | A different profile or topic set is needed | Uninstall first, then reinstall with the new options; singleton placement rejects a second active instance |
 
