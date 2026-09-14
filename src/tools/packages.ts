@@ -1,14 +1,11 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { aptGet, aptUpdate } from "../apt.js";
 import { resolveTargets } from "../config.js";
 import { errorText, renderResults } from "../format.js";
 import { assertNoControlChars, q, validatePackage } from "../security.js";
-import { targetsSchema, timeoutSchema, type ToolContext } from "./context.js";
+import { targetsSchema, timeoutSchema, type ToolContext, type ToolServer } from "./context.js";
 
-const APT_ENV = "export DEBIAN_FRONTEND=noninteractive; export NEEDRESTART_MODE=a;";
-const APT_OPTS = `-y -o DPkg::Lock::Timeout=300 -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef`;
-
-export function registerPackageTools(server: McpServer, ctx: ToolContext): void {
+export function registerPackageTools(server: ToolServer, ctx: ToolContext): void {
   server.registerTool(
     "cluster_packages",
     {
@@ -50,8 +47,8 @@ export function registerPackageTools(server: McpServer, ctx: ToolContext): void 
         if (needsPkgs.includes(action) && pkgs.length === 0) {
           throw new Error(`action="${action}" requires at least one entry in "packages".`);
         }
-        const quoted = pkgs.map(q).join(" ");
-        const sim = dryRun ? " -s" : "";
+        const quoted = pkgs.map(q);
+        const preUpdate = updateFirst === false ? "" : `${aptUpdate(true)};`;
 
         let command: string;
         let sudo = true;
@@ -59,34 +56,32 @@ export function registerPackageTools(server: McpServer, ctx: ToolContext): void 
 
         switch (action) {
           case "update":
-            command = `${APT_ENV} apt-get update -o DPkg::Lock::Timeout=300`;
+            command = aptUpdate();
             break;
           case "upgrade":
           case "full_upgrade": {
             const verb = action === "upgrade" ? "upgrade" : "full-upgrade";
-            const pre = updateFirst === false ? "" : `${APT_ENV} apt-get update -o DPkg::Lock::Timeout=300 >/dev/null 2>&1;`;
-            command = `${pre} ${APT_ENV} apt-get${sim} ${APT_OPTS} ${verb}`;
+            command = `${preUpdate} ${aptGet(verb, { dryRun })}`;
             defaultTimeout = 1_800_000;
             break;
           }
           case "install":
           case "reinstall": {
-            const pre = updateFirst === false ? "" : `${APT_ENV} apt-get update -o DPkg::Lock::Timeout=300 >/dev/null 2>&1;`;
-            const extra = action === "reinstall" ? "--reinstall" : "";
-            command = `${pre} ${APT_ENV} apt-get${sim} ${APT_OPTS} install ${extra} ${quoted}`;
+            const flags = action === "reinstall" ? ["--reinstall"] : [];
+            command = `${preUpdate} ${aptGet("install", { packages: quoted, dryRun, flags })}`;
             defaultTimeout = 900_000;
             break;
           }
           case "remove":
           case "purge":
-            command = `${APT_ENV} apt-get${sim} ${APT_OPTS} ${action} ${quoted}`;
+            command = aptGet(action, { packages: quoted, dryRun });
             defaultTimeout = 600_000;
             break;
           case "autoremove":
-            command = `${APT_ENV} apt-get${sim} ${APT_OPTS} autoremove`;
+            command = aptGet("autoremove", { dryRun });
             break;
           case "clean":
-            command = `${APT_ENV} apt-get clean && df -h / | tail -n 1`;
+            command = `${aptGet("clean")} && df -h / | tail -n 1`;
             break;
           case "search": {
             if (!query) throw new Error('action="search" requires a "query".');
@@ -97,11 +92,11 @@ export function registerPackageTools(server: McpServer, ctx: ToolContext): void 
             break;
           }
           case "show":
-            command = `apt-cache policy ${quoted}; echo; apt-cache show ${quoted} | head -n 120`;
+            command = `apt-cache policy ${quoted.join(" ")}; echo; apt-cache show ${quoted.join(" ")} | head -n 120`;
             sudo = false;
             break;
           case "policy":
-            command = `apt-cache policy ${quoted}`;
+            command = `apt-cache policy ${quoted.join(" ")}`;
             sudo = false;
             break;
           case "list_installed": {
@@ -114,7 +109,8 @@ export function registerPackageTools(server: McpServer, ctx: ToolContext): void 
           case "list_upgradable": {
             const filter = query ? ` | grep -iE -- ${q(query)}` : "";
             if (query) assertNoControlChars(query, "query");
-            command = `apt-get -s -o Debug::NoLocking=1 upgrade 2>/dev/null | grep '^Inst '${filter}`;
+            // grep exits 1 on no match, which would report a fully up-to-date node as a failure.
+            command = `apt-get -s -o Debug::NoLocking=1 upgrade 2>/dev/null | grep '^Inst '${filter} || echo "(no upgradable packages)"`;
             sudo = false;
             break;
           }

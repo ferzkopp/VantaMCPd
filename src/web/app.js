@@ -17,6 +17,7 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
   const countEl = document.getElementById("count");
   const scopeEl = document.getElementById("scope");
   const logFileEl = document.getElementById("log-file");
+  const jobPollEl = document.getElementById("job-poll");
   const dot = document.getElementById("dot");
   const state = document.getElementById("state");
   const clusterCountEl = document.getElementById("cluster-count");
@@ -258,6 +259,12 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
       .then((data) => {
         (data.jobs || []).forEach((job) => addOption(moduleSel, knownModules, job.moduleId || "core"));
         (data.jobs || []).forEach((job) => addOption(statusSel, knownStatuses, job.displayStatus));
+        if (jobPollEl && data.pollIntervalMs) {
+          // An interval reads better without the trailing zero seconds that elapsed times keep.
+          const interval = formatDuration(data.pollIntervalMs).replace(/ 0s$/, "");
+          jobPollEl.textContent = ` \u00b7 daemon polls every ${interval}`;
+          jobPollEl.title = `jobs.pollIntervalMs in the inventory file (${data.pollIntervalMs} ms). The dashboard refreshes this table more often than the daemon re-reads remote job state.`;
+        }
         renderJobs(data);
       })
       .catch(() => void 0);

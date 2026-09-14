@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -353,6 +353,12 @@ export function loadConfig(explicitPath?: string): ClusterConfig {
     if (n.tags.includes("storage") && !n.storage) {
       throw new Error(`Node ${n.name} has role "${n.role}" but no "storage" block in ${configPath}.`);
     }
+    if (!n.tags.includes("storage") && n.storage) {
+      throw new Error(
+        `Node ${n.name} has a "storage" block but its role "${n.role}" does not include storage. ` +
+          `Change the role in ${configPath} or remove the block; storage tools select nodes by that block.`,
+      );
+    }
   }
 
   const knownHostsPath = path.resolve(
@@ -390,7 +396,7 @@ export function saveNodeHardware(configPath: string, updates: Map<string, NodeHa
     entry.hardware = hardware;
     written.push(entry.name as string);
   }
-  if (written.length > 0) writeFileSync(configPath, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
+  if (written.length > 0) writeInventory(configPath, doc);
   return written;
 }
 
@@ -409,8 +415,27 @@ export function saveNodeDiskRoles(configPath: string, updates: Map<string, Recor
     entry.diskRoles = { ...entry.diskRoles, ...roles };
     written.push(entry.name as string);
   }
-  if (written.length > 0) writeFileSync(configPath, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
+  if (written.length > 0) writeInventory(configPath, doc);
   return written;
+}
+
+/**
+ * The inventory holds the only record of the cluster, including its credentials. Serialize into a
+ * sibling temporary file and rename over the original, so a crash mid-write cannot truncate it.
+ */
+function writeInventory(configPath: string, doc: unknown): void {
+  const tmp = path.join(path.dirname(configPath), `.${path.basename(configPath)}.${process.pid}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    renameSync(tmp, configPath);
+  } catch (err) {
+    try {
+      if (existsSync(tmp)) unlinkSync(tmp);
+    } catch {
+      /* the temporary file is already gone or unreadable */
+    }
+    throw err;
+  }
 }
 
 /** Resolve `targets` (node names, tags, or "all") to concrete nodes. */

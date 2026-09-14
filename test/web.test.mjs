@@ -155,7 +155,7 @@ test("dashboard lists cached active modules and loads their advertised MCP API",
       }],
     }),
   };
-  const server = startWebServer({ monitoring: { port: 0, logDir }, nodes }, audit, modules, jobs);
+  const server = startWebServer({ monitoring: { port: 0, logDir }, jobs: { pollIntervalMs: 60_000 }, nodes }, audit, modules, jobs);
   assert.ok(server);
   try {
     await once(server, "listening");
@@ -191,6 +191,8 @@ test("dashboard lists cached active modules and loads their advertised MCP API",
     assert.equal(jobList.body.jobs[0].moduleId, "corpus-search");
     assert.equal(jobList.body.jobs[0].progress.current, 500);
     assert.equal(jobList.body.jobs[0].displayStatus, "running");
+    // The dashboard shows this so a stale-looking job can be told apart from a slow poll.
+    assert.equal(jobList.body.pollIntervalMs, 60_000);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(logDir, { recursive: true, force: true });

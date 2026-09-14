@@ -34,36 +34,7 @@ param(
 $ErrorActionPreference = 'Stop'
 # $PSScriptRoot is empty inside param() defaults of an advanced script on PS 5.1.
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-
-function Write-Step { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
-function Write-Ok   { param([string]$Message) Write-Host "    OK  $Message" -ForegroundColor Green }
-function Write-Warn2{ param([string]$Message) Write-Host "    !!  $Message" -ForegroundColor Yellow }
-
-function Expand-HomePath {
-    param([string]$Path)
-    if ($Path -like '~*') { return (Join-Path $HOME ($Path.Substring(1).TrimStart('/', '\'))) }
-    return $Path
-}
-
-function ConvertTo-Base64Script {
-    param([string]$Script)
-    # Force LF line endings; Windows CRLF breaks bash heredocs and shebangs.
-    $normalized = $Script -replace "`r`n", "`n"
-    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($normalized))
-}
-
-<#
-PowerShell 5.1 turns every native-command stderr write into a NativeCommandError, which is fatal while
-$ErrorActionPreference is 'Stop' - and `2>$null` does NOT prevent it. ssh writes routine notices there
-("Permanently added ... to the list of known hosts"), so all native calls go through these helpers.
-#>
-function Invoke-Native {
-    param([Parameter(Mandatory = $true)][scriptblock] $Command)
-    # Scriptblocks resolve variables in the scope they were defined in, so set the script-level one.
-    $previous = $ErrorActionPreference
-    $script:ErrorActionPreference = 'Continue'
-    try { & $Command } finally { $script:ErrorActionPreference = $previous }
-}
+. (Join-Path $PSScriptRoot 'common.ps1')
 
 <#
 Runs ssh and splits the result into stdout lines and raw stderr lines. Merging stderr into the pipeline

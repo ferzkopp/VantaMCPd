@@ -7,6 +7,7 @@ import multiprocessing
 import re
 import textwrap
 import unicodedata
+import uuid as uuid_module
 from collections import Counter
 from typing import Any, Callable
 
@@ -18,9 +19,11 @@ from operation_common import (
     bounded_int,
     choice,
     optional_bool,
+    optional_module,
     optional_string,
     output_text,
     require_text,
+    string_list,
     text_properties,
     typed,
     word_tokens,
@@ -234,6 +237,144 @@ def template_fill(arguments: dict[str, Any]) -> dict[str, Any]:
     return output_text(re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", replace, text))
 
 
+def line_slice(arguments: dict[str, Any]) -> dict[str, Any]:
+    lines = require_text(arguments).splitlines()
+    total = len(lines)
+    tail = arguments.get("tail")
+    if tail is not None:
+        if "start" in arguments or "end" in arguments:
+            raise ValueError("tail cannot be combined with start or end")
+        count = bounded_int(arguments, "tail", 10, 1, MAX_RESULTS)
+        start = max(1, total - count + 1)
+        end = total
+    else:
+        start = bounded_int(arguments, "start", 1, 1, 1_000_000)
+        end = bounded_int(arguments, "end", total, 1, 1_000_000) if "end" in arguments else total
+        if end < start:
+            raise ValueError("end must be greater than or equal to start")
+    selected = lines[start - 1:end]
+    if len(selected) > MAX_RESULTS:
+        raise ValueError(f"line range exceeds {MAX_RESULTS} lines")
+    if optional_bool(arguments, "numbered", False):
+        width = len(str(start + len(selected) - 1)) if selected else 1
+        rendered = "\n".join(f"{start + offset:>{width}} | {line}" for offset, line in enumerate(selected))
+    else:
+        rendered = "\n".join(selected)
+    return {"text": rendered, "start": start, "end": start + len(selected) - 1 if selected else start, "lines": len(selected), "inputLines": total}
+
+
+def replace_literal(arguments: dict[str, Any]) -> dict[str, Any]:
+    text = require_text(arguments)
+    search = optional_string(arguments, "search", "", 16_384)
+    if not search:
+        raise ValueError("search must be non-empty")
+    replacement = optional_string(arguments, "replacement", "", 16_384)
+    count = bounded_int(arguments, "count", 0, 0, MAX_RESULTS)
+    if optional_bool(arguments, "ignoreCase", False):
+        # re.escape keeps this a literal search; a lambda keeps backslashes in the replacement literal.
+        value, replaced = re.subn(re.escape(search), lambda _match: replacement, text, count=count)
+    else:
+        occurrences = text.count(search)
+        replaced = min(occurrences, count) if count else occurrences
+        value = text.replace(search, replacement, count if count else -1)
+    return {"text": value, "replacements": replaced}
+
+
+def truncate(arguments: dict[str, Any]) -> dict[str, Any]:
+    text = require_text(arguments)
+    limit = bounded_int(arguments, "maxCharacters", 280, 1, 100_000)
+    suffix = optional_string(arguments, "suffix", "\u2026", 32)
+    if len(text) <= limit:
+        return {"text": text, "truncated": False, "characters": len(text)}
+    keep = max(0, limit - len(suffix))
+    clipped = text[:keep]
+    if choice(arguments, "boundary", {"character", "word"}, "word") == "word":
+        match = re.search(r"\s\S*$", clipped)
+        if match and match.start() > 0:
+            clipped = clipped[:match.start()]
+    value = clipped.rstrip() + suffix
+    return {"text": value, "truncated": True, "characters": len(value)}
+
+
+def pad_align(arguments: dict[str, Any]) -> dict[str, Any]:
+    width = bounded_int(arguments, "width", 20, 1, 1_000)
+    align = choice(arguments, "align", {"left", "right", "center"}, "left")
+    fill = optional_string(arguments, "fill", " ", 1)
+    if len(fill) != 1:
+        raise ValueError("fill must be exactly one character")
+    method = {"left": str.ljust, "right": str.rjust, "center": str.center}[align]
+    lines = [method(line, width, fill) for line in require_text(arguments).splitlines()]
+    return {"text": "\n".join(lines), "lines": len(lines), "width": width}
+
+
+# NFKD leaves these intact, so they need an explicit mapping to stay useful for ASCII folding.
+ASCII_FOLD_EXTRAS = str.maketrans({
+    "\u00df": "ss", "\u00e6": "ae", "\u00c6": "AE", "\u0153": "oe", "\u0152": "OE",
+    "\u00f8": "o", "\u00d8": "O", "\u0111": "d", "\u0110": "D", "\u0142": "l", "\u0141": "L",
+    "\u00fe": "th", "\u00de": "TH", "\u00f0": "d", "\u00d0": "D", "\u0131": "i",
+})
+
+
+def ascii_fold(arguments: dict[str, Any]) -> dict[str, Any]:
+    decomposed = unicodedata.normalize("NFKD", require_text(arguments).translate(ASCII_FOLD_EXTRAS))
+    folded = "".join(character for character in decomposed if not unicodedata.combining(character))
+    if optional_bool(arguments, "asciiOnly", False):
+        folded = folded.encode("ascii", "ignore").decode("ascii")
+    return output_text(unicodedata.normalize("NFC", folded))
+
+
+def number_format(arguments: dict[str, Any]) -> dict[str, Any]:
+    value = arguments.get("value")
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value != value or value in (float("inf"), float("-inf")):
+        raise ValueError("value must be a finite number")
+    decimals = bounded_int(arguments, "decimals", 2 if isinstance(value, float) else 0, 0, 10)
+    grouped = f"{value:,.{decimals}f}"
+    separator = optional_string(arguments, "groupSeparator", ",", 4)
+    decimal_separator = optional_string(arguments, "decimalSeparator", ".", 4)
+    if separator != "," or decimal_separator != ".":
+        grouped = grouped.replace(",", "\x00").replace(".", decimal_separator).replace("\x00", separator)
+    return {"text": grouped, "value": value}
+
+
+BYTE_UNITS = {"binary": (1024, ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]), "decimal": (1000, ["B", "kB", "MB", "GB", "TB", "PB"])}
+
+
+def bytes_humanize(arguments: dict[str, Any]) -> dict[str, Any]:
+    value = arguments.get("bytes")
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError("bytes must be a non-negative integer")
+    base, units = BYTE_UNITS[choice(arguments, "standard", set(BYTE_UNITS), "binary")]
+    decimals = bounded_int(arguments, "decimals", 1, 0, 3)
+    size = float(value)
+    unit = units[0]
+    for candidate in units:
+        unit = candidate
+        if size < base or candidate == units[-1]:
+            break
+        size /= base
+    rendered = f"{size:.{decimals}f}".rstrip("0").rstrip(".") if unit != units[0] else str(value)
+    return {"text": f"{rendered} {unit}", "value": value, "unit": unit}
+
+
+def pluralize(arguments: dict[str, Any]) -> dict[str, Any]:
+    inflect = optional_module("inflect", "python3-inflect", "pluralization")
+    word = require_text(arguments)
+    if len(word) > 200:
+        raise ValueError("text exceeds 200 characters")
+    engine = inflect.engine()
+    action = choice(arguments, "action", {"plural", "singular"}, "plural")
+    if action == "plural":
+        count = arguments.get("count")
+        if count is not None and (not isinstance(count, int) or isinstance(count, bool)):
+            raise ValueError("count must be an integer")
+        value = engine.plural(word, count) if count is not None else engine.plural(word)
+    else:
+        singular = engine.singular_noun(word)
+        value = word if singular is False else singular
+    return {"text": value, "action": action}
+
+
+
 def bounded_items(values: list[Any], limit: int) -> dict[str, Any]:
     return {"items": values[:limit], "count": min(len(values), limit), "truncated": len(values) > limit}
 
@@ -257,6 +398,24 @@ def extract_content(arguments: dict[str, Any]) -> dict[str, Any]:
                 continue
     elif operation == "datetimes":
         values = re.findall(r"\b(?:\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|\d{2}:\d{2}(?::\d{2})?)\b", text)
+    elif operation == "uuids":
+        values = []
+        for candidate in re.findall(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", text):
+            try:
+                parsed = uuid_module.UUID(candidate)
+            except ValueError:
+                continue
+            values.append({"value": str(parsed), "version": parsed.version})
+    elif operation == "hashes":
+        widths = {32: "md5", 40: "sha1", 64: "sha256", 96: "sha384", 128: "sha512"}
+        values = [
+            {"value": candidate, "bits": len(candidate) * 4, "likelyAlgorithm": widths[len(candidate)]}
+            for candidate in re.findall(r"(?<![0-9A-Za-z])[0-9a-fA-F]{32,128}(?![0-9A-Za-z])", text)
+            if len(candidate) in widths
+        ]
+    elif operation == "semvers":
+        # An optional "v" prefix is conventional in tags and is stripped from the result.
+        values = re.findall(r"(?<![\w.-])[vV]?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?![\w.-])", text)
     elif operation == "code_blocks":
         values = []
         occupied = []
@@ -356,6 +515,155 @@ def analyze_text(arguments: dict[str, Any]) -> dict[str, Any]:
     return {"estimatedTokens": math.ceil(len(text) / 4), "charactersPerToken": 4, "words": len(tokens), "note": "Heuristic only; tokenizer-specific counts vary."}
 
 
+ZERO_WIDTH = {"\u200b": "ZERO WIDTH SPACE", "\u200c": "ZERO WIDTH NON-JOINER", "\u200d": "ZERO WIDTH JOINER", "\u2060": "WORD JOINER", "\u00ad": "SOFT HYPHEN", "\ufeff": "ZERO WIDTH NO-BREAK SPACE"}
+BIDI_CONTROLS = "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+
+
+def text_inspect(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Surface the characters and whitespace an agent cannot see in a rendered chat message."""
+    text = require_text(arguments)
+    limit = bounded_int(arguments, "maxResults", 20, 1, MAX_RESULTS)
+    crlf = text.count("\r\n")
+    bare_cr = len(re.findall(r"\r(?!\n)", text))
+    bare_lf = len(re.findall(r"(?<!\r)\n", text))
+    styles = [name for name, present in (("crlf", crlf), ("lf", bare_lf), ("cr", bare_cr)) if present]
+    lines = text.splitlines()
+
+    def positions(predicate: Callable[[str], bool]) -> list[dict[str, Any]]:
+        found = []
+        for index, character in enumerate(text):
+            if predicate(character):
+                found.append({
+                    "offset": index,
+                    "character": f"U+{ord(character):04X}",
+                    "name": ZERO_WIDTH.get(character) or unicodedata.name(character, "UNNAMED"),
+                })
+                if len(found) >= limit:
+                    break
+        return found
+
+    indents = Counter("tab" if line.startswith("\t") else "space" for line in lines if line[:1] in (" ", "\t"))
+    normalized = unicodedata.normalize("NFC", text)
+    return {
+        "lineEndings": styles[0] if len(styles) == 1 else ("mixed" if styles else "none"),
+        "lineEndingCounts": {"crlf": crlf, "lf": bare_lf, "cr": bare_cr},
+        "byteOrderMark": text.startswith("\ufeff"),
+        "lines": len(lines),
+        "trailingWhitespaceLines": [index + 1 for index, line in enumerate(lines) if line != line.rstrip()][:limit],
+        "indentation": {"tabs": indents.get("tab", 0), "spaces": indents.get("space", 0), "mixed": len(indents) > 1},
+        "nonAsciiCharacters": sum(1 for character in text if ord(character) > 127),
+        "controlCharacters": positions(lambda character: unicodedata.category(character) == "Cc" and character not in "\t\n\r"),
+        "zeroWidthCharacters": positions(lambda character: character in ZERO_WIDTH),
+        "bidiControlCharacters": positions(lambda character: character in BIDI_CONTROLS),
+        "replacementCharacters": text.count("\ufffd"),
+        "normalizedForm": "NFC" if text == normalized else "not NFC",
+    }
+
+
+def duplicate_lines(arguments: dict[str, Any]) -> dict[str, Any]:
+    text = require_text(arguments)
+    limit = bounded_int(arguments, "maxResults", 100, 1, MAX_RESULTS)
+    case_sensitive = optional_bool(arguments, "caseSensitive", True)
+    ignore_whitespace = optional_bool(arguments, "ignoreWhitespace", False)
+    occurrences: dict[str, dict[str, Any]] = {}
+    for number, line in enumerate(text.splitlines(), 1):
+        key = line.strip() if ignore_whitespace else line
+        if not case_sensitive:
+            key = key.casefold()
+        entry = occurrences.setdefault(key, {"text": line, "count": 0, "lines": []})
+        entry["count"] += 1
+        if len(entry["lines"]) < 50:
+            entry["lines"].append(number)
+    repeated = sorted((entry for entry in occurrences.values() if entry["count"] > 1), key=lambda entry: (-entry["count"], entry["lines"][0]))
+    return {
+        "items": repeated[:limit],
+        "count": min(len(repeated), limit),
+        "duplicateLines": sum(entry["count"] - 1 for entry in repeated),
+        "uniqueLines": len(occurrences),
+        "truncated": len(repeated) > limit,
+    }
+
+
+CHUNK_SEPARATORS = {"paragraph": "\n\n", "line": "\n", "sentence": " "}
+
+
+def chunk(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Split text on natural boundaries into size-bounded pieces, optionally overlapping."""
+    text = require_text(arguments)
+    size = bounded_int(arguments, "maxCharacters", 2_000, 100, 20_000)
+    overlap = bounded_int(arguments, "overlapCharacters", 0, 0, 2_000)
+    if overlap >= size:
+        raise ValueError("overlapCharacters must be smaller than maxCharacters")
+    boundary = choice(arguments, "boundary", {"paragraph", "sentence", "line", "character"}, "paragraph")
+    limit = bounded_int(arguments, "maxResults", MAX_RESULTS, 1, MAX_RESULTS)
+
+    if boundary == "character":
+        units = [text[index:index + size] for index in range(0, len(text), size)] or [""]
+        separator = ""
+    else:
+        separator = CHUNK_SEPARATORS[boundary]
+        if boundary == "paragraph":
+            units = re.split(r"\n\s*\n", text)
+        elif boundary == "line":
+            units = text.splitlines()
+        else:
+            units = split_sentences(text)
+        units = [unit for unit in units if unit.strip()] or [text]
+        # A single unit larger than the budget is split on characters rather than silently overflowing.
+        units = [piece for unit in units for piece in ([unit] if len(unit) <= size else [unit[index:index + size] for index in range(0, len(unit), size)])]
+
+    chunks: list[str] = []
+    current = ""
+    for unit in units:
+        candidate = unit if not current else current + separator + unit
+        if current and len(candidate) > size:
+            chunks.append(current)
+            carry = current[-overlap:] if overlap else ""
+            current = (carry + separator + unit) if carry else unit
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    if len(chunks) > limit:
+        raise ValueError(f"chunking produced more than {limit} chunks; raise maxCharacters or maxResults")
+
+    items = []
+    cursor = 0
+    for index, value in enumerate(chunks):
+        start = text.find(value, max(0, cursor - overlap)) if value else cursor
+        if start < 0:
+            start = cursor
+        cursor = start + len(value)
+        items.append({"index": index, "text": value, "start": start, "characters": len(value), "estimatedTokens": math.ceil(len(value) / 4)})
+    return {"items": items, "count": len(items), "boundary": boundary, "truncated": False}
+
+
+def tfidf(arguments: dict[str, Any]) -> dict[str, Any]:
+    """TF-IDF needs a corpus, so the corpus is the caller-supplied document array."""
+    documents = string_list(arguments, "documents", 2, 50, 262_144)
+    minimum = bounded_int(arguments, "minLength", 3, 1, 100)
+    limit = bounded_int(arguments, "maxResults", 10, 1, 100)
+    stopwords = {item.casefold() for item in (arguments.get("stopwords") or [])} if "stopwords" in arguments else set()
+    if "stopwords" in arguments:
+        string_list(arguments, "stopwords", 0, MAX_RESULTS, 100)
+
+    tokenized = [[token.casefold() for token in word_tokens(document) if len(token) >= minimum and token.casefold() not in stopwords] for document in documents]
+    total = len(tokenized)
+    frequencies = [Counter(tokens) for tokens in tokenized]
+    document_frequency = Counter(term for counts in frequencies for term in counts)
+    results = []
+    for index, counts in enumerate(frequencies):
+        length = sum(counts.values()) or 1
+        scored = [
+            {"term": term, "score": round((count / length) * (math.log(total / (1 + document_frequency[term])) + 1), 6), "count": count, "documentFrequency": document_frequency[term]}
+            for term, count in counts.items()
+        ]
+        scored.sort(key=lambda item: (-item["score"], item["term"]))
+        results.append({"document": index, "terms": scored[:limit], "uniqueTerms": len(counts)})
+    return {"items": results, "count": len(results), "documents": total, "note": "Smoothed IDF: ln(N / (1 + df)) + 1."}
+
+
+
 TRANSFORM_OPERATIONS = {
     "case_convert": Operation("Convert text between common case conventions.", text_properties(style={"enum": ["camel", "snake", "kebab", "pascal", "constant", "title", "lower", "upper"]}), ("text", "style"), case_convert),
     "slugify": Operation("Create an ASCII URL slug.", text_properties(separator=typed("string", minLength=1, maxLength=1), lowercase=typed("boolean")), ("text",), slugify),
@@ -369,6 +677,14 @@ TRANSFORM_OPERATIONS = {
     "wrap": Operation("Wrap text to a bounded width.", text_properties(width=typed("integer", minimum=10, maximum=1_000), initialIndent=typed("string", maxLength=100), subsequentIndent=typed("string", maxLength=100)), ("text",), wrap_text),
     "split_join": Operation("Split text and join with another delimiter.", text_properties(inputDelimiter=typed("string", minLength=1, maxLength=100), outputDelimiter=typed("string", maxLength=100), trimItems=typed("boolean"), omitEmpty=typed("boolean")), ("text", "inputDelimiter", "outputDelimiter"), split_join),
     "template_fill": Operation("Substitute ${name} placeholders without evaluation.", text_properties(values=typed("object", maxProperties=100), missing={"enum": ["error", "keep", "empty"]}), ("text", "values"), template_fill),
+    "line_slice": Operation("Return a numbered or plain range of lines.", text_properties(start=typed("integer", minimum=1, maximum=1_000_000), end=typed("integer", minimum=1, maximum=1_000_000), tail=typed("integer", minimum=1, maximum=MAX_RESULTS), numbered=typed("boolean")), ("text",), line_slice),
+    "replace_literal": Operation("Replace literal text without regular-expression syntax.", text_properties(search=typed("string", minLength=1, maxLength=16_384), replacement=typed("string", maxLength=16_384), count=typed("integer", minimum=0, maximum=MAX_RESULTS), ignoreCase=typed("boolean")), ("text", "search"), replace_literal),
+    "truncate": Operation("Clip text to a length on a word or character boundary.", text_properties(maxCharacters=typed("integer", minimum=1, maximum=100_000), boundary={"enum": ["character", "word"]}, suffix=typed("string", maxLength=32)), ("text",), truncate),
+    "pad_align": Operation("Pad every line to a width, left, right, or centered.", text_properties(width=typed("integer", minimum=1, maximum=1_000), align={"enum": ["left", "right", "center"]}, fill=typed("string", minLength=1, maxLength=1)), ("text",), pad_align),
+    "ascii_fold": Operation("Remove diacritics and fold common ligatures to ASCII equivalents.", text_properties(asciiOnly=typed("boolean")), ("text",), ascii_fold),
+    "number_format": Operation("Format a number with grouping and fixed decimals.", {"value": typed("number"), "decimals": typed("integer", minimum=0, maximum=10), "groupSeparator": typed("string", maxLength=4), "decimalSeparator": typed("string", maxLength=4)}, ("value",), number_format),
+    "bytes_humanize": Operation("Render a byte count in binary or decimal units.", {"bytes": typed("integer", minimum=0), "standard": {"enum": ["binary", "decimal"]}, "decimals": typed("integer", minimum=0, maximum=3)}, ("bytes",), bytes_humanize),
+    "pluralize": Operation("Pluralize or singularize an English noun (needs python3-inflect).", text_properties(action={"enum": ["plural", "singular"]}, count=typed("integer")), ("text",), pluralize),
 }
 
 EXTRACT_OPERATIONS = {
@@ -378,6 +694,9 @@ EXTRACT_OPERATIONS = {
         "numbers": "Extract decimal and scientific-notation numbers.", "ip_addresses": "Extract validated IPv4 and IPv6 addresses.",
         "datetimes": "Extract ISO-like dates and times.", "code_blocks": "Extract fenced and inline Markdown code.",
         "quoted_text": "Extract straight or curly quoted text.",
+        "uuids": "Extract and validate UUIDs with their version.",
+        "hashes": "Extract hex digests and report their likely algorithm.",
+        "semvers": "Extract strict Semantic Versioning 2.0 versions.",
     }.items()
 }
 
@@ -389,4 +708,8 @@ ANALYZE_OPERATIONS = {
     "ngrams": Operation("Generate bounded word n-grams.", text_properties(n=typed("integer", minimum=1, maximum=5), maxResults=typed("integer", minimum=1, maximum=MAX_RESULTS)), ("text",), analyze_text),
     "sentence_split": Operation("Split text with a deterministic sentence heuristic.", text_properties(maxResults=typed("integer", minimum=1, maximum=MAX_RESULTS)), ("text",), analyze_text),
     "token_estimate": Operation("Estimate tokens using a documented character heuristic.", text_properties(), ("text",), analyze_text),
+    "text_inspect": Operation("Report line endings, indentation, and invisible or control characters.", text_properties(maxResults=typed("integer", minimum=1, maximum=MAX_RESULTS)), ("text",), text_inspect),
+    "duplicate_lines": Operation("Report repeated lines with their counts and line numbers.", text_properties(caseSensitive=typed("boolean"), ignoreWhitespace=typed("boolean"), maxResults=typed("integer", minimum=1, maximum=MAX_RESULTS)), ("text",), duplicate_lines),
+    "chunk": Operation("Split text into size-bounded chunks on paragraph, sentence, line, or character boundaries.", text_properties(maxCharacters=typed("integer", minimum=100, maximum=20_000), overlapCharacters=typed("integer", minimum=0, maximum=2_000), boundary={"enum": ["paragraph", "sentence", "line", "character"]}, maxResults=typed("integer", minimum=1, maximum=MAX_RESULTS)), ("text",), chunk),
+    "tfidf": Operation("Rank terms by TF-IDF across a caller-supplied document set.", {"documents": typed("array", minItems=2, maxItems=50, items=typed("string")), "stopwords": typed("array", maxItems=MAX_RESULTS, items=typed("string")), "minLength": typed("integer", minimum=1, maximum=100), "maxResults": typed("integer", minimum=1, maximum=100)}, ("documents",), tfidf),
 }

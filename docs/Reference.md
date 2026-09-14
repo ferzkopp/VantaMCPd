@@ -8,6 +8,7 @@ configuration file. For installation and day-to-day use, start at [README.md](..
 | [Hardware inventory](#hardware-inventory) | What the daemon records about each node, and how disk roles are decided |
 | [Swap](#swap) | `cluster_swap` actions and their guard rails |
 | [Attached storage](#attached-storage) | Formatting the external disk and sharing it over NFS |
+| [Operational tools](#operational-tools) | Parameters and examples for packages, services, logs, files, commands and power |
 | [Monitoring](#monitoring) | The audit log, the dashboard and its HTTP API |
 | [Security model](#security-model) | Auth, injection defences, the destructive-command guard |
 | [Configuration reference](#configuration-reference) | Every key in the inventory file |
@@ -132,6 +133,135 @@ storage, build artefacts, logs, and a swap file (SD-card swap is slow and wears 
 
 ---
 
+## Operational tools
+
+Every tool below accepts `targets` (node names, tags, omitted or `["all"]` for the whole cluster) and
+`timeoutMs` (per node, milliseconds). Results are rendered per node with its host, exit status and
+duration, so a partial failure is visible rather than hidden behind an aggregate.
+
+### Packages — `cluster_packages`
+
+| Parameter | Applies to | Meaning |
+| --- | --- | --- |
+| `action` | all | `update`, `upgrade`, `full_upgrade`, `install`, `reinstall`, `remove`, `purge`, `autoremove`, `clean`, `search`, `show`, `policy`, `list_installed`, `list_upgradable` |
+| `packages` | `install`, `reinstall`, `remove`, `purge`, `show`, `policy` | Package names; each is validated and shell-quoted |
+| `query` | `search`, `list_installed`, `list_upgradable` | Search term, or a case-insensitive filter over the listing |
+| `dryRun` | install/remove/upgrade actions | Simulate with `apt-get -s` and change nothing |
+| `updateFirst` | `install`, `reinstall`, `upgrade`, `full_upgrade` | Refresh the indexes first. Default true |
+
+```text
+cluster_packages { action: "list_upgradable" }                                   # read-only, no sudo
+cluster_packages { action: "upgrade", dryRun: true }                             # preview first
+cluster_packages { action: "install", targets: ["worker"], packages: ["htop","tmux"] }
+cluster_packages { action: "clean" }                                             # frees SD-card space
+```
+
+The read-only actions (`search`, `show`, `policy`, `list_installed`, `list_upgradable`) run without
+sudo. Every writing action goes through one canonical non-interactive invocation
+([src/apt.ts](../src/apt.ts)): `DEBIAN_FRONTEND=noninteractive`, `NEEDRESTART_MODE=a`,
+`-o Dpkg::Use-Pty=0`, `-o DPkg::Lock::Timeout=300`, `--force-confdef`/`--force-confold`, and stdin from
+`/dev/null` so a child cannot consume the transported script. Defaults are generous because these nodes
+are slow: 30 minutes for an upgrade, 15 for an install.
+
+### Services — `cluster_services`
+
+| Parameter | Meaning |
+| --- | --- |
+| `action` | `status`, `is_active`, `is_enabled`, `list`, `list_failed`, `show`, `start`, `stop`, `restart`, `reload`, `enable`, `disable`, `mask`, `unmask`, `daemon_reload`, `reset_failed` |
+| `unit` | Unit name, e.g. `ssh`, `nfs-server`, `docker.service`. Required except for `list`, `list_failed`, `daemon_reload` and `reset_failed` |
+| `pattern` | Glob filter for `action="list"`, e.g. `nfs*` |
+| `now` | For `enable`/`disable`: also start/stop the unit immediately (`--now`) |
+| `lines` | Journal lines appended to `status`. Default 20, max 200 |
+
+```text
+cluster_services { action: "list_failed" }
+cluster_services { action: "status", targets: ["storage"], unit: "nfs-kernel-server" }
+cluster_services { action: "disable", unit: "unattended-upgrades.timer", now: true }
+```
+
+Unit names are validated against a strict character set. The read-only actions (`status`, `is_active`,
+`is_enabled`, `list`, `list_failed`, `show`) run without sudo; the rest use it.
+
+### Logs — `cluster_logs`
+
+| Parameter | Meaning |
+| --- | --- |
+| `source` | `journal` (default), `dmesg`, or `file` |
+| `unit` | Restrict the journal to one unit |
+| `path` | Absolute log file path; required when `source="file"` |
+| `lines` | Trailing lines to return. Default 100, max 2000 |
+| `since` | `journalctl --since` value, e.g. `1 hour ago`, `today`, `2026-09-12 08:00` |
+| `priority` | Minimum journal priority: `emerg` … `debug` |
+| `grep` | Case-insensitive regular expression filter |
+| `boot` | `current` (default), `previous`, or `all` |
+| `sudo` | Read as root. Default true, which is what full system logs need |
+
+```text
+cluster_logs { targets: ["cluster2"], unit: "ssh", priority: "err", lines: 50 }
+cluster_logs { source: "dmesg", grep: "usb|mmc|I/O error" }
+cluster_logs { source: "file", path: "/var/log/syslog", lines: 200 }
+```
+
+`since` is restricted to a safe character set and `grep` may not contain newlines, so neither can escape
+into the command line.
+
+### Files — `cluster_list_dir`, `cluster_read_file`, `cluster_write_file`, `cluster_upload`, `cluster_download`
+
+| Tool | Key parameters | Notes |
+| --- | --- | --- |
+| `cluster_list_dir` | `path`, `all`, `sudo`, `recursiveDepth` | `ls -lAh` by default; `recursiveDepth` (0-4) switches to a capped `find` |
+| `cluster_read_file` | `node`, `path`, `sudo`, `maxBytes` | Single node, 1 MB cap, transported base64 so binary content is safe |
+| `cluster_write_file` | `path`, `content`, `sudo`, `mode`, `owner`, `backup`, `createDirs` | Writes via a temporary file, reports the resulting sha256 alongside the expected one |
+| `cluster_upload` | `localPath`, `remotePath`, `mode`, `timeoutMs` | SFTP to every target; the remote path must be writable by the SSH user |
+| `cluster_download` | `node`, `remotePath`, `localPath`, `timeoutMs` | SFTP from one node to the Vanta host |
+
+```text
+cluster_list_dir { path: "/etc/systemd/system", recursiveDepth: 2 }
+cluster_read_file { node: "cluster4", path: "/etc/exports" }
+cluster_write_file { path: "/etc/sysctl.d/60-vanta.conf", content: "vm.swappiness=10\n", sudo: true, mode: "644" }
+cluster_download { node: "cluster4", remotePath: "/etc/exports", localPath: "~/backup/exports" }
+```
+
+Remote paths must be absolute and free of newlines. Local paths expand `~`. `cluster_write_file` keeps a
+timestamped `.bak-<timestamp>` copy unless `backup: false`, and `mode`/`owner` are pattern-checked before
+they reach `chmod`/`chown`. SFTP transfers are bounded by `timeoutMs` (default 10 minutes), so a stalled
+network cannot hang the call. To land a file in a root-owned location, upload to `/tmp` and move it with
+`cluster_run { sudo: true }`.
+
+### Commands — `cluster_run`, `cluster_check_command`
+
+| Parameter | Meaning |
+| --- | --- |
+| `command` | Bash command or multi-line script; transported base64, so quoting and pipes are safe |
+| `sudo`, `cwd`, `env` | Run as root, set the working directory, add environment variables |
+| `confirm` | Acknowledge a command the destructive-command guard flagged |
+
+```text
+cluster_check_command { command: "rm -rf /var/cache/foo" }   # policy dry run, touches nothing
+cluster_run { command: "df -hPT", targets: ["worker"] }
+cluster_run { command: "rm -rf /var/cache/foo", confirm: true }
+```
+
+`cluster_check_command` answers whether the guard considers a command destructive without running it.
+See [Security model](#security-model) for the rule set.
+
+### Power — `cluster_power`
+
+| Parameter | Meaning |
+| --- | --- |
+| `action` | `reboot` or `poweroff` |
+| `confirm` | Must be `true`; the schema rejects anything else |
+| `delayMinutes` | 0-60. Default 0, meaning now |
+
+```text
+cluster_power { action: "reboot", targets: ["cluster2"], confirm: true }
+```
+
+`poweroff` on a headless SBC needs physical access to undo, so confirmation is part of the schema rather
+than a runtime check: a call without it never reaches a node.
+
+---
+
 ## Monitoring
 
 Every SSH interaction is recorded at the one place they all funnel through (`SshPool.exec`), so nothing
@@ -171,7 +301,8 @@ The payload behind it is built as an **allow-list**, so a field added to the inv
 by accident. Deliberately excluded: the node's address, `privateKeyPath` (it can contain the local host
 username) and the SSH user. Every remaining value is then passed through an IPv4 scrub, because
 addresses arrive from places an allow-list cannot anticipate — NFS mount sources in `filesystems`,
-export CIDRs, and hand-written `description` text. They render as `x.x.x.x`.
+export CIDRs, and hand-written `description` text. They render as `x.x.x.x`. Dotted groups whose parts
+are not valid octets, such as a quad-dotted kernel or package version, are left alone.
 
 This makes the node-detail view safe to screenshot. The **Interactions** list retains operational detail:
 commands and MCP input parameters are stored after redaction and clipping, but can still contain
@@ -431,8 +562,10 @@ Nothing secret belongs in the inventory either — it only holds hosts, users an
 }
 ```
 
-Per-node keys override the defaults. `role` defaults to `worker`; a role containing `storage` without a
-`storage` block is rejected at load time.
+Per-node keys override the defaults. `role` defaults to `worker`. The role and the `storage` block must
+agree: a role containing `storage` without a block, and a block on a node whose role does not include
+`storage`, are both rejected at load time — the storage tools select their node by that block, so a
+mismatch would silently target the wrong machine.
 
 `modules.<module-id>.installOptions` supplies persistent defaults for that module's manual and automatic
 installs. Values are validated against the module manifest before SSH work, and options passed directly

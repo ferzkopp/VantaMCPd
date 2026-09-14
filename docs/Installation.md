@@ -1,6 +1,6 @@
 # Installation
 
-This guide expands the six steps in the [QuickStart](../README.md#quickstart). Run commands from the
+This guide expands the six steps in the [Quickstart](../README.md#quickstart). Run commands from the
 repository root unless stated otherwise. Managed nodes also need a one-time OS and account prerequisite
 before enrollment; follow [Node setup](NodeSetup.md) for that short checklist.
 

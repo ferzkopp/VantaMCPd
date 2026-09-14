@@ -2,21 +2,39 @@ import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { resolveTargets, type ResolvedNode } from "../config.js";
+import { expandHome, resolveTargets, type ResolvedNode } from "../config.js";
 import { errorText, json, renderResults, text } from "../format.js";
 import { q, validateAbsPath } from "../security.js";
 import { mapLimit } from "../ssh.js";
-import { targetsSchema, timeoutSchema, type ToolContext } from "./context.js";
+import { targetsSchema, timeoutSchema, type ToolContext, type ToolServer } from "./context.js";
 
 const MAX_READ_BYTES = 1_000_000;
+const DEFAULT_TRANSFER_TIMEOUT_MS = 600_000;
 
 function localPath(p: string): string {
   if (p.includes("\u0000")) throw new Error("Local path contains a NUL byte.");
-  return path.resolve(p);
+  return path.resolve(expandHome(p));
 }
 
-export function registerFileTools(server: McpServer, ctx: ToolContext): void {
+/**
+ * fastPut/fastGet never time out on their own, so a stalled transfer would hang the tool call
+ * forever. The SFTP session is closed by the caller's finally block, which aborts the transfer.
+ */
+async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${what} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export function registerFileTools(server: ToolServer, ctx: ToolContext): void {
   server.registerTool(
     "cluster_list_dir",
     {
@@ -158,13 +176,14 @@ export function registerFileTools(server: McpServer, ctx: ToolContext): void {
         timeoutMs: timeoutSchema,
       },
     },
-    async ({ localPath: local, remotePath, targets, mode }) => {
+    async ({ localPath: local, remotePath, targets, mode, timeoutMs }) => {
       try {
         const nodes = resolveTargets(ctx.config, targets);
         const resolved = localPath(local);
         if (!existsSync(resolved) || !statSync(resolved).isFile()) throw new Error(`Local file not found: ${resolved}`);
         validateAbsPath(remotePath, "remotePath");
         const size = statSync(resolved).size;
+        const limitMs = timeoutMs ?? DEFAULT_TRANSFER_TIMEOUT_MS;
 
         const outcomes = await mapLimit(nodes, ctx.config.maxConcurrency, async (node: ResolvedNode) => {
           let sftp: Awaited<ReturnType<typeof ctx.pool.sftp>> | undefined;
@@ -172,13 +191,21 @@ export function registerFileTools(server: McpServer, ctx: ToolContext): void {
             sftp = await ctx.pool.sftp(node);
             const handle = sftp;
             if (!handle) throw new Error("SFTP session did not open.");
-            await new Promise<void>((resolve, reject) => {
-              handle.fastPut(resolved, remotePath, (err) => (err ? reject(err) : resolve()));
-            });
+            await withTimeout(
+              new Promise<void>((resolve, reject) => {
+                handle.fastPut(resolved, remotePath, (err) => (err ? reject(err) : resolve()));
+              }),
+              limitMs,
+              `upload to ${node.name}`,
+            );
             if (mode) {
-              await new Promise<void>((resolve, reject) => {
-                handle.chmod(remotePath, parseInt(mode, 8), (err) => (err ? reject(err) : resolve()));
-              });
+              await withTimeout(
+                new Promise<void>((resolve, reject) => {
+                  handle.chmod(remotePath, parseInt(mode, 8), (err) => (err ? reject(err) : resolve()));
+                }),
+                30_000,
+                `chmod on ${node.name}`,
+              );
             }
             return { node: node.name, ok: true, bytes: size, remotePath };
           } catch (err) {
@@ -207,9 +234,10 @@ export function registerFileTools(server: McpServer, ctx: ToolContext): void {
         node: z.string().describe("Single node name or host."),
         remotePath: z.string().describe("Absolute source path on the node."),
         localPath: z.string().describe("Destination path on this machine."),
+        timeoutMs: timeoutSchema,
       },
     },
-    async ({ node, remotePath, localPath: local }) => {
+    async ({ node, remotePath, localPath: local, timeoutMs }) => {
       try {
         const [target] = resolveTargets(ctx.config, [node]);
         if (!target) throw new Error(`Unknown node: ${node}`);
@@ -217,9 +245,13 @@ export function registerFileTools(server: McpServer, ctx: ToolContext): void {
         const dest = localPath(local);
         const sftp = await ctx.pool.sftp(target);
         try {
-          await new Promise<void>((resolve, reject) => {
-            sftp.fastGet(remotePath, dest, (err) => (err ? reject(err) : resolve()));
-          });
+          await withTimeout(
+            new Promise<void>((resolve, reject) => {
+              sftp.fastGet(remotePath, dest, (err) => (err ? reject(err) : resolve()));
+            }),
+            timeoutMs ?? DEFAULT_TRANSFER_TIMEOUT_MS,
+            `download from ${target.name}`,
+          );
           const size = statSync(dest).size;
           return text(`Downloaded ${target.name}:${remotePath} -> ${dest} (${size} bytes)`);
         } finally {

@@ -1,11 +1,10 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveTargets } from "../config.js";
 import { errorText, renderResults } from "../format.js";
 import { assessCommand, guardCommand } from "../security.js";
-import { targetsSchema, timeoutSchema, type ToolContext } from "./context.js";
+import { targetsSchema, timeoutSchema, type ToolContext, type ToolServer } from "./context.js";
 
-export function registerExecTools(server: McpServer, ctx: ToolContext): void {
+export function registerExecTools(server: ToolServer, ctx: ToolContext): void {
   server.registerTool(
     "cluster_run",
     {

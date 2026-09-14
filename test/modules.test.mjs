@@ -30,7 +30,7 @@ function node(hardware) {
   };
 }
 
-function receiptLine(moduleId, version = "0.2.0") {
+function receiptLine(moduleId, version = TEXT_TOOLS_VERSION) {
   const receipt = {
     schemaVersion: 1,
     moduleId,
@@ -48,6 +48,9 @@ function receiptLine(moduleId, version = "0.2.0") {
 function textToolsPackage() {
   return loadModuleCatalog(path.join(root, "modules")).modules.find((item) => item.manifest.id === "text-tools");
 }
+
+/** The catalog is the source of truth; hard-coding it here would break on every module release. */
+const TEXT_TOOLS_VERSION = textToolsPackage().manifest.version;
 
 test("compares semantic versions for startup update decisions", () => {
   assert.equal(compareSemanticVersions("0.1.0", "0.2.0"), -1);
@@ -70,7 +73,7 @@ test("startup reconciliation updates only older installations and then removes t
   const manager = new ModuleManager({ maxConcurrency: 2, nodes: [oldNode, newerNode] }, pool, path.join(root, "modules"));
   manager.installedModules = async () => [
     { node: oldNode.name, reachable: true, count: 1, modules: ["text-tools"], moduleVersions: { "text-tools": "0.1.0" } },
-    { node: newerNode.name, reachable: true, count: 1, modules: ["text-tools"], moduleVersions: { "text-tools": "0.3.0" } },
+    { node: newerNode.name, reachable: true, count: 1, modules: ["text-tools"], moduleVersions: { "text-tools": "9.9.9" } },
   ];
   manager.install = async (moduleId, targets) => {
     assert.equal(moduleId, "text-tools");
@@ -373,7 +376,7 @@ test("install provisions declared apt dependencies when required commands are mi
   assert.equal(inventoryChanges, 0);
   assert.match(result.error, /apt dependency installation failed/);
   assert.equal(commands.length, 1);
-  assert.match(commands[0].command, /apt-get install/);
+  assert.match(commands[0].command, /apt-get .*--no-upgrade install/);
   assert.match(commands[0].command, /'ripgrep'/);
   assert.equal(commands[0].options.sudo, true);
 });
@@ -429,7 +432,7 @@ test("install stages, verifies, installs, writes a receipt, and cleans up", asyn
   assert.equal(uploads.length, files.length);
   assert.equal(sftpEnded, true);
   assert.ok(commands.some((entry) => entry.command.includes("bash 'install.sh'") && entry.options.sudo === true));
-  assert.ok(commands.some((entry) => entry.command.includes("chown -R root:root '/opt/vantamcpd/modules/text-tools/0.2.0'") && entry.options.sudo === true));
+  assert.ok(commands.some((entry) => entry.command.includes(`chown -R root:root '/opt/vantamcpd/modules/text-tools/${TEXT_TOOLS_VERSION}'`) && entry.options.sudo === true));
   assert.ok(commands.some((entry) => entry.command.includes("systemctl enable --now 'vantamcpd-text-tools.service'") && entry.options.sudo === true));
   assert.ok(commands.some((entry) => entry.command.includes("/var/lib/vantamcpd/modules/text-tools.json") && entry.options.sudo === true));
   assert.ok(commands.some((entry) => entry.command.includes("rollback()") && entry.options.sudo === true));
@@ -622,9 +625,9 @@ test("module manager lists and calls only advertised tools over SSH MCP", async 
   const receipt = {
     schemaVersion: 1,
     moduleId: "text-tools",
-    version: "0.2.0",
+    version: TEXT_TOOLS_VERSION,
     installedAt: "2026-09-12T00:00:00.000Z",
-    installDirectory: "/opt/vantamcpd/modules/text-tools/0.2.0",
+    installDirectory: `/opt/vantamcpd/modules/text-tools/${TEXT_TOOLS_VERSION}`,
     currentLink: "/opt/vantamcpd/modules/text-tools/current",
     entrypoint: ["python3", "server.py"],
     files: [],
@@ -653,7 +656,7 @@ test("module manager lists and calls only advertised tools over SSH MCP", async 
           result = {
             protocolVersion: request.params.protocolVersion,
             capabilities: { tools: {} },
-            serverInfo: { name: "vanta-text-tools", version: "0.2.0" },
+            serverInfo: { name: "vanta-text-tools", version: TEXT_TOOLS_VERSION },
           };
         } else if (request.method === "tools/list") {
           result = { tools: [
@@ -701,7 +704,7 @@ test("module manager lists and calls only advertised tools over SSH MCP", async 
   const called = await manager.callTool("text-tools", target, "regex_extract", { text: "x", pattern: "x" });
   assert.equal(called.ok, true);
   assert.equal(called.node, "test-node");
-  assert.equal(called.moduleVersion, "0.2.0");
+  assert.equal(called.moduleVersion, TEXT_TOOLS_VERSION);
   assert.equal(called.selection, "explicit");
   assert.deepEqual(called.output, { matches: [] });
   assert.equal(opened.length, 2);
@@ -850,7 +853,7 @@ test("discovers installed module receipt counts per node", async () => {
     reachable: true,
     count: 2,
     modules: ["science-corpus", "text-tools"],
-    moduleVersions: { "text-tools": "0.2.0", "science-corpus": "1.4.2" },
+    moduleVersions: { "text-tools": TEXT_TOOLS_VERSION, "science-corpus": "1.4.2" },
   });
   assert.deepEqual(inventory[1], {
     node: "offline-node",
@@ -862,9 +865,9 @@ test("discovers installed module receipt counts per node", async () => {
   assert.equal(listing.inventoryComplete, false);
   assert.deepEqual(listing.unreachableNodes, ["offline-node"]);
   assert.deepEqual(textTools.installedNodes, ["test-node"]);
-  assert.deepEqual(textTools.installedVersions, { "test-node": "0.2.0" });
+  assert.deepEqual(textTools.installedVersions, { "test-node": TEXT_TOOLS_VERSION });
   assert.equal(textTools.nodes[0].installed, true);
-  assert.equal(textTools.nodes[0].installedVersion, "0.2.0");
+  assert.equal(textTools.nodes[0].installedVersion, TEXT_TOOLS_VERSION);
   assert.equal(textTools.nodes[0].updateAvailable, false);
   assert.equal(textTools.nodes[1].installed, undefined);
 });

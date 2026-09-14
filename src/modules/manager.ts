@@ -3,6 +3,7 @@ import path from "node:path";
 import type { SFTPWrapper } from "ssh2";
 import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { aptGet, aptUpdate } from "../apt.js";
 import type { ClusterConfig, ResolvedNode } from "../config.js";
 import { parseKeyValueLines } from "../format.js";
 import { isTerminalJobStatus } from "../jobs/types.js";
@@ -1009,12 +1010,7 @@ export class ModuleManager {
     if (packages.length === 0) {
       return { ok: false, error: "required commands are missing and the module declares no apt dependencies" };
     }
-    const aptOptions =
-      "-y -q -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 " +
-      "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold";
-    const command =
-      "set -e; apt-get update -q -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 </dev/null; " +
-      `env DEBIAN_FRONTEND=noninteractive apt-get install --no-upgrade ${aptOptions} -- ${packages.map(q).join(" ")} </dev/null`;
+    const command = `set -e; ${aptUpdate()}; ${aptGet("install", { packages: packages.map(q), flags: ["--no-upgrade"] })}`;
     const result = await this.pool.exec(node, command, { sudo: true, timeoutMs });
     return result.ok
       ? { ok: true }

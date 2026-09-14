@@ -150,21 +150,29 @@ def run(spec_path):
         buffered = b""
         logged = log_path.stat().st_size if log_path.exists() else 0
 
+        def terminate():
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+
         with log_path.open("ab") as log:
-            while process.poll() is None:
+            # Read until the pipe reports EOF rather than until the process exits: poll() turns
+            # non-None the moment it exits, leaving up to a pipe buffer of output - including a final
+            # progress update or error message - unread.
+            streaming = True
+            while streaming:
                 if interrupted:
                     break
                 if time.monotonic() >= deadline:
-                    os.killpg(process.pid, signal.SIGTERM)
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(process.pid, signal.SIGKILL)
+                    terminate()
                     raise TimeoutError(f"Job exceeded {spec['timeoutMs']}ms runtime limit")
                 for key, _ in selector.select(timeout=1):
                     chunk = os.read(key.fd, 65536)
                     if not chunk:
-                        continue
+                        streaming = False
+                        break
                     room = max(0, spec["maxLogBytes"] - logged)
                     if room:
                         saved = chunk[:room]
@@ -183,11 +191,22 @@ def run(spec_path):
                     state["heartbeatAt"] = timestamp()
                     write_json(state_path, state)
                     next_heartbeat = time.monotonic() + HEARTBEAT_SECONDS
+            # A process that exits without a trailing newline still leaves a meaningful last line.
+            if buffered and apply_progress(state, buffered.decode("utf-8", errors="replace")):
+                state["heartbeatAt"] = timestamp()
+                write_json(state_path, state)
 
-        code = process.wait()
+        selector.close()
         if interrupted:
+            process.wait()
             raise SystemExit(75)
-        elif code == 0:
+        # stdout can close before the process does; the runtime limit still applies.
+        try:
+            code = process.wait(timeout=max(1.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            terminate()
+            raise TimeoutError(f"Job exceeded {spec['timeoutMs']}ms runtime limit")
+        if code == 0:
             finish(state_path, state, "succeeded", spec["retentionMs"], result={"exitCode": 0, "summary": "Job completed."})
         else:
             finish(state_path, state, "failed", spec["retentionMs"], error=f"Job command exited with code {code}.", result={"exitCode": code})

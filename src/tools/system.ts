@@ -1,9 +1,8 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveTargets } from "../config.js";
 import { errorText, json, parseKeyValueLines, renderResults } from "../format.js";
 import { refreshHardware } from "../hardware.js";
-import { targetsSchema, timeoutSchema, type ToolContext } from "./context.js";
+import { targetsSchema, timeoutSchema, type ToolContext, type ToolServer } from "./context.js";
 
 const STATUS_SCRIPT = String.raw`
 echo "hostname|$(hostname)"
@@ -55,7 +54,7 @@ echo "kernel|$(uname -r) $(uname -m)"
 exit 0
 `;
 
-export function registerSystemTools(server: McpServer, ctx: ToolContext): void {
+export function registerSystemTools(server: ToolServer, ctx: ToolContext): void {
   server.registerTool(
     "cluster_list_nodes",
     {

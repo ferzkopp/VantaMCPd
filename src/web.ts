@@ -74,7 +74,12 @@ const IPV4 = /\b\d{1,3}(?:\.\d{1,3}){3}\b/g;
  * export CIDRs. An allow-list of fields cannot catch those, so scrub the whole structure.
  */
 function withoutAddresses<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value).replace(IPV4, "x.x.x.x")) as T;
+  return JSON.parse(
+    // Four dotted groups are not necessarily an address: kernel and package versions look the same.
+    JSON.stringify(value).replace(IPV4, (match) =>
+      match.split(".").every((octet) => Number(octet) <= 255) ? "x.x.x.x" : match,
+    ),
+  ) as T;
 }
 
 export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: ModuleManager, jobs?: JobManager): Server | undefined {
@@ -251,6 +256,7 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
         const snapshot = jobs?.snapshot() ?? { jobs: [] };
         json(res, {
           ...snapshot,
+          pollIntervalMs: config.jobs.pollIntervalMs,
           jobs: snapshot.jobs.map((job) => ({ ...job, displayStatus: jobStatusKey(job) })),
         });
         return;

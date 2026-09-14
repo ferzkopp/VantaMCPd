@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import importlib
 import json
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -60,6 +61,28 @@ def choice(arguments: dict[str, Any], name: str, choices: set[str], default: str
     if not isinstance(value, str) or value not in choices:
         raise ValueError(f"{name} must be one of: {', '.join(sorted(choices))}")
     return value
+
+
+def string_list(arguments: dict[str, Any], name: str, minimum: int, maximum: int, item_length: int) -> list[str]:
+    value = arguments.get(name)
+    if not isinstance(value, list) or not minimum <= len(value) <= maximum:
+        raise ValueError(f"{name} must be an array of {minimum} to {maximum} strings")
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"{name} must contain only strings")
+        if len(item.encode("utf-8")) > item_length:
+            raise ValueError(f"each {name} entry must be at most {item_length} UTF-8 bytes")
+    return value
+
+
+def optional_module(module_name: str, package: str, feature: str) -> Any:
+    """Import a module supplied by a Debian package, naming the package when it is absent."""
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as error:
+        raise ValueError(
+            f"{feature} requires the {package} package, which is not installed on this node"
+        ) from error
 
 
 def output_text(value: str) -> dict[str, Any]:

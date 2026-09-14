@@ -42,13 +42,13 @@ routes its tools according to the module's deployment policy.
 | Module | Purpose | Deployment | Requirements | Guide |
 | --- | --- | --- | --- | --- |
 | **Core** (`core`, built in) | Cluster inventory, health, packages, services, files, storage, jobs, and module lifecycle | Runs on the Vanta host; fans out over SSH | Node.js 20.11+, OpenSSH client, and configured Debian/Armbian nodes | [Built-in tools](#tools) |
-| **Text Tools** (`text-tools`, v0.2.0) | Bounded text transformation, extraction, analysis, conversion, document, table, and developer tools | Replicated; on demand; round-robin routing | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 40 MB disk | [Text Tools](modules/text-tools/TextTools.md) |
+| **Text Tools** (`text-tools`, v0.4.0) | 111 bounded text, data, date/time, document, security, and developer operations across twelve category tools | Replicated; on demand; round-robin routing | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 40 MB disk | [Text Tools](modules/text-tools/TextTools.md) |
 | **Scientific Corpus Search** (`corpus-search`, v0.3.0) | Provenance-aware arXiv metadata search using SQLite FTS5/BM25 | Singleton; on demand; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 10 GiB free node storage | [Scientific Corpus Search](modules/corpus-search/CorpusSearch.md) |
 
 Use `cluster_list_modules` to see install options, compatibility, deployment policies, and live
 installation state. See [Node modules](docs/Modules.md) for architecture and lifecycle details.
 
-## QuickStart
+## Quickstart
 
 From a clean checkout to a working agent-driven cluster. Run steps 1-5 on the **Vanta host**, then
 complete step 6 in any MCP-capable agent. Node.js 20.11 or newer, npm, and an OpenSSH client are required.
@@ -134,7 +134,8 @@ for Claude Code, Hermes Agent, OpenClaw, and generic MCP clients are in [MCP cli
 > then show its job progress.
 
 Module installation requires approval and explicit target nodes or tags. See [Node modules](docs/Modules.md)
-for deployment, routing, durable jobs, and update behavior, and the
+for deployment, routing, durable jobs, and update behavior, the
+[Text Tools quickstart](modules/text-tools/TextTools.md#quickstart) for replicas and routing, and the
 [Corpus Search quickstart](modules/corpus-search/CorpusSearch.md#quickstart) for profiles, storage,
 installation, and recovery.
 
@@ -272,7 +273,7 @@ Set `VANTA_CONFIG` when the daemon should load an inventory from a different pat
 
 ## Installation
 
-The QuickStart above covers the shortest path to a working cluster. For the complete six-step Windows
+The Quickstart above covers the shortest path to a working cluster. For the complete six-step Windows
 and Linux walkthrough, including managed-node preparation, enrollment checks, and command variants, see
 **[Installation](docs/Installation.md)**. Prepare each managed machine with **[Node setup](docs/NodeSetup.md)**;
 platform support details and standalone SSH procedures remain in **[Host setup](docs/HostSetup.md)**.
@@ -433,6 +434,7 @@ module usage, architecture, implemented packages, and the roadmap are documented
 | [Hardware inventory](docs/Reference.md#hardware-inventory) | What the daemon records per node, and how disk roles (`system`/`swap`/`storage`) are decided |
 | [Swap](docs/Reference.md#swap) | `cluster_swap` actions and their guard rails |
 | [Attached storage](docs/Reference.md#attached-storage) | Formatting the external disk and sharing it over NFS |
+| [Operational tools](docs/Reference.md#operational-tools) | Parameters and examples for packages, services, logs, files, commands and power |
 | [Monitoring](docs/Reference.md#monitoring) | The audit log, the dashboard and its HTTP API |
 | [Security model](docs/Reference.md#security-model) | Auth, injection defences, the destructive-command guard |
 | [Configuration reference](docs/Reference.md#configuration-reference) | Every key in `cluster.config.local.json` |

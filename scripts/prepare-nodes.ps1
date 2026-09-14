@@ -31,29 +31,10 @@ param(
 $ErrorActionPreference = 'Stop'
 # $PSScriptRoot is empty inside param() defaults of an advanced script on PS 5.1.
 if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot '..\cluster.config.local.json' }
+. (Join-Path $PSScriptRoot 'common.ps1')
 
 $baselinePackages = @('ca-certificates', 'curl', 'jq', 'lsb-release', 'procps', 'iproute2', 'usbutils', 'nfs-common', 'parted')
 $storagePackages = @('e2fsprogs', 'nfs-kernel-server', 'smartmontools')
-
-function Write-Step { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
-function Write-Ok   { param([string]$Message) Write-Host "    OK   $Message" -ForegroundColor Green }
-function Write-Warn2{ param([string]$Message) Write-Host "    !!   $Message" -ForegroundColor Yellow }
-function Write-Fail { param([string]$Message) Write-Host "    FAIL $Message" -ForegroundColor Red }
-
-function Expand-HomePath {
-    param([string]$Path)
-    if ($Path -like '~*') { return (Join-Path $HOME ($Path.Substring(1).TrimStart('/', '\'))) }
-    return $Path
-}
-
-function Invoke-Native {
-    # PS 5.1 makes any stderr write from a native command fatal while $ErrorActionPreference is 'Stop'
-    # (2>$null does not help). ssh and apt both write routine notices there.
-    param([Parameter(Mandatory = $true)][scriptblock] $Command)
-    $previous = $ErrorActionPreference
-    $script:ErrorActionPreference = 'Continue'
-    try { & $Command } finally { $script:ErrorActionPreference = $previous }
-}
 
 foreach ($tool in 'ssh') {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
@@ -113,22 +94,21 @@ if ! sudo -n true 2>/dev/null; then
 fi
 
 export DEBIAN_FRONTEND=noninteractive
-APT_OPTS="-o DPkg::Lock::Timeout=300 -o Dpkg::Use-Pty=0"
+# The same non-interactive flags the daemon uses at runtime; see src/apt.ts.
+APT_OPTS="-y -q -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
 # sudo resets the environment, so DEBIAN_FRONTEND must be re-applied on the sudo side via env(1),
 # and stdin must come from /dev/null - bash is reading this very script from the pipe.
 echo "--- apt-get update"
 # shellcheck disable=SC2086
-sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update $APT_OPTS -qq </dev/null ||
+sudo -n env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get update $APT_OPTS </dev/null ||
   echo "apt-get update reported errors (continuing)"
 echo "--- apt-get install $missing"
 # shellcheck disable=SC2086
-sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -q $APT_OPTS \
-  -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold $missing </dev/null || exit 12
+sudo -n env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install $APT_OPTS -- $missing </dev/null || exit 12
 echo "packages=installed"
 '@
 
-$normalized = $remoteScript -replace "`r`n", "`n"
-$b64Script = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($normalized))
+$b64Script = ConvertTo-Base64Script $remoteScript
 
 $mode = if ($Check) { 'check' } else { 'install' }
 $sshCommon = @('-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes')

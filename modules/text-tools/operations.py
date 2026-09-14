@@ -9,6 +9,7 @@ from operations_data import (
     SECURITY_OPERATIONS,
     TABLE_OPERATIONS,
 )
+from operations_datetime import DATETIME_OPERATIONS
 from operations_developer import COMMAND_OPERATIONS, DEVELOPER_OPERATIONS, DOCUMENT_OPERATIONS
 from operations_text import ANALYZE_OPERATIONS, EXTRACT_OPERATIONS, TRANSFORM_OPERATIONS
 
@@ -23,6 +24,7 @@ CATEGORIES = {
     "developer_text": ("Perform bounded regex replacement, unified diff, and semantic-version operations.", DEVELOPER_OPERATIONS),
     "document_process": ("Process Markdown structure and JSON or TOML frontmatter.", DOCUMENT_OPERATIONS),
     "table_transform": ("Render and sort flat JSON tables.", TABLE_OPERATIONS),
+    "datetime_text": ("Parse, reformat, convert, and measure timestamps and durations.", DATETIME_OPERATIONS),
     "command_text": ("Use constrained stdin-only wrappers around rg, jq, awk, and sed.", COMMAND_OPERATIONS),
 }
 

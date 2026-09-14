@@ -31,11 +31,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $ConfigPath) { $ConfigPath = Join-Path $repoRoot 'cluster.config.local.json' }
 $minNodeVersion = [version]'20.11.0'
-
-function Write-Step { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
-function Write-Ok   { param([string]$Message) Write-Host "    OK   $Message" -ForegroundColor Green }
-function Write-Warn2{ param([string]$Message) Write-Host "    !!   $Message" -ForegroundColor Yellow }
-function Write-Fail { param([string]$Message) Write-Host "    FAIL $Message" -ForegroundColor Red }
+. (Join-Path $PSScriptRoot 'common.ps1')
 
 $results = New-Object System.Collections.Generic.List[object]
 function Add-Result {
@@ -57,39 +53,9 @@ function Get-NativeOutput {
     return (& cmd.exe /c "$CommandLine 2>&1" | Out-String).Trim()
 }
 
-function Invoke-Native {
-    # Same trap for commands whose output we want to see: PS 5.1 makes any stderr write from a native
-    # command fatal while $ErrorActionPreference is 'Stop'. npm and winget both write progress there.
-    param([Parameter(Mandatory = $true)][scriptblock] $Command)
-    $previous = $ErrorActionPreference
-    $script:ErrorActionPreference = 'Continue'
-    try { & $Command } finally { $script:ErrorActionPreference = $previous }
-}
-
 function Test-Admin {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     return ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
-function Test-TcpPort {
-    param([string]$ComputerName, [int]$Port = 22, [int]$TimeoutMs = 2000)
-    $client = New-Object System.Net.Sockets.TcpClient
-    try {
-        $async = $client.BeginConnect($ComputerName, $Port, $null, $null)
-        if (-not $async.AsyncWaitHandle.WaitOne($TimeoutMs, $false)) { return $false }
-        $client.EndConnect($async)
-        return $true
-    } catch {
-        return $false
-    } finally {
-        $client.Close()
-    }
-}
-
-function Expand-HomePath {
-    param([string]$Path)
-    if ($Path -like '~*') { return (Join-Path $HOME ($Path.Substring(1).TrimStart('/', '\'))) }
-    return $Path
 }
 
 Write-Step "VantaMCPd prerequisites  (repo: $repoRoot)"

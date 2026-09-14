@@ -1,13 +1,12 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveTargets } from "../config.js";
 import { errorText, renderResults } from "../format.js";
 import { assertNoControlChars, q, validateUnit } from "../security.js";
-import { targetsSchema, timeoutSchema, type ToolContext } from "./context.js";
+import { targetsSchema, timeoutSchema, type ToolContext, type ToolServer } from "./context.js";
 
 const READ_ONLY = new Set(["status", "is_active", "is_enabled", "list", "list_failed", "show"]);
 
-export function registerServiceTools(server: McpServer, ctx: ToolContext): void {
+export function registerServiceTools(server: ToolServer, ctx: ToolContext): void {
   server.registerTool(
     "cluster_services",
     {

@@ -7,8 +7,9 @@ import { discoverMissingHardware } from "./hardware.js";
 import { JobManager } from "./jobs/manager.js";
 import { JobRegistry } from "./jobs/registry.js";
 import { ModuleManager } from "./modules/manager.js";
+import { capabilitySummary } from "./modules/catalog.js";
 import { SshPool } from "./ssh.js";
-import type { ToolContext } from "./tools/context.js";
+import type { ToolContext, ToolServer } from "./tools/context.js";
 import { registerExecTools } from "./tools/exec.js";
 import { registerFileTools } from "./tools/files.js";
 import { registerLogTools } from "./tools/logs.js";
@@ -22,11 +23,15 @@ import { registerSystemTools } from "./tools/system.js";
 import { startWebServer } from "./web.js";
 
 /** Run every tool handler inside an async context so SSH calls can be attributed to the tool that caused them. */
-function attributeToolCalls(server: McpServer): void {
-  const original = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
-  (server as unknown as { registerTool: unknown }).registerTool = (name: string, cfg: unknown, handler: unknown) =>
-    original(name, cfg, ((...args: unknown[]) =>
-      withToolParameters(name, args[0], () => (handler as (...a: unknown[]) => unknown)(...args))) as unknown);
+function attributedRegistrar(server: McpServer): ToolServer {
+  type Register = ToolServer["registerTool"];
+  const registerTool = ((name: string, config: never, handler: (...args: unknown[]) => unknown) =>
+    server.registerTool(
+      name,
+      config,
+      ((...args: unknown[]) => withToolParameters(name, args[0], () => handler(...args))) as never,
+    )) as Register;
+  return { registerTool };
 }
 
 async function main(): Promise<void> {
@@ -48,6 +53,7 @@ async function main(): Promise<void> {
   const modules = new ModuleManager(config, pool, undefined, jobs);
   const ctx: ToolContext = { config, pool, jobs, modules };
 
+  const capabilities = capabilitySummary(modules.catalog);
   const server = new McpServer(
     { name: "vantamcpd", version: "0.1.0" },
     {
@@ -59,6 +65,14 @@ async function main(): Promise<void> {
         "These nodes are resource constrained: check the hardware inventory before installing anything, prefer dry runs " +
         "for apt operations, avoid long-running foreground builds, and check free disk space with cluster_status.\n" +
         "Destructive operations (formatting, reboots, rm -rf, partitioning) require explicit user approval and a confirm flag.\n" +
+        (capabilities
+          ? "The cluster also runs node modules that do real work for you. Route a request to cluster_call_module_tool " +
+            "whenever it matches one of these capabilities, even if the user does not name the module or the node:\n" +
+            `${capabilities}\n` +
+            "These operations are deterministic, bounded and auditable, so prefer them over answering from memory for " +
+            "conversion, extraction, redaction, comparison and formatting work. Use cluster_list_modules to confirm " +
+            "what is installed, and cluster_list_module_tools for exact operation names and argument schemas.\n"
+          : "") +
         (config.monitoring.enabled && config.monitoring.web
           ? `Every SSH interaction is logged and shown live on a local dashboard at ` +
             `http://127.0.0.1:${config.monitoring.port} - mention it when the user asks what you did, ` +
@@ -67,18 +81,17 @@ async function main(): Promise<void> {
     },
   );
 
-  attributeToolCalls(server);
-  registerSystemTools(server, ctx);
-  registerExecTools(server, ctx);
-  registerLogTools(server, ctx);
-  registerPackageTools(server, ctx);
-  registerServiceTools(server, ctx);
-  registerFileTools(server, ctx);
-  registerStorageTools(server, ctx);
-  registerSwapTools(server, ctx);
-  registerJobTools(server, ctx);
-  registerModuleTools(server, ctx);
-
+  const tools = attributedRegistrar(server);
+  registerSystemTools(tools, ctx);
+  registerExecTools(tools, ctx);
+  registerLogTools(tools, ctx);
+  registerPackageTools(tools, ctx);
+  registerServiceTools(tools, ctx);
+  registerFileTools(tools, ctx);
+  registerStorageTools(tools, ctx);
+  registerSwapTools(tools, ctx);
+  registerJobTools(tools, ctx);
+  registerModuleTools(tools, ctx);
   const web = audit && config.monitoring.web ? startWebServer(config, audit, modules, jobs) : undefined;
   // Only advertise the dashboard once the socket is genuinely bound - it may lose a port race.
   web?.once("listening", () => {

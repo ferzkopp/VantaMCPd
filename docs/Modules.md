@@ -41,7 +41,7 @@ reloads the local catalog.
 
 | Module | Package version | Requirements | Included tools | Guide |
 | --- | --- | --- | --- | --- |
-| Text Tools (`text-tools`) | `0.2.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | Four compatibility tools plus 11 bounded category tools | [Text Tools](../modules/text-tools/TextTools.md) |
+| Text Tools (`text-tools`) | `0.4.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | 111 bounded operations across twelve category tools | [Text Tools](../modules/text-tools/TextTools.md) |
 | Scientific Corpus Search (`corpus-search`) | `0.3.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 10 GiB free, Python 3, SQLite 3 | Search, exact record lookup, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
 
 ### Activate a Module
@@ -90,12 +90,30 @@ installer succeeds. An existing version remains active while an update job provi
 
 After installation, discover and use its tools with requests such as:
 
-> List the tools provided by text-tools on cluster1.
+> List the tools provided by text-tools.
 
-> Use text-tools on cluster1 to extract the numeric IDs from `item=12 item=37` with the pattern `item=(\d+)`.
+> Use text-tools to extract the numeric IDs from `item=12 item=37` with the pattern `item=(\d+)`.
 
 VantaMCPd verifies the receipt and active version, launches the module through SSH stdio, completes the
 MCP handshake, checks that the requested tool is advertised, returns the result, and closes the process.
+
+### Capability Discovery
+
+A module's own tools live behind `cluster_call_module_tool` and never appear in the daemon's tool list,
+so an agent has no way to guess that the cluster can convert YAML or redact secrets. Each manifest
+therefore declares up to twelve short `capabilities` phrases. At start-up VantaMCPd composes them from
+the local catalog into two places the model reads on its own:
+
+| Destination | When the model sees it |
+| --- | --- |
+| The server `instructions` returned by `initialize` | Once per session, usually as part of the system prompt |
+| The `cluster_call_module_tool` and `cluster_list_module_tools` descriptions | On every request, while deciding which tool to call |
+
+That is what lets *"redact the IPs in this log"* reach the cluster without the user naming `text-tools`.
+Write each phrase as the work a user would ask for, not as an implementation detail, and keep it short:
+this text is in context for the whole session. Capability text is descriptive only. It never affects
+compatibility, routing, or installation, and a module that omits it simply stays undiscoverable until
+asked for by name.
 
 ### Deployment and Routing
 
@@ -297,8 +315,12 @@ The manifest will be validated with Zod before any remote operation. Its initial
   "schemaVersion": 1,
   "id": "text-tools",
   "name": "Text Tools",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Bounded text processing and constrained command-wrapper tools.",
+  "capabilities": [
+    "convert between JSON, JSONL, YAML, CSV, TOML, INI, XML, dotenv and query strings",
+    "scan text for credentials and redact emails, IPs and secrets"
+  ],
   "entrypoint": ["python3", "server.py"],
   "compatibility": {
     "os": ["debian"],
@@ -404,20 +426,25 @@ reporting, and removal without architecture-specific wheels. Its Python implemen
 standard library, while constrained wrappers reuse distribution packages for `rg`, `jq`, `awk`, and
 `sed`. It accepts caller-provided text through MCP/stdin only.
 
-Its initial MCP tools are:
+Its MCP surface is twelve category tools holding 111 operations. Each takes an `operation` discriminator
+and that operation's own fields, so `tools/list` stays compact while every operation keeps a strict
+schema:
 
 | Tool | Behavior |
 | --- | --- |
-| `regex_extract` | Return bounded matches and capture groups |
-| `csv_normalize` | Parse a declared or detected delimiter and return normalized CSV |
-| `log_parse_kv` | Parse bounded `key=value` or `key:value` log records |
-| `html_extract` | Return conservative visible text, headings, and links |
-| 11 category tools | Transform, extract, analyze, encode, convert, hash, generate, diff, process documents/tables, and invoke constrained stdin-only command wrappers |
+| `text_transform`, `text_extract`, `text_analyze` | Bounded cleanup, structured-value extraction, statistics, invisible-character inspection, chunking, and TF-IDF |
+| `text_codec`, `data_convert` | Encodings, and conversion between JSON, JSONL, CSV, `key=value` logs, dotenv, HTML, YAML, TOML, INI, XML, and query strings, plus structural diff, merge, and schema inference |
+| `text_security`, `text_generate` | Digests, HMACs, checksums, secret scanning, redaction, password strength, UUIDs, passwords, and passphrases |
+| `developer_text`, `document_process`, `table_transform` | Regex extraction/replacement/testing, diffs, semantic versions, Markdown structure, and flat JSON or CSV tables |
+| `datetime_text` | Timestamp parsing, reformatting, timezone conversion, intervals, and durations |
+| `command_text` | Constrained stdin-only wrappers for `rg`, `jq`, `awk`, and `sed` |
 
 The module does not accept node paths, fetch URLs, run a shell, or write artifacts. Inputs, patterns,
 collections, and result bytes are bounded. Python regex matching/replacement runs in a killable worker;
-external commands have fixed argument shapes and a five-second timeout. The complete API and deferred
-features are documented in [Text Tools operations](../modules/text-tools/Operations.md).
+external commands have fixed argument shapes and a five-second timeout. See the
+[Text Tools quickstart](../modules/text-tools/TextTools.md#quickstart) for installation, routing, first
+use, and lifecycle; the complete API and deferred features are documented in
+[Text Tools operations](../modules/text-tools/Operations.md).
 
 ## Scientific Corpus Search
 
@@ -528,9 +555,10 @@ Later retrieval modes may add vectors or hybrid ranking, but SQLite FTS5/BM25 is
 
 #### Regex, Parsing, and Extraction
 
-Text Tools 0.2 includes the original regex, HTML, log, and CSV tools plus 11 strictly-dispatched
-operation categories. Future versions may add domain-specific parsers and artifact inputs after the
-shared artifact API exists.
+Text Tools provides regex extraction, replacement and testing, structured-value extraction, and bounded
+parsing and conversion for JSON, JSONL, CSV, YAML, TOML, INI, XML, HTML, dotenv, and `key=value` logs,
+across twelve strictly-dispatched operation categories. Future versions may add domain-specific parsers
+and artifact inputs after the shared artifact API exists.
 
 #### Geospatial Compute
 

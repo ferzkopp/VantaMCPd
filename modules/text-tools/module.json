@@ -2,8 +2,20 @@
   "schemaVersion": 1,
   "id": "text-tools",
   "name": "Text Tools",
-  "version": "0.2.0",
-  "description": "Bounded text transformation, extraction, analysis, conversion, developer, document, table, and command-wrapper tools.",
+  "version": "0.4.1",
+  "description": "Bounded text transformation, extraction, analysis, conversion, date/time, developer, document, table, and command-wrapper tools.",
+  "capabilities": [
+    "convert between JSON, JSONL, YAML, CSV, TOML, INI, XML, dotenv and query strings",
+    "compare, merge, flatten and infer schemas for JSON",
+    "run, test and explain regular expressions safely",
+    "scan text for credentials and redact emails, IPs and secrets",
+    "parse, reformat and convert timestamps, timezones and durations",
+    "inspect invisible characters, line endings and encoding problems",
+    "split, chunk and restructure Markdown documents",
+    "extract emails, URLs, IPs, UUIDs, hashes and versions from text",
+    "hash, checksum, and generate UUIDs, passwords and passphrases",
+    "search and reshape text with ripgrep, jq, awk and sed"
+  ],
   "entrypoint": ["python3", "server.py"],
   "compatibility": {
     "os": ["debian", "ubuntu"],
@@ -15,7 +27,7 @@
     "accelerators": []
   },
   "packages": {
-    "apt": ["python3", "ripgrep", "jq", "mawk", "sed"]
+    "apt": ["python3", "ripgrep", "jq", "mawk", "sed", "python3-yaml", "python3-markdown", "python3-inflect", "python3-tomli-w", "wamerican"]
   },
   "lifecycle": {
     "install": "install.sh",

@@ -115,6 +115,8 @@ export const ModuleManifestSchema = z
     name: z.string().min(1).max(100),
     version: z.string().regex(SEMVER, "must be a semantic version"),
     description: z.string().min(1).max(500),
+    /** Short capability phrases surfaced to the agent so it can route work here without being told the module name. */
+    capabilities: z.array(z.string().min(1).max(80)).max(12).default([]),
     entrypoint: z
       .array(z.string().min(1).max(500).refine((value) => !/[\0\r\n]/.test(value), "must not contain control characters"))
       .min(1)

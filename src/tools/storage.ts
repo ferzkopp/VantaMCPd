@@ -1,9 +1,9 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { aptGet } from "../apt.js";
 import { resolveTargets, type ResolvedNode } from "../config.js";
 import { errorText, renderResults, text } from "../format.js";
 import { guardDestructiveDevice, q, validateAbsPath, validateCidr, validateMountOptions } from "../security.js";
-import { targetsSchema, timeoutSchema, type ToolContext } from "./context.js";
+import { targetsSchema, timeoutSchema, type ToolContext, type ToolServer } from "./context.js";
 
 function storageNode(ctx: ToolContext, name?: string): ResolvedNode {
   if (name) {
@@ -17,7 +17,7 @@ function storageNode(ctx: ToolContext, name?: string): ResolvedNode {
   return candidates[0] as ResolvedNode;
 }
 
-export function registerStorageTools(server: McpServer, ctx: ToolContext): void {
+export function registerStorageTools(server: ToolServer, ctx: ToolContext): void {
   server.registerTool(
     "cluster_storage",
     {
@@ -130,7 +130,8 @@ export function registerStorageTools(server: McpServer, ctx: ToolContext): void 
             const script = [
               `umount ${q(mountpoint)} 2>&1 || echo "not mounted or busy"`,
               args.removeFstab
-                ? `cp -a /etc/fstab /etc/fstab.bak-$(date +%Y%m%d%H%M%S); sed -i ${q(`\\# ${mountpoint} #d`)} /etc/fstab; grep -v '^#' /etc/fstab`
+                ? // fstab fields are separated by arbitrary whitespace, tabs included.
+                  `cp -a /etc/fstab /etc/fstab.bak-$(date +%Y%m%d%H%M%S); sed -i ${q(`\\#[[:space:]]${mountpoint}[[:space:]]#d`)} /etc/fstab; grep -v '^#' /etc/fstab`
                 : `echo "fstab left unchanged"`,
               `findmnt ${q(mountpoint)} || echo "unmounted"`,
             ].join("\n");
@@ -143,8 +144,7 @@ export function registerStorageTools(server: McpServer, ctx: ToolContext): void 
             const script = [
               `set -e`,
               `mountpoint -q ${q(mountpoint)} || { echo "${mountpoint} is not mounted - run action=mount first." >&2; exit 1; }`,
-              `export DEBIAN_FRONTEND=noninteractive`,
-              `dpkg -s nfs-kernel-server >/dev/null 2>&1 || apt-get install -y -o DPkg::Lock::Timeout=300 nfs-kernel-server`,
+              `dpkg -s nfs-kernel-server >/dev/null 2>&1 || ${aptGet("install", { packages: ["nfs-kernel-server"] })}`,
               `if grep -qF ${q(exportLine)} /etc/exports; then`,
               `  echo "export already present"`,
               `else`,
@@ -168,8 +168,7 @@ export function registerStorageTools(server: McpServer, ctx: ToolContext): void 
             const remote = `${node.host}:${mountpoint}`;
             const script = [
               `set -e`,
-              `export DEBIAN_FRONTEND=noninteractive`,
-              `dpkg -s nfs-common >/dev/null 2>&1 || apt-get install -y -o DPkg::Lock::Timeout=300 nfs-common`,
+              `dpkg -s nfs-common >/dev/null 2>&1 || ${aptGet("install", { packages: ["nfs-common"] })}`,
               `mkdir -p ${q(mountpoint)}`,
               // autofs: mount on first access. A plain boot-time NFS mount races the network coming up
               // ("mount.nfs: Network is unreachable") and nofail means it is never retried.

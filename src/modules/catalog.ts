@@ -38,6 +38,20 @@ export function defaultModuleRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "modules");
 }
 
+/**
+ * One line per module naming what it can do. This is the only place the agent learns that the cluster
+ * handles, say, YAML or secret scanning: the module's own tools are behind the proxy and never appear
+ * in the daemon's tool list.
+ */
+export function capabilitySummary(catalog: ModuleCatalog): string {
+  const lines = catalog.modules
+    .filter((modulePackage) => modulePackage.manifest.capabilities.length > 0)
+    // Semicolons, because the phrases themselves contain commas.
+    .map((modulePackage) => `- ${modulePackage.manifest.id}: ${modulePackage.manifest.capabilities.join("; ")}`);
+  return lines.join("\n");
+}
+
+
 function packageFiles(directory: string): ModulePackageFile[] {
   const files: ModulePackageFile[] = [];
 

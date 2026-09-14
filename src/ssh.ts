@@ -189,6 +189,8 @@ class NodeSession {
     return new Promise<ExecResult>((resolve) => {
       client.exec(command, (err, stream) => {
         if (err) {
+          // The cached client is unusable once it refuses to open a channel; force a fresh handshake.
+          this.dispose();
           resolve({
             ...base,
             ok: false,
@@ -208,10 +210,26 @@ class NodeSession {
         let truncated = false;
         let timedOut = false;
         let settled = false;
+        let killTimer: NodeJS.Timeout | undefined;
 
         const timer = setTimeout(() => {
           timedOut = true;
-          stream.close();
+          // Closing the channel leaves the remote process running, so ask the server to signal it.
+          // OpenSSH ignores signal requests, which is why close() stays as the backstop.
+          try {
+            stream.signal("TERM");
+          } catch {
+            /* server does not support signal requests */
+          }
+          killTimer = setTimeout(() => {
+            try {
+              stream.signal("KILL");
+            } catch {
+              /* server does not support signal requests */
+            }
+            stream.close();
+          }, 2_000);
+          killTimer.unref();
         }, timeoutMs);
 
         const push = (chunks: Buffer[], chunk: Buffer, len: number): number => {
@@ -229,6 +247,7 @@ class NodeSession {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
+          if (killTimer) clearTimeout(killTimer);
           resolve({
             ...base,
             ok: !timedOut && code === 0,
@@ -254,6 +273,9 @@ class NodeSession {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
+          if (killTimer) clearTimeout(killTimer);
+          // A half-open socket poisons the cached client: every later call would fail the same way.
+          this.dispose();
           resolve({
             ...base,
             ok: false,
@@ -310,7 +332,14 @@ class NodeSession {
   async sftp(): Promise<SFTPWrapper> {
     const client = await this.connect();
     return new Promise((resolve, reject) => {
-      client.sftp((err, sftp) => (err ? reject(err) : resolve(sftp)));
+      client.sftp((err, sftp) => {
+        if (err) {
+          this.dispose();
+          reject(err);
+          return;
+        }
+        resolve(sftp);
+      });
     });
   }
 
@@ -327,7 +356,14 @@ class NodeSession {
     const payload = Buffer.from(inner, "utf8").toString("base64");
     const command = `bash -c "$(printf '%s' ${q(payload)} | base64 -d)"`;
     return new Promise((resolve, reject) => {
-      client.exec(command, (err, stream) => (err ? reject(err) : resolve(stream)));
+      client.exec(command, (err, stream) => {
+        if (err) {
+          this.dispose();
+          reject(err);
+          return;
+        }
+        resolve(stream);
+      });
     });
   }
 

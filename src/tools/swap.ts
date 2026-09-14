@@ -1,9 +1,8 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveTargets } from "../config.js";
 import { errorText, renderResults, text } from "../format.js";
 import { guardDestructiveDevice, q } from "../security.js";
-import { targetsSchema, timeoutSchema, type ToolContext } from "./context.js";
+import { targetsSchema, timeoutSchema, type ToolContext, type ToolServer } from "./context.js";
 
 const STATUS_SCRIPT = [
   `echo "== active swap =="`,
@@ -24,6 +23,11 @@ const ROOT_DISK_GUARD = [
   `rootdisk=$(lsblk -no PKNAME "$rootsrc" 2>/dev/null | head -n1 | tr -d ' ')`,
 ];
 
+/** /dev/sdb -> /dev/sdb1, but /dev/nvme0n1 -> /dev/nvme0n1p1: names ending in a digit take a "p". */
+function firstPartition(device: string): string {
+  return /\d$/.test(device) ? `${device}p1` : `${device}1`;
+}
+
 function fstabAppend(devVar: string, mountLabel: string): string[] {
   return [
     `uuid=$(blkid -s UUID -o value ${devVar})`,
@@ -39,7 +43,7 @@ function fstabAppend(devVar: string, mountLabel: string): string[] {
   ];
 }
 
-export function registerSwapTools(server: McpServer, ctx: ToolContext): void {
+export function registerSwapTools(server: ToolServer, ctx: ToolContext): void {
   server.registerTool(
     "cluster_swap",
     {
@@ -140,7 +144,7 @@ export function registerSwapTools(server: McpServer, ctx: ToolContext): void {
               throw new Error(`Refusing: ${device} is (part of) ${node.name}'s configured storage device ${storageDevice}.`);
             }
 
-            const partition = args.action === "create" ? `${device}1` : device;
+            const partition = args.action === "create" ? firstPartition(device) : device;
             const script = [
               `set -e`,
               ...ROOT_DISK_GUARD,

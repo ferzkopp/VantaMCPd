@@ -1,13 +1,12 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveTargets } from "../config.js";
 import { errorText, renderResults } from "../format.js";
 import { assertNoControlChars, q, validateAbsPath, validateUnit } from "../security.js";
-import { targetsSchema, timeoutSchema, type ToolContext } from "./context.js";
+import { targetsSchema, timeoutSchema, type ToolContext, type ToolServer } from "./context.js";
 
 const SINCE_RE = /^[A-Za-z0-9 :+_-]{1,64}$/;
 
-export function registerLogTools(server: McpServer, ctx: ToolContext): void {
+export function registerLogTools(server: ToolServer, ctx: ToolContext): void {
   server.registerTool(
     "cluster_logs",
     {
@@ -46,7 +45,9 @@ export function registerLogTools(server: McpServer, ctx: ToolContext): void {
             command = `grep -iE -- ${q(grep)} ${q(path)} | tail -n ${lines}`;
           }
         } else if (source === "dmesg") {
-          command = `dmesg -T 2>/dev/null || dmesg`;
+          // Braces are required: "||" binds looser than "|", so an unguarded fallback would make a
+          // successful "dmesg -T" bypass the grep/tail pipeline and return the whole ring buffer.
+          command = `{ dmesg -T 2>/dev/null || dmesg; }`;
           if (grep) {
             assertNoControlChars(grep, "grep pattern");
             command += ` | grep -iE -- ${q(grep)}`;

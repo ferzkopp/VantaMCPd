@@ -42,7 +42,7 @@
   },
   "jobs": {
     "retentionDays": 7,
-    "pollIntervalMs": 10000,
+    "pollIntervalMs": 60000,
     "cancelGraceMs": 5000,
     "maxLogBytes": 1000000
   },

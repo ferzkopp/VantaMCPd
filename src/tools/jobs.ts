@@ -1,11 +1,10 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveTargets } from "../config.js";
 import { errorText, json } from "../format.js";
 import { JOB_ID } from "../jobs/types.js";
-import { targetsSchema, type ToolContext } from "./context.js";
+import { targetsSchema, type ToolContext, type ToolServer } from "./context.js";
 
-export function registerJobTools(server: McpServer, ctx: ToolContext): void {
+export function registerJobTools(server: ToolServer, ctx: ToolContext): void {
   server.registerTool(
     "cluster_list_jobs",
     {

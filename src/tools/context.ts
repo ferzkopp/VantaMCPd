@@ -1,8 +1,15 @@
 import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ClusterConfig } from "../config.js";
 import type { JobManager } from "../jobs/manager.js";
 import type { ModuleManager } from "../modules/manager.js";
 import type { SshPool } from "../ssh.js";
+
+/**
+ * The only part of the MCP server surface the tool modules need. Registering against this lets the
+ * entry point wrap registration (for audit attribution) without patching the SDK object itself.
+ */
+export type ToolServer = Pick<McpServer, "registerTool">;
 
 export interface ToolContext {
   config: ClusterConfig;

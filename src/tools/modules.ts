@@ -1,8 +1,8 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveTargets } from "../config.js";
 import { errorText, json } from "../format.js";
-import { targetsSchema, timeoutSchema, type ToolContext } from "./context.js";
+import { capabilitySummary } from "../modules/catalog.js";
+import { targetsSchema, timeoutSchema, type ToolContext, type ToolServer } from "./context.js";
 
 function resolveSingleTarget(ctx: ToolContext, target: string) {
   const nodes = resolveTargets(ctx.config, [target]);
@@ -12,7 +12,9 @@ function resolveSingleTarget(ctx: ToolContext, target: string) {
   return nodes[0]!;
 }
 
-export function registerModuleTools(server: McpServer, ctx: ToolContext): void {
+export function registerModuleTools(server: ToolServer, ctx: ToolContext): void {
+  const capabilities = capabilitySummary(ctx.modules.catalog);
+  const offered = capabilities ? `\nAvailable module capabilities (check installation with cluster_list_modules):\n${capabilities}\n` : "";
   server.registerTool(
     "cluster_list_modules",
     {
@@ -144,7 +146,9 @@ export function registerModuleTools(server: McpServer, ctx: ToolContext): void {
       title: "List tools from an installed node MCP module",
       description:
         "Launch one installed module on demand over SSH stdio and return its MCP tools/list response. " +
-        "When target is omitted, selects a reachable installation automatically.",
+        "Call this to discover the exact operations and argument schemas a module provides before using it. " +
+        "When target is omitted, selects a reachable installation automatically." +
+        offered,
       inputSchema: {
         moduleId: z.string().describe("Installed module ID."),
         target: z.string().optional().describe("Optional explicit node name; omit to select an installed instance."),
@@ -164,9 +168,12 @@ export function registerModuleTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Call a tool from an installed node MCP module",
       description:
-        "Launch one installed module over SSH stdio and call a tool that it advertises. " +
+        "Run a workload on the cluster through an installed module. Prefer this over answering from memory " +
+        "when a request matches a capability below, because these operations are deterministic, bounded, and auditable. " +
         "When target is omitted, replicated modules use round-robin routing across reachable installations. " +
-        "Inputs are sent as MCP data and are never interpolated into a shell command.",
+        "Inputs are sent as MCP data and are never interpolated into a shell command." +
+        offered +
+        "Use cluster_list_module_tools for the exact operation names and argument schemas.",
       inputSchema: {
         moduleId: z.string().describe("Installed module ID."),
         target: z.string().optional().describe("Optional explicit node name; omit to use module routing."),
