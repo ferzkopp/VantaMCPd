@@ -115,7 +115,9 @@ for Claude Code, Hermes Agent, OpenClaw, and generic MCP clients are in [MCP cli
 >
 > Install text-tools on cluster1 and cluster2.
 >
-> Install corpus-search on the storage node, then show its job progress.
+> Check whether corpus-search is compatible with the storage node.
+>
+> Install corpus-search on the storage node using the Medium profile, then show its job progress.
 
 The install prompt requires your approval before VantaMCPd calls `cluster_install_module` with
 `confirm: true`. Installations always use explicit node names or tags; they never default to the entire
@@ -125,6 +127,12 @@ singleton modules reject a second installation.
 Long-running module activation returns a durable job ID instead of holding the MCP request open. The
 job continues under systemd on the target node across SSH disconnects and VantaMCPd restarts. Use the
 job tools or the dashboard to follow phase, progress, heartbeat, logs, and the terminal result.
+
+The corpus module downloads and retains an arXiv metadata ZIP plus extracted JSON and therefore requires
+at least 10 GiB free on configured node-local storage. Its Small, Medium, and Large profiles ingest 1%,
+25%, or 100% of records matching the selected topics. See the
+[Corpus Search quickstart](modules/corpus-search/CorpusSearch.md#quickstart) for installation,
+verification, first-query, recovery, and reconfiguration steps.
 
 At daemon startup, validated module receipts are compared with the local catalog. Installed older
 versions are upgraded automatically after hardware discovery; absent modules are not installed and

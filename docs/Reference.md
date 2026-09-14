@@ -162,7 +162,7 @@ Use `cluster_cancel_job` with `confirm: true` to stop a running job.
 ### Node detail
 
 Clicking a row in **Nodes** opens that node's configuration and recorded hardware — access settings,
-CPU, memory and swap devices, the configured storage block, disks with their roles and partitions,
+CPU, detected GPUs with VRAM and CUDA/ROCm capability, memory and swap devices, the configured storage block, disks with their roles and partitions,
 mounted filesystems and OS.
 
 ![Node detail](monitor-node.png)
@@ -414,6 +414,14 @@ Nothing secret belongs in the inventory either — it only holds hosts, users an
     "maxLogMb": 64,
     "logOutput": false          // stdout/stderr previews - off by default
   },
+  "modules": {
+    "corpus-search": {
+      "installOptions": {
+        "profileId": "medium-arxiv-cs",
+        "categories": ["cs.AI", "cs.LG", "cs.CL"]
+      }
+    }
+  },
   "nodes": [
     { "name": "cluster1", "host": "10.0.0.11", "role": "worker", "tags": [] },
     { "name": "cluster2", "host": "10.0.0.12", "role": "worker+storage", "storage": { },
@@ -426,9 +434,19 @@ Nothing secret belongs in the inventory either — it only holds hosts, users an
 Per-node keys override the defaults. `role` defaults to `worker`; a role containing `storage` without a
 `storage` block is rejected at load time.
 
+`modules.<module-id>.installOptions` supplies persistent defaults for that module's manual and automatic
+installs. Values are validated against the module manifest before SSH work, and options passed directly
+to `cluster_install_module` take precedence. Corpus Search accepts `small-arxiv-cs`, `medium-arxiv-cs`,
+or `large-arxiv-cs`; its optional `categories` list replaces the packaged topic list. See the
+[Corpus Search quickstart](../modules/corpus-search/CorpusSearch.md#quickstart) for profile behavior and
+installation verification.
+
 Lookup order for the inventory: `VANTA_CONFIG` → `cluster.config.local.json` → `cluster.config.json`,
 searched in the working directory and then next to the installed package. The shipped
 `cluster.config.example.json` is never picked up implicitly.
+
+The daemon reads configuration and the local module catalog once at startup. After editing module
+defaults or updating module packages, run `npm run build` when source changed and restart the MCP server.
 
 Environment variables (see [.env.example](../.env.example)): `VANTA_CONFIG`, `VANTA_ENV_FILE`,
 `VANTA_KNOWN_HOSTS`, `VANTA_KEY_PASSPHRASE`, `VANTA_SSH_PASSWORD`, `VANTA_SUDO_PASSWORD`.

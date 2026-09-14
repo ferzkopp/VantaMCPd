@@ -229,11 +229,22 @@ Start with these requests in the connected agent:
 > Install text-tools on cluster1 and cluster2.
 >
 > List the tools provided by text-tools.
+>
+> Check whether corpus-search is compatible with the storage node.
+>
+> Install corpus-search on the storage node using the Medium profile, then show its job progress.
 
 The install request requires approval before VantaMCPd calls `cluster_install_module` with
 `confirm: true`. Installations always use explicit node names or tags; they never default to the entire
 cluster. Replicated modules such as Text Tools may be installed on multiple compatible nodes, while
 singleton modules reject a second installation.
+
+Corpus Search additionally requires at least 10 GiB free on a configured node-local storage mount. Its
+Small, Medium, and Large profiles ingest deterministic 1%, 25%, or 100% samples of records matching the
+selected arXiv topics. All profiles retain the same source ZIP and extracted JSON, so the storage
+requirement applies even to Small. Follow the
+[Corpus Search quickstart](../modules/corpus-search/CorpusSearch.md#quickstart) through compatibility,
+durable installation, verification, and the first query.
 
 Replicated modules route targetless calls round-robin across reachable installations. A single call runs
 on one node; parallel work requires independent calls. Set an explicit `target` when work must stay on a

@@ -3,6 +3,7 @@ import { appendFile, mkdirSync, readdirSync, statSync, unlinkSync } from "node:f
 import path from "node:path";
 
 export type AuditKind = "exec" | "sftp" | "connect";
+export type AuditOrigin = "agent" | "engine";
 
 export interface AuditEvent {
   seq: number;
@@ -10,6 +11,7 @@ export interface AuditEvent {
   node: string;
   host: string;
   kind: AuditKind;
+  origin: AuditOrigin;
   module: string;
   tool?: string;
   parameters?: string;
@@ -34,7 +36,12 @@ export interface AuditOptions {
 }
 
 /** Which MCP tool is on the stack, so an SSH call can be attributed without threading a parameter through every call site. */
-const toolContext = new AsyncLocalStorage<{ tool: string; module: string; parameters?: string }>();
+const toolContext = new AsyncLocalStorage<{
+  tool: string;
+  module: string;
+  origin: AuditOrigin;
+  parameters?: string;
+}>();
 export const CORE_MODULE = "core";
 
 function moduleFromParameters(parameters: unknown): string {
@@ -44,22 +51,28 @@ function moduleFromParameters(parameters: unknown): string {
 }
 
 export function withTool<T>(tool: string, fn: () => T): T {
-  return toolContext.run({ tool, module: CORE_MODULE }, fn);
+  return toolContext.run({ tool, module: CORE_MODULE, origin: "engine" }, fn);
 }
 
 export function withToolParameters<T>(tool: string, parameters: unknown, fn: () => T): T {
-  return toolContext.run({ tool, module: moduleFromParameters(parameters), parameters: formatParameters(parameters) }, fn);
+  return toolContext.run({
+    tool,
+    module: moduleFromParameters(parameters),
+    origin: "agent",
+    parameters: formatParameters(parameters),
+  }, fn);
 }
 
 export function currentTool(): string | undefined {
   return toolContext.getStore()?.tool;
 }
 
-export function currentAuditAttribution(): Pick<AuditEvent, "module" | "tool" | "parameters"> {
+export function currentAuditAttribution(): Pick<AuditEvent, "module" | "tool" | "origin" | "parameters"> {
   const context = toolContext.getStore();
   return {
     module: context?.module ?? CORE_MODULE,
     tool: context?.tool,
+    origin: context?.origin ?? "engine",
     parameters: context?.parameters,
   };
 }
@@ -191,9 +204,10 @@ export class AuditLog {
   }
 
   record(
-    input: Omit<AuditEvent, "seq" | "ts" | "module" | "tool" | "parameters"> & {
+    input: Omit<AuditEvent, "seq" | "ts" | "module" | "tool" | "origin" | "parameters"> & {
       module?: string;
       tool?: string;
+      origin?: AuditOrigin;
       parameters?: string;
     },
   ): AuditEvent {
@@ -203,6 +217,7 @@ export class AuditLog {
       ...input,
       module: input.module ?? context?.module ?? CORE_MODULE,
       tool: input.tool ?? context?.tool,
+      origin: input.origin ?? context?.origin ?? "engine",
       parameters:
         input.parameters === undefined ? context?.parameters : clip(input.parameters, PARAMETERS_MAX),
       seq: ++this.seq,
@@ -230,7 +245,15 @@ export class AuditLog {
     return event;
   }
 
-  query(filter: { since?: number; node?: string; module?: string; status?: string; q?: string; limit?: number }): AuditEvent[] {
+  query(filter: {
+    since?: number;
+    node?: string;
+    module?: string;
+    status?: string;
+    q?: string;
+    includeEngine?: boolean;
+    limit?: number;
+  }): AuditEvent[] {
     const needle = filter.q?.toLowerCase();
     const limit = Math.min(Math.max(filter.limit ?? 200, 1), 2000);
     const matched = this.events.filter((e) => {
@@ -238,8 +261,9 @@ export class AuditLog {
       if (filter.node && e.node !== filter.node) return false;
       if (filter.module && e.module !== filter.module) return false;
       if (filter.status && statusKey(e) !== filter.status) return false;
+      if (filter.includeEngine === false && e.origin === "engine") return false;
       if (needle) {
-        const hay = `${e.node} ${e.module} ${e.tool ?? ""} ${e.parameters ?? ""} ${e.command ?? ""} ${e.error ?? ""} ${e.preview ?? ""}`.toLowerCase();
+        const hay = `${e.node} ${e.origin} ${e.module} ${e.tool ?? ""} ${e.parameters ?? ""} ${e.command ?? ""} ${e.error ?? ""} ${e.preview ?? ""}`.toLowerCase();
         if (!hay.includes(needle)) return false;
       }
       return true;
@@ -290,8 +314,9 @@ export class AuditLog {
   }
 
   /** Observed status labels, "ok" first then exit codes ascending. */
-  statuses(): string[] {
-    const seen = [...new Set(this.events.map(statusKey))];
+  statuses(includeEngine = true): string[] {
+    const events = includeEngine ? this.events : this.events.filter((event) => event.origin !== "engine");
+    const seen = [...new Set(events.map(statusKey))];
     return seen.sort((a, b) => {
       if (a === "ok") return -1;
       if (b === "ok") return 1;

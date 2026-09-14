@@ -2,8 +2,8 @@
   "schemaVersion": 2,
   "id": "corpus-search",
   "name": "Scientific Corpus Search",
-  "version": "0.1.0",
-  "description": "Provision and search a compact, provenance-aware arXiv metadata corpus with SQLite FTS5/BM25.",
+  "version": "0.3.0",
+  "description": "Provision and search a sampled, provenance-aware arXiv metadata corpus with SQLite FTS5/BM25.",
   "entrypoint": ["python3", "server.py"],
   "compatibility": {
     "os": ["debian", "ubuntu"],
@@ -23,8 +23,23 @@
   "persistentData": {
     "storage": "node",
     "relativePath": "vantamcpd/corpora/corpus-search",
-    "minFreeMb": 512,
+    "minFreeMb": 10240,
     "retainOnUninstall": true
+  },
+  "installOptions": {
+    "profileId": {
+      "type": "string",
+      "description": "Packaged bulk-snapshot sampling profile to provision.",
+      "values": ["small-arxiv-cs", "medium-arxiv-cs", "large-arxiv-cs"],
+      "default": "small-arxiv-cs"
+    },
+    "categories": {
+      "type": "string-list",
+      "description": "Optional arXiv topics that replace the profile's default topic selection.",
+      "minItems": 1,
+      "maxItems": 50,
+      "itemPattern": "^[A-Za-z0-9.-]{1,40}$"
+    }
   },
   "deployment": { "mode": "singleton" },
   "runtime": { "mode": "on-demand" },

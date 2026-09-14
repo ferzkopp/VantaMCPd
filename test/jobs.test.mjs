@@ -3,7 +3,7 @@ import path from "node:path";
 import test from "node:test";
 import { JobManager } from "../dist/jobs/manager.js";
 import { JobRegistry } from "../dist/jobs/registry.js";
-import { isTerminalJobStatus, parseJobState } from "../dist/jobs/types.js";
+import { isTerminalJobStatus, jobStatusKey, parseJobState } from "../dist/jobs/types.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -51,6 +51,10 @@ test("validates durable job states and terminal statuses", () => {
   assert.equal(state.status, "queued");
   assert.equal(isTerminalJobStatus("running"), false);
   assert.equal(isTerminalJobStatus("succeeded"), true);
+  assert.equal(jobStatusKey({ status: "succeeded" }), "ok");
+  assert.equal(jobStatusKey({ status: "failed", result: { exitCode: 23 } }), "exit 23");
+  assert.equal(jobStatusKey({ status: "failed" }), "error");
+  assert.equal(jobStatusKey({ status: "running" }), "running");
   assert.throws(() => parseJobState({ ...state, unexpected: true }), /unrecognized key/i);
 });
 
@@ -73,8 +77,12 @@ test("rejects unregistered job kinds before remote execution", async () => {
 test("submits an allowlisted job as a remote systemd unit", async () => {
   const target = node();
   const commands = [];
+  let listOptions;
   const pool = {
-    execMany: async () => [execResult(target)],
+    execMany: async (_nodes, _command, options) => {
+      listOptions = options;
+      return [execResult(target)];
+    },
     exec: async (_node, command, options) => {
       commands.push({ command, options });
       return execResult(target);
@@ -95,11 +103,13 @@ test("submits an allowlisted job as a remote systemd unit", async () => {
   assert.equal(state.targetNode, target.name);
   assert.match(state.jobId, /^[0-9a-f-]{36}$/);
   assert.equal(commands.length, 1);
-  assert.match(commands[0].command, /systemctl enable --now/);
+  assert.match(commands[0].command, /systemctl enable /);
+  assert.match(commands[0].command, /systemctl start --no-block/);
   assert.match(commands[0].command, /remote-runner\.py/);
   assert.match(commands[0].command, /mktemp .*\.spec\.XXXXXX/);
   assert.match(commands[0].command, /mv -f "\$spec_tmp"/);
   assert.equal(commands[0].options.sudo, true);
+  assert.equal(listOptions.sudo, true);
 });
 
 test("reconciliation fails a nonterminal job whose systemd unit is inactive", async () => {
@@ -162,4 +172,33 @@ test("blocks a job when an active remote job owns the same resource", async () =
     }),
     /Resource is busy with job/,
   );
+});
+
+test("reconciliation gives a newly queued systemd job time to start", async () => {
+  const target = node();
+  const queued = {
+    schemaVersion: 1,
+    jobId: "12345678-1234-4234-8234-123456789abc",
+    kind: "module-install",
+    status: "queued",
+    targetNode: target.name,
+    moduleId: "corpus-search",
+    resourceKeys: ["module:corpus-search:storage-node"],
+    createdAt: new Date().toISOString(),
+  };
+  const encoded = Buffer.from(JSON.stringify(queued)).toString("base64") + "\n";
+  let execCalls = 0;
+  const pool = {
+    execMany: async () => [execResult(target, encoded)],
+    exec: async () => {
+      execCalls += 1;
+      return execResult(target, "__FAILED__");
+    },
+  };
+  const registry = new JobRegistry();
+  registry.register("module-install");
+  const manager = new JobManager(config(target), pool, registry, path.join(root, "src", "jobs", "remote-runner.py"));
+  const result = await manager.reconcile();
+  assert.equal(result.jobs[0].status, "queued");
+  assert.equal(execCalls, 0);
 });

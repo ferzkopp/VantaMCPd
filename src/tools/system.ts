@@ -61,7 +61,7 @@ export function registerSystemTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "List cluster nodes",
       description:
-        "List the configured cluster nodes with host, user, role, tags, sudo mode, storage config and the recorded hardware inventory (CPU, memory, disks, OS). Start here to discover valid target names and per-node capacity. Also reports the local monitoring dashboard URL, if one is running - worth telling the user about when they want to watch what you are doing.",
+        "List the configured cluster nodes with host, user, role, tags, sudo mode, storage config and the recorded hardware inventory (CPU, GPU/accelerators, memory, disks, OS). Start here to discover valid target names and per-node capacity. Also reports the local monitoring dashboard URL, if one is running - worth telling the user about when they want to watch what you are doing.",
       inputSchema: {},
     },
     async () => {
@@ -103,7 +103,7 @@ export function registerSystemTools(server: McpServer, ctx: ToolContext): void {
     {
       title: "Hardware inventory",
       description:
-        "Report the recorded hardware of each target: CPU (model, SoC, architecture, cores, max MHz), memory and swap size, block devices, mounted filesystems and OS/kernel/board. Nodes are probed automatically the first time the daemon connects; pass refresh:true to re-probe (e.g. after adding a disk or upgrading the OS), which also writes the result back to the inventory file.",
+        "Report the recorded hardware of each target: CPU (model, SoC, architecture, cores, max MHz), GPUs/accelerators (vendor, model, memory, runtime), memory and swap size, block devices, mounted filesystems and OS/kernel/board. Nodes are probed automatically the first time the daemon connects; pass refresh:true to re-probe (e.g. after adding a GPU or disk, or upgrading the OS), which also writes the result back to the inventory file.",
       inputSchema: {
         targets: targetsSchema,
         refresh: z.boolean().optional().describe("Re-probe the nodes over SSH instead of returning the recorded values."),

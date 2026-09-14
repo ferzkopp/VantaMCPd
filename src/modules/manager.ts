@@ -133,6 +133,43 @@ function normalizeModuleOutput(result: unknown): unknown {
   }
 }
 
+function installOptionEnvironment(modulePackage: ModulePackage, provided: Record<string, unknown>): Record<string, string> {
+  const definitions = modulePackage.manifest.installOptions;
+  const unknown = Object.keys(provided).filter((name) => definitions[name] === undefined);
+  if (unknown.length > 0) {
+    throw new Error(`Unknown install option${unknown.length === 1 ? "" : "s"} for ${modulePackage.manifest.id}: ${unknown.join(", ")}.`);
+  }
+
+  const environment: Record<string, string> = {};
+  for (const [name, definition] of Object.entries(definitions)) {
+    const value = provided[name] ?? (definition.type === "string-list" ? undefined : definition.default);
+    if (value === undefined) continue;
+    if (definition.type === "integer") {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < definition.minimum || value > definition.maximum) {
+        throw new Error(`Install option ${name} must be an integer from ${definition.minimum} to ${definition.maximum}.`);
+      }
+      environment[`VANTA_MODULE_OPTION_${name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase()}`] = String(value);
+      continue;
+    }
+    if (definition.type === "string") {
+      if (typeof value !== "string" || !definition.values.includes(value)) {
+        throw new Error(`Install option ${name} must be one of: ${definition.values.join(", ")}.`);
+      }
+      environment[`VANTA_MODULE_OPTION_${name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase()}`] = value;
+      continue;
+    }
+    if (!Array.isArray(value) || value.length < definition.minItems || value.length > definition.maxItems) {
+      throw new Error(`Install option ${name} must contain from ${definition.minItems} to ${definition.maxItems} strings.`);
+    }
+    const pattern = new RegExp(definition.itemPattern);
+    if (!value.every((item) => typeof item === "string" && pattern.test(item))) {
+      throw new Error(`Install option ${name} contains an invalid value.`);
+    }
+    environment[`VANTA_MODULE_OPTION_${name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase()}`] = JSON.stringify(value);
+  }
+  return environment;
+}
+
 export class ModuleManager {
   readonly catalog: ModuleCatalog;
   private readonly moduleMutations = new Map<string, Promise<void>>();
@@ -185,6 +222,7 @@ export class ModuleManager {
             .map((state) => [state.node, state.moduleVersions?.[item.manifest.id]]),
         ),
         requirements: item.manifest.compatibility,
+        installOptions: item.manifest.installOptions,
         nodes: nodes.map((node) => {
           const state = byNode.get(node.name);
           const lifecycleJob = jobInventory?.jobs.find(
@@ -292,9 +330,16 @@ export class ModuleManager {
     });
   }
 
-  async install(moduleId: string, nodes: ResolvedNode[], timeoutMs = 300_000): Promise<ModuleInstallResult[]> {
+  async install(
+    moduleId: string,
+    nodes: ResolvedNode[],
+    timeoutMs = 300_000,
+    options: Record<string, unknown> = {},
+  ): Promise<ModuleInstallResult[]> {
     return this.withModuleMutation(moduleId, async () => {
       const modulePackage = this.get(moduleId);
+      const configuredOptions = this.config.modules?.[moduleId]?.installOptions ?? {};
+      const optionEnvironment = installOptionEnvironment(modulePackage, { ...configuredOptions, ...options });
       await this.assertInstallPlacement(modulePackage, nodes, timeoutMs);
       const checks = await this.check(moduleId, nodes, Math.min(timeoutMs, 30_000));
       const results = await mapLimit(nodes, this.config.maxConcurrency, async (node, index) => {
@@ -338,7 +383,7 @@ export class ModuleManager {
             error: `post-dependency preflight ${check.compatibility.status}: ${detail}`,
           };
         }
-        return this.installOnNode(modulePackage, node, timeoutMs);
+        return this.installOnNode(modulePackage, node, timeoutMs, optionEnvironment);
       });
       this.routeCursors.delete(moduleId);
       if (results.some((result) => result.ok)) this.notifyInventoryChanged();
@@ -636,8 +681,19 @@ export class ModuleManager {
     const receipt = await this.readInstalledReceipt(modulePackage, node);
     const { limits } = modulePackage.manifest;
     const command = receipt.entrypoint.map(q).join(" ");
+    const data = modulePackage.manifest.persistentData;
+    if (data && !node.storage) {
+      throw new Error(`Module ${modulePackage.manifest.id} requires configured node-local storage on ${node.name}.`);
+    }
+    const environment = data && node.storage
+      ? {
+          VANTA_MODULE_DATA_DIR: path.posix.join(node.storage.mountpoint, data.relativePath),
+          VANTA_MODULE_DATA_MOUNT: node.storage.mountpoint,
+          VANTA_MODULE_RUN_AS: node.user,
+        }
+      : undefined;
     const transport = new SshMcpTransport(
-      () => this.pool.openProcess(node, command, { cwd: receipt.installDirectory }),
+      () => this.pool.openProcess(node, command, { cwd: receipt.installDirectory, env: environment }),
       { maxInputBytes: limits.maxInputBytes, maxOutputBytes: limits.maxOutputBytes },
     );
     const client = new Client({ name: "vantamcpd-module-proxy", version: "0.1.0" });
@@ -782,6 +838,7 @@ export class ModuleManager {
     modulePackage: ModulePackage,
     node: ResolvedNode,
     timeoutMs: number,
+    optionEnvironment: Record<string, string>,
   ): Promise<ModuleInstallResult> {
     const { id, version } = modulePackage.manifest;
     const stage = `/tmp/vantamcpd-${id}-${randomUUID()}`;
@@ -876,6 +933,7 @@ export class ModuleManager {
         VANTA_MODULE_STAGE: stage,
         VANTA_MODULE_INSTALL_DIR: installDirectory,
         VANTA_MODULE_CURRENT_LINK: currentLink,
+        ...optionEnvironment,
         ...(dataDirectory && node.storage
           ? {
               VANTA_MODULE_DATA_DIR: dataDirectory,

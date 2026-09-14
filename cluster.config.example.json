@@ -8,6 +8,7 @@
     "The 'hardware' block is written by the daemon (or 'npm run discover') the first time it connects -",
     "you never need to fill it in. Set defaults.autoDiscoverHardware to false to opt out.",
     "Installed modules older than the local catalog are updated on startup by default. Set defaults.autoUpdateModules to false to opt out.",
+    "Optional modules.<id>.installOptions values become defaults for manual and automatic installs.",
     "'diskRoles' is yours: it overrides disk-role detection and is never overwritten by a refresh."
   ],
   "defaults": {
@@ -44,6 +45,13 @@
     "pollIntervalMs": 10000,
     "cancelGraceMs": 5000,
     "maxLogBytes": 1000000
+  },
+  "modules": {
+    "corpus-search": {
+      "installOptions": {
+        "profileId": "small-arxiv-cs"
+      }
+    }
   },
   "nodes": [
     {

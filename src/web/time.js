@@ -17,3 +17,14 @@ export function formatUtcTimestamp(value) {
   const timestamp = new Date(value);
   return Number.isFinite(timestamp.getTime()) ? timestamp.toISOString() : "-";
 }
+
+export function formatDuration(milliseconds) {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "-";
+  const seconds = Math.round(milliseconds / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m ${remainingSeconds}s`;
+}

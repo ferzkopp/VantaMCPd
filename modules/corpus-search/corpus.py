@@ -114,13 +114,20 @@ def info(database: Path) -> dict[str, Any]:
             "SELECT primary_category AS category, count(*) AS records FROM papers "
             "WHERE primary_category IS NOT NULL GROUP BY primary_category ORDER BY records DESC, category LIMIT 100"
         )]
+    sample_percent = metadata.get("sample_percent")
+    configured_categories = metadata.get("configured_categories")
     return {
         "schemaVersion": metadata.get("schema_version"),
         "profileId": metadata.get("profile_id"),
         "profileHash": metadata.get("profile_hash"),
+        "samplePercent": int(sample_percent) if sample_percent is not None else None,
+        "contentMode": metadata.get("content_mode", "profile"),
+        "topics": json.loads(configured_categories) if configured_categories is not None else None,
         "source": metadata.get("source"),
         "sourceUrl": metadata.get("source_url"),
+        "catchUpSourceUrl": metadata.get("catchup_source_url"),
         "sourceTermsUrl": metadata.get("source_terms_url"),
+        "snapshotCutoff": metadata.get("snapshot_cutoff"),
         "cutoff": metadata.get("cutoff"),
         "refreshedAt": metadata.get("refreshed_at"),
         "records": count,

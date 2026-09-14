@@ -175,12 +175,18 @@ const JobsSchema = z.object({
   maxLogBytes: z.number().int().min(1_024).max(100_000_000).default(1_000_000),
 });
 
+const ModuleDefaultsSchema = z.record(
+  z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  z.object({ installOptions: z.record(z.unknown()).default({}) }).strict(),
+).default({});
+
 const ConfigSchema = z.object({
   $schema: z.string().optional(),
   defaults: DefaultsSchema.default({}),
   security: SecuritySchema.default({}),
   monitoring: MonitoringSchema.default({}),
   jobs: JobsSchema.default({}),
+  modules: ModuleDefaultsSchema,
   nodes: z.array(NodeSchema).min(1),
 });
 
@@ -189,6 +195,7 @@ export type StorageConfig = z.infer<typeof StorageSchema>;
 export type SecurityConfig = z.infer<typeof SecuritySchema>;
 export type MonitoringConfig = z.infer<typeof MonitoringSchema>;
 export type JobsConfig = z.infer<typeof JobsSchema>;
+export type ModuleDefaultsConfig = z.infer<typeof ModuleDefaultsSchema>;
 export type NodeHardware = z.infer<typeof HardwareSchema>;
 export type AcceleratorInfo = z.infer<typeof AcceleratorSchema>;
 export type DiskInfo = z.infer<typeof DiskSchema>;
@@ -219,6 +226,7 @@ export interface ClusterConfig {
   security: SecurityConfig;
   monitoring: MonitoringConfig;
   jobs: JobsConfig;
+  modules: ModuleDefaultsConfig;
   maxConcurrency: number;
   autoDiscoverHardware: boolean;
   autoUpdateModules: boolean;
@@ -356,6 +364,7 @@ export function loadConfig(explicitPath?: string): ClusterConfig {
     security: raw.security,
     monitoring: { ...raw.monitoring, logDir: path.resolve(expandHome(raw.monitoring.logDir)) },
     jobs: raw.jobs,
+    modules: raw.modules,
     maxConcurrency: d.maxConcurrency,
     autoDiscoverHardware: d.autoDiscoverHardware,
     autoUpdateModules: d.autoUpdateModules,

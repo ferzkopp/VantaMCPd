@@ -54,7 +54,7 @@ async function main(): Promise<void> {
       instructions:
         "Manages a heterogeneous cluster of Debian/Armbian nodes over SSH.\n" +
         "Call cluster_list_nodes first to learn the available node names, roles, tags and recorded hardware " +
-        "(CPU cores/architecture, memory, disks, OS); use cluster_hardware for the full detail or to re-probe. " +
+        "(CPU cores/architecture, GPU/accelerators, memory, disks, OS); use cluster_hardware for the full detail or to re-probe. " +
         "Most tools accept a `targets` array of node names, tags, or omit it to hit every node.\n" +
         "These nodes are resource constrained: check the hardware inventory before installing anything, prefer dry runs " +
         "for apt operations, avoid long-running foreground builds, and check free disk space with cluster_status.\n" +

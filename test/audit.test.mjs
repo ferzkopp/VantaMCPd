@@ -35,6 +35,7 @@ test("attributes redacted tool parameters to downstream audit events", () => {
 
     assert.equal(event.module, "text-tools");
     assert.equal(event.tool, "cluster_install_module");
+    assert.equal(event.origin, "agent");
     assert.match(event.parameters, /"moduleId":"text-tools"/);
     assert.doesNotMatch(event.parameters, /do-not-log|also-secret/);
     assert.equal(audit.query({ module: "text-tools" }).length, 1);
@@ -68,6 +69,7 @@ test("attributes non-module operations to core", () => {
     );
 
     assert.equal(event.module, "core");
+    assert.equal(event.origin, "agent");
     assert.deepEqual(audit.modules(), ["core"]);
     assert.equal(audit.query({ module: "core" }).length, 1);
     assert.equal(audit.query({ module: "text-tools" }).length, 0);
@@ -102,7 +104,35 @@ test("preserves captured attribution when work completes under another context",
 
     assert.equal(event.module, "text-tools");
     assert.equal(event.tool, "cluster_call_module_tool");
+    assert.equal(event.origin, "agent");
     assert.match(event.parameters, /"moduleId":"text-tools"/);
+  } finally {
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
+
+test("marks internal work as engine polling and excludes it on request", () => {
+  const logDir = mkdtempSync(path.join(tmpdir(), "vantamcpd-audit-"));
+  try {
+    const audit = new AuditLog({ logDir, maxEvents: 10, maxLogMb: 1, logOutput: false });
+    const event = withTool("job_reconcile", () =>
+      audit.record({
+        node: "cluster1",
+        host: "192.0.2.1",
+        kind: "exec",
+        command: "read job states",
+        sudo: true,
+        ok: true,
+        code: 0,
+        durationMs: 1,
+        bytesOut: 0,
+        bytesErr: 0,
+      }));
+
+    assert.equal(event.origin, "engine");
+    assert.equal(audit.query({ includeEngine: true }).length, 1);
+    assert.equal(audit.query({ includeEngine: false }).length, 0);
+    assert.deepEqual(audit.statuses(false), []);
   } finally {
     rmSync(logDir, { recursive: true, force: true });
   }

@@ -22,7 +22,7 @@ The currently implemented user-facing management tools are:
 
 | Tool | Status | Use |
 | --- | --- | --- |
-| `cluster_list_modules` | Available | List packages, deployment policy, compatibility, and live installation state |
+| `cluster_list_modules` | Available | List packages, install options, deployment policy, compatibility, and live installation state |
 | `cluster_check_module` | Available | Check recorded capabilities, required commands, free disk, and reachability |
 | `cluster_install_module` | Available | Install a compatible package on explicit targets after `confirm: true` |
 | `cluster_uninstall_module` | Available | Remove the payload and receipt safely from explicit targets after `confirm: true` |
@@ -42,7 +42,7 @@ reloads the local catalog.
 | Module | Package version | Requirements | Included tools | Guide |
 | --- | --- | --- | --- | --- |
 | Text Tools (`text-tools`) | `0.2.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | Four compatibility tools plus 11 bounded category tools | [Text Tools](../modules/text-tools/TextTools.md) |
-| Scientific Corpus Search (`corpus-search`) | `0.1.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 512 MB free, Python 3, SQLite 3 | Search, exact record lookup, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
+| Scientific Corpus Search (`corpus-search`) | `0.3.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 10 GiB free, Python 3, SQLite 3 | Search, exact record lookup, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
 
 ### Activate a Module
 
@@ -63,6 +63,25 @@ must obtain approval before calling `cluster_install_module` with `confirm: true
 package over SFTP, verifies every SHA-256 hash, runs its trusted installer, switches the active version,
 and writes a root-owned receipt. When commands are missing, declared apt packages are installed first
 and preflight is repeated. A failed activation retains the previous active version.
+
+A schema-v2 module may declare typed `installOptions`. `cluster_list_modules` returns their descriptions,
+defaults, and bounds. Pass selected values in the `options` object of `cluster_install_module`; unknown
+names, invalid types, and out-of-range values are rejected before any remote work. VantaMCPd forwards
+only declared values to the trusted lifecycle script through namespaced environment variables.
+
+Persistent installation defaults may be set in `cluster.config.local.json`; explicit tool arguments
+override them. Defaults use the same manifest validation before any SSH work. Restart VantaMCPd after
+editing the inventory because configuration is loaded once at startup:
+
+```json
+{
+  "modules": {
+    "corpus-search": {
+      "installOptions": { "profileId": "medium-arxiv-cs" }
+    }
+  }
+}
+```
 
 Schema-v2 job-backed activation returns `state: "provisioning"` and a `jobId` after verified staging.
 The remote systemd oneshot owns the lifecycle operation from that point, so it survives an MCP or SSH
@@ -403,14 +422,18 @@ features are documented in [Text Tools operations](../modules/text-tools/Operati
 ## Scientific Corpus Search
 
 `corpus-search` is a singleton, on-demand module installed directly on a configured storage node. Its
-compact `compact-arxiv-cs` profile provisions at most 10,000 deduplicated arXiv computer-science
-metadata records into SQLite FTS5 and ranks searches with BM25. It stores titles, abstracts, authors,
-categories, identifiers, provenance, and external links; it does not mirror papers or PDFs.
+Small, Medium, and Large profiles deterministically ingest 1%, 25%, or 100% of bulk-snapshot records
+matching the configured arXiv topics into SQLite FTS5 and rank searches with BM25. It stores titles,
+abstracts, authors, categories, identifiers, provenance, and external links; it does not mirror papers
+or PDFs.
 
-Provisioning is a durable job, makes one arXiv API request at a time with at least three seconds between
-requests, checkpoints pages for resume, and atomically activates only a validated replacement database.
-The tools are `corpus_search`, `corpus_get`, and `corpus_info`. See
-[Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) for usage and data lifecycle.
+Provisioning is a durable job that downloads the Cornell University snapshot ZIP, extracts and streams
+its JSONL metadata, then uses rate-limited OAI-PMH requests to add newer matching articles. ZIP download,
+JSON ingestion, and OAI pagination are resumable, and only a validated replacement database is activated.
+The tools are `corpus_search`, `corpus_get`, and `corpus_info`. All profiles require 10 GiB free because
+the ZIP and extracted JSON are retained regardless of sample percentage. See the
+[Scientific Corpus Search quickstart](../modules/corpus-search/CorpusSearch.md#quickstart) for profile
+selection, installation progress, verification, first use, recovery, and data lifecycle.
 
 ## Current-node Feasibility Snapshot
 
@@ -420,7 +443,7 @@ Ratings below describe a useful implementation on the current ARMv7/1 GB nodes o
 | --- | --- | --- |
 | Regex, parsing, and extraction | High | Python standard library; selected MVP |
 | Artifact storage | High | Local filesystem or existing NFS, with quotas and retention |
-| Documentation/scientific corpus | Implemented for a compact subset | SQLite FTS5/BM25 over up to 10,000 arXiv metadata records; no embeddings |
+| Documentation/scientific corpus | Implemented with selectable sampling | SQLite FTS5/BM25 over 1%, 25%, or 100% of matching arXiv snapshot metadata; no embeddings |
 | Image processing | High for basic transforms | Pillow or ImageMagick resize/crop/filter; no neural models |
 | Python execution | Medium | Basic Python only; needs sandbox and resource limits |
 | NumPy/SciPy compute | Medium | Prefer Debian armhf packages and OpenBLAS; memory limits apply |
@@ -479,7 +502,7 @@ A curated Kiwix or SQLite subset is more realistic than a full Wikipedia vector 
 
 #### Documentation and Knowledge Corpus Extensions
 
-The implemented `corpus-search` baseline uses SQLite FTS5/BM25 and a compact arXiv metadata profile.
+The implemented `corpus-search` baseline uses SQLite FTS5/BM25 and selectable arXiv metadata sampling.
 Future adapters could add curated technical documentation, internal engineering documents, or other
 approved collections. Candidate orchestration libraries include [Haystack](https://haystack.deepset.ai/), [LangChain](https://python.langchain.com/), and [Hugging Face Datasets](https://huggingface.co/docs/datasets/).
 
@@ -567,6 +590,6 @@ The first release is complete when:
 5. Extend trusted lifecycle jobs with quotas and additional allowlisted job kinds.
 6. Add shared artifact storage and retention controls.
 7. Add dashboard lifecycle actions only after authentication, authorization, CSRF, and confirmation UX are designed.
-8. Add corpus adapters beyond the implemented compact arXiv metadata profile.
+8. Add corpus adapters beyond the implemented sampled arXiv metadata profiles.
 9. Add precomputed embeddings and vector backends only for compatible node profiles.
 10. Add more capable arm64/x86-64 or accelerator-backed nodes for browser and ML modules; discover their capabilities through the same inventory and evaluate them through the same manifest contract.

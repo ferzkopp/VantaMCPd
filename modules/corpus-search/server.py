@@ -8,7 +8,7 @@ from typing import Any
 from corpus import get_paper, info, search, self_test, verify, connect
 
 PROTOCOL_VERSION = "2025-06-18"
-VERSION = "0.1.0"
+VERSION = "0.3.0"
 
 
 def database_path() -> Path:

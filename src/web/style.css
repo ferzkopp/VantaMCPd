@@ -48,6 +48,31 @@ input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(
 button { cursor: pointer }
 button.active { border-color: var(--accent); color: var(--accent) }
 
+.toggle-filter { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); cursor: pointer; user-select: none }
+.toggle-filter input { position: absolute; opacity: 0; pointer-events: none }
+.toggle-track {
+  width: 30px;
+  height: 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #0d1117;
+  position: relative;
+  pointer-events: none;
+}
+.toggle-track::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  left: 2px;
+  top: 2px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+.toggle-filter input:checked + .toggle-track { border-color: var(--accent) }
+.toggle-filter input:checked + .toggle-track::after { left: 16px; background: var(--accent) }
+.toggle-filter input:focus-visible + .toggle-track { outline: 1px solid var(--accent); outline-offset: 2px }
+
 /* min-width lets the filter shrink so the header stays on one line. */
 .grow { flex: 1; min-width: 80px }
 .count { margin-left: auto }
@@ -59,7 +84,7 @@ table { border-collapse: collapse; width: 100% }
 .table-scroll { overflow-x: auto }
 #summary { min-width: 940px }
 #modules { min-width: 760px }
-#jobs { min-width: 840px }
+#jobs { min-width: 1210px }
 th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap }
 th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .5px }
 
@@ -79,8 +104,8 @@ th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: upper
   align-items: center;
 }
 .card h2 .hint { color: var(--dim); font-weight: 400; text-transform: none; letter-spacing: 0 }
+.section-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 10px }
 .section-link {
-  margin-left: auto;
   color: var(--accent);
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -99,7 +124,7 @@ th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: upper
 /* One grid definition shared by the header and the rows, so the columns stay aligned. */
 .row {
   display: grid;
-  grid-template-columns: 190px 90px 110px 190px 62px 80px 220px minmax(240px, 1fr);
+  grid-template-columns: 190px 90px 110px 190px 64px 62px 80px 220px minmax(240px, 1fr);
   gap: 8px;
   padding: 3px 10px;
   align-items: baseline;
@@ -143,6 +168,7 @@ dialog {
   max-height: 86vh;
   font: inherit;
 }
+dialog.node-detail-dialog { width: min(1100px, 94vw); max-height: 94vh }
 dialog::backdrop { background: rgba(0, 0, 0, .6) }
 
 .dlg-head {
@@ -160,6 +186,19 @@ dialog::backdrop { background: rgba(0, 0, 0, .6) }
 .dlg-body { padding: 12px 14px; overflow: auto; max-height: 72vh }
 /* Focus lands here on open so the close button does not show a ring. */
 .dlg-body:focus { outline: none }
+.dlg-body.node-detail {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 18px;
+  padding: 10px 12px;
+  max-height: calc(94vh - 44px);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.dlg-body.node-detail .sec { min-width: 0; margin-bottom: 0 }
+.dlg-body.node-detail .kv { grid-template-columns: 120px minmax(0, 1fr) }
+.dlg-body.node-detail .sec > h3 { margin-bottom: 3px; padding-bottom: 2px }
+.dlg-body.node-detail .sub { margin-top: 3px; padding: 3px 6px }
 
 .sec { margin-bottom: 14px }
 .sec > h3 {
@@ -191,3 +230,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .6) }
 
 .x { margin-left: auto; background: none; border: none; color: var(--dim); font-size: 18px; line-height: 1; padding: 0 4px }
 .x:hover { color: var(--fg) }
+
+@media (max-width: 720px) {
+  .dlg-body.node-detail { grid-template-columns: 1fr }
+}

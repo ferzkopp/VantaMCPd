@@ -72,16 +72,17 @@ export function registerModuleTools(server: McpServer, ctx: ToolContext): void {
       inputSchema: {
         moduleId: z.string().describe("Module ID from cluster_list_modules."),
         targets: z.array(z.string()).min(1).describe("Explicit node names or tags. The value 'all' is not accepted."),
+        options: z.record(z.unknown()).optional().describe("Module-defined options advertised by cluster_list_modules."),
         confirm: z.boolean().optional().describe("Must be true to authorize remote installation."),
         timeoutMs: timeoutSchema,
       },
     },
-    async ({ moduleId, targets, confirm, timeoutMs }) => {
+    async ({ moduleId, targets, options, confirm, timeoutMs }) => {
       try {
         if (confirm !== true) throw new Error("Installation requires confirm: true.");
         if (targets.includes("all")) throw new Error("Installation requires explicit node names or tags; 'all' is not accepted.");
         const nodes = resolveTargets(ctx.config, targets);
-        return json({ nodes: await ctx.modules.install(moduleId, nodes, timeoutMs) });
+        return json({ nodes: await ctx.modules.install(moduleId, nodes, timeoutMs, options) });
       } catch (err) {
         return errorText(err);
       }

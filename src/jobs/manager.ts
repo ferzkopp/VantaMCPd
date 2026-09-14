@@ -11,6 +11,7 @@ import { isTerminalJobStatus, parseJobState, TrustedJobSpecSchema, type JobState
 const JOB_ROOT = "/var/lib/vantamcpd/jobs";
 const RUNNER_VERSION = "1";
 const RUNNER_PATH = `/opt/vantamcpd/job-runner/${RUNNER_VERSION}/remote-runner.py`;
+const QUEUED_START_GRACE_MS = 60_000;
 
 export interface SubmitJobInput {
   kind: string;
@@ -121,7 +122,8 @@ export class JobManager {
       `mv -f "$spec_tmp" ${q(`${directory}/spec.json`)}; mv -f "$state_tmp" ${q(`${directory}/state.json`)}`,
       `printf '%s' ${q(encode(unit))} | base64 -d > ${q(`/etc/systemd/system/${unitName(jobId)}`)}`,
       "systemctl daemon-reload",
-      `systemctl enable --now ${q(unitName(jobId))}`,
+      `systemctl enable ${q(unitName(jobId))}`,
+      `systemctl start --no-block ${q(unitName(jobId))}`,
     ].join("\n");
     const result = await this.pool.exec(node, command, { sudo: true, timeoutMs: 60_000, maxOutputBytes: 64 * 1024 });
     if (!result.ok) throw new Error(result.error ?? (result.stderr.trim() || `Failed to submit job ${jobId}.`));
@@ -131,7 +133,7 @@ export class JobManager {
 
   async list(nodes = this.config.nodes): Promise<ListedJobs> {
     const command = `for file in ${JOB_ROOT}/*/state.json; do [ -f "$file" ] || continue; base64 -w0 "$file"; printf '\\n'; done`;
-    const results = await this.pool.execMany(nodes, command, { timeoutMs: 30_000, maxOutputBytes: 2_000_000 });
+    const results = await this.pool.execMany(nodes, command, { sudo: true, timeoutMs: 30_000, maxOutputBytes: 2_000_000 });
     const jobs: JobState[] = [];
     const unreachableNodes: string[] = [];
     const invalidStates: { node: string; error: string }[] = [];
@@ -180,6 +182,7 @@ export class JobManager {
     const node = this.config.nodes.find((candidate) => candidate.name === job.targetNode)!;
     const bytes = Math.min(Math.max(maxBytes, 1), this.config.jobs.maxLogBytes);
     const result = await this.pool.exec(node, `tail -c ${bytes} ${q(`${JOB_ROOT}/${job.jobId}/job.log`)} 2>/dev/null || true`, {
+      sudo: true,
       timeoutMs: 30_000,
       maxOutputBytes: bytes,
     });
@@ -209,6 +212,7 @@ export class JobManager {
       const node = this.config.nodes.find((candidate) => candidate.name === job.targetNode);
       if (!node) continue;
       if (!isTerminalJobStatus(job.status)) {
+        if (job.status === "queued" && now - Date.parse(job.createdAt) < QUEUED_START_GRACE_MS) continue;
         const message = "Job runner is not active; recovered during reconciliation.";
         const activeStates = "active|activating|reloading|deactivating";
         const command = `state=$(systemctl is-active ${q(unitName(job.jobId))} 2>/dev/null || true); ` +

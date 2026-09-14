@@ -5,6 +5,7 @@ const MODULE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SEMVER = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const COMMAND = /^[A-Za-z0-9][A-Za-z0-9+._-]*$/;
 const APT_PACKAGE = /^[a-z0-9][a-z0-9+._-]*$/;
+const INSTALL_OPTION = /^[a-z][A-Za-z0-9]*$/;
 
 const RelativePathSchema = z.string().min(1).max(200).refine((value) => {
   if (value.includes("\0") || value.includes("\\") || path.posix.isAbsolute(value)) return false;
@@ -49,6 +50,64 @@ const PersistentDataSchema = z
   })
   .strict();
 
+const IntegerInstallOptionSchema = z
+  .object({
+    type: z.literal("integer"),
+    description: z.string().min(1).max(300),
+    minimum: z.number().int(),
+    maximum: z.number().int(),
+    default: z.number().int().optional(),
+  })
+  .strict()
+  .superRefine((option, context) => {
+    if (option.minimum > option.maximum) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["maximum"], message: "must be at least minimum" });
+    }
+    if (option.default !== undefined && (option.default < option.minimum || option.default > option.maximum)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["default"], message: "must be within minimum and maximum" });
+    }
+  });
+
+const StringListInstallOptionSchema = z
+  .object({
+    type: z.literal("string-list"),
+    description: z.string().min(1).max(300),
+    minItems: z.number().int().min(1).max(100),
+    maxItems: z.number().int().min(1).max(100),
+    itemPattern: z.string().min(1).max(200).refine((value) => {
+      try {
+        new RegExp(value);
+        return true;
+      } catch {
+        return false;
+      }
+    }, "must be a valid regular expression"),
+  })
+  .strict()
+  .refine((option) => option.minItems <= option.maxItems, {
+    path: ["maxItems"],
+    message: "must be at least minItems",
+  });
+
+const StringInstallOptionSchema = z
+  .object({
+    type: z.literal("string"),
+    description: z.string().min(1).max(300),
+    values: z.array(z.string().min(1).max(100)).min(1).max(100),
+    default: z.string().min(1).max(100).optional(),
+  })
+  .strict()
+  .superRefine((option, context) => {
+    if (new Set(option.values).size !== option.values.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["values"], message: "must contain unique values" });
+    }
+    if (option.default !== undefined && !option.values.includes(option.default)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["default"], message: "must be one of values" });
+    }
+  });
+
+const InstallOptionSchema = z.union([IntegerInstallOptionSchema, StringInstallOptionSchema, StringListInstallOptionSchema]);
+
 export const ModuleManifestSchema = z
   .object({
     schemaVersion: z.union([z.literal(1), z.literal(2)]),
@@ -86,6 +145,7 @@ export const ModuleManifestSchema = z
       })
       .strict(),
     persistentData: PersistentDataSchema.optional(),
+    installOptions: z.record(z.string().regex(INSTALL_OPTION), InstallOptionSchema).default({}),
     deployment: ModuleDeploymentSchema,
     runtime: ModuleRuntimeSchema.default({ mode: "on-demand" }),
     limits: z
@@ -106,6 +166,9 @@ export const ModuleManifestSchema = z
       }
       if (manifest.persistentData !== undefined) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["persistentData"], message: "requires schemaVersion 2" });
+      }
+      if (Object.keys(manifest.installOptions).length > 0) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["installOptions"], message: "requires schemaVersion 2" });
       }
       return;
     }

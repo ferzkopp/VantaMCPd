@@ -7,7 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 
-import { formatRelativeTime, formatUtcTimestamp } from "../dist/web/time.js";
+import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "../dist/web/time.js";
 import { startWebServer } from "../dist/web.js";
 
 const now = Date.parse("2026-09-12T12:00:00.000Z");
@@ -25,6 +25,13 @@ test("formats dashboard last-seen timestamps as elapsed minutes, hours, and days
 test("formats dashboard interaction timestamps as canonical UTC ISO strings", () => {
   assert.equal(formatUtcTimestamp("2026-09-12T14:00:00+02:00"), "2026-09-12T12:00:00.000Z");
   assert.equal(formatUtcTimestamp("not-a-timestamp"), "-");
+});
+
+test("formats job durations as compact elapsed time", () => {
+  assert.equal(formatDuration(59_400), "59s");
+  assert.equal(formatDuration(114_000), "1m 54s");
+  assert.equal(formatDuration(3_661_000), "1h 1m 1s");
+  assert.equal(formatDuration(Number.NaN), "-");
 });
 
 function getJson(server, pathname) {
@@ -157,16 +164,21 @@ test("dashboard lists cached active modules and loads their advertised MCP API",
     const summary = await getJson(server, "/api/summary");
     assert.equal(summary.status, 200);
     assert.equal(summary.body.moduleInventoryPending, false);
+    assert.deepEqual(summary.body.availableModules, ["core", "inactive-module", "text-tools"]);
     assert.equal(summary.body.modules.length, 1);
     assert.deepEqual(summary.body.modules[0].installedVersions, ["0.1.0", "0.2.0"]);
     assert.equal(summary.body.modules[0].nodeCount, 2);
     assert.equal(summary.body.modules[0].packageFiles, 3);
 
-    const events = await getJson(server, "/api/events?module=text-tools");
+    const events = await getJson(server, "/api/events?module=text-tools&includeEngine=false");
     assert.equal(events.status, 200);
     assert.equal(events.body.logFileUrl, pathToFileURL(path.join(logDir, logName)).href);
-    assert.deepEqual(events.body.modules, ["core", "text-tools"]);
+    assert.deepEqual(events.body.modules, ["core", "inactive-module", "text-tools"]);
     assert.equal(eventFilter.module, "text-tools");
+    assert.equal(eventFilter.includeEngine, false);
+
+    await getJson(server, "/api/events?status=exit%201&includeEngine=false");
+    assert.equal(eventFilter.status, "exit 1");
 
     const detail = await getJson(server, "/api/module?id=text-tools");
     assert.equal(detail.status, 200);
@@ -178,6 +190,7 @@ test("dashboard lists cached active modules and loads their advertised MCP API",
     assert.equal(jobList.status, 200);
     assert.equal(jobList.body.jobs[0].moduleId, "corpus-search");
     assert.equal(jobList.body.jobs[0].progress.current, 500);
+    assert.equal(jobList.body.jobs[0].displayStatus, "running");
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(logDir, { recursive: true, force: true });

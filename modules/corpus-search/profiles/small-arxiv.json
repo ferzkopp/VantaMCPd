@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 2,
+  "id": "small-arxiv-cs",
+  "description": "A deterministic 1% sample of the selected arXiv computer-science topics.",
+  "source": "arxiv-bulk-snapshot",
+  "samplePercent": 1,
+  "sampleSeed": "vantamcpd-arxiv-cs-v1",
+  "topics": ["cs.AI", "cs.LG", "cs.CL", "cs.IR", "stat.ML", "cs.CV", "cs.RO", "cs.SE", "cs.DB", "cs.DC", "cs.CR", "cs.NE", "cs.HC", "cs.PL", "cs.OS"]
+}

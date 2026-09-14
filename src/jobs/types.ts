@@ -70,6 +70,15 @@ export function isTerminalJobStatus(status: JobStatus): boolean {
   return status === "succeeded" || status === "failed" || status === "canceled";
 }
 
+export function jobStatusKey(job: Pick<JobState, "status" | "result">): string {
+  if (job.status === "succeeded") return "ok";
+  if (job.status === "failed") {
+    const exitCode = job.result?.exitCode;
+    return exitCode !== undefined && exitCode !== 0 ? `exit ${exitCode}` : "error";
+  }
+  return job.status;
+}
+
 export function parseJobState(value: unknown, source = "job state"): JobState {
   const result = JobStateSchema.safeParse(value);
   if (result.success) return result.data;

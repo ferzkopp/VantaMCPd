@@ -1,4 +1,4 @@
-import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
+import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.js";
 
 (function () {
   "use strict";
@@ -9,6 +9,8 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
   const nodeSel = document.getElementById("node");
   const moduleSel = document.getElementById("module");
   const statusSel = document.getElementById("status");
+  const pollingToggle = document.getElementById("polling");
+  const pollingLabel = document.getElementById("polling-label");
   const qEl = document.getElementById("q");
   const followBtn = document.getElementById("follow");
   const clearBtn = document.getElementById("clear");
@@ -27,6 +29,8 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
   let following = true;
   let shown = 0;
   let logFileUrl = "";
+  let latestModules = { modules: [], pending: true };
+  let latestJobs = { jobs: [] };
 
   // Undefined locale => the browser's own, so separators match what the reader expects.
   const num = new Intl.NumberFormat();
@@ -37,6 +41,7 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
   }
 
   function matches(e) {
+    if (!pollingToggle.checked && e.origin === "engine") return false;
     if (nodeSel.value && e.node !== nodeSel.value) return false;
     if (moduleSel.value && (e.module || "core") !== moduleSel.value) return false;
     if (statusSel.value && statusOf(e) !== statusSel.value) return false;
@@ -69,6 +74,7 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
     row.appendChild(cell(e.node));
     row.appendChild(cell(e.module || "core", "dim"));
     row.appendChild(cell(e.tool || e.kind, "dim"));
+    row.appendChild(cell(e.origin || "agent", "dim"));
     row.appendChild(cell(statusOf(e), e.ok ? "ok" : "bad"));
     row.appendChild(cell(e.durationMs + "ms" + (e.sudo ? " sudo" : ""), e.sudo ? "warn" : "dim"));
     row.appendChild(cell(e.parameters || "-", "params"));
@@ -137,9 +143,11 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
   }
 
   function renderModules(modules, pending) {
+    latestModules = { modules, pending };
     const tb = document.querySelector("#modules tbody");
     tb.textContent = "";
-    modules.forEach((module) => {
+    const filteredModules = modules.filter((module) => !moduleSel.value || module.id === moduleSel.value);
+    filteredModules.forEach((module) => {
       const tr = document.createElement("tr");
       tr.dataset.module = module.id;
       tr.dataset.name = module.name;
@@ -150,6 +158,7 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
       const runtime = module.runtime.mode === "service" ? "service" : "on demand";
       const installedVersions = module.installedVersions.join(", ") || "-";
       const values = [
+        module.id,
         module.name,
         installedVersions,
         `${module.nodeCount} / ${module.configuredNodeCount}`,
@@ -160,12 +169,13 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
       values.forEach((value, index) => {
         const td = document.createElement("td");
         td.textContent = value;
-        if (index === 0) td.title = `${module.id} · ${module.description}`;
-        if (index === 1 && module.installedVersions.some((version) => version !== module.catalogVersion)) {
+        if (index === 0) td.title = module.description;
+        if (index === 1) td.title = module.description;
+        if (index === 2 && module.installedVersions.some((version) => version !== module.catalogVersion)) {
           td.className = "warn";
           td.title = `Local catalog version: ${module.catalogVersion}`;
         }
-        if (index === 2) {
+        if (index === 3) {
           td.title = module.installedNodes
             .map((node) => `${node.node}@${node.version}${node.stale ? " (stale)" : ""}`)
             .join(", ");
@@ -176,58 +186,67 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
       tb.appendChild(tr);
     });
 
-    if (!modules.length) {
+    if (!filteredModules.length) {
       const tr = document.createElement("tr");
       const td = document.createElement("td");
-      td.colSpan = 6;
+      td.colSpan = 7;
       td.className = "empty";
-      td.textContent = pending ? "discovering installed modules…" : "no active modules";
+      td.textContent = pending
+        ? "discovering installed modules…"
+        : modules.length ? "no modules match the selected module" : "no active modules";
       tr.appendChild(td);
       tb.appendChild(tr);
     }
   }
 
   function renderJobs(data) {
+    latestJobs = data;
     const tb = document.querySelector("#jobs tbody");
     tb.textContent = "";
-    (data.jobs || []).forEach((job) => {
+    const jobs = (data.jobs || []).filter((job) => {
+      if (moduleSel.value && (job.moduleId || "core") !== moduleSel.value) return false;
+      return !statusSel.value || job.displayStatus === statusSel.value;
+    });
+    jobs.forEach((job) => {
       const tr = document.createElement("tr");
       const progress = job.progress;
       const progressText = progress
         ? `${num.format(progress.current || 0)}${progress.total ? ` / ${num.format(progress.total)}` : ""}${progress.unit ? ` ${progress.unit}` : ""}`
         : "-";
-      const started = Date.parse(job.startedAt || job.createdAt);
+      const started = Date.parse(job.startedAt || "");
       const ended = Date.parse(job.finishedAt || new Date().toISOString());
-      const duration = Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, Math.round((ended - started) / 1000)) + "s" : "-";
+      const duration = Number.isFinite(started) && Number.isFinite(ended) ? formatDuration(ended - started) : "-";
       const values = [
-        job.moduleId ? `${job.kind} · ${job.moduleId}` : job.kind,
         job.targetNode,
-        job.status,
+        job.moduleId || "core",
+        job.kind,
+        job.displayStatus,
         job.phase || "-",
         progressText,
+        job.startedAt ? formatUtcTimestamp(job.startedAt) : "-",
         duration,
         job.heartbeatAt ? formatRelativeTime(job.heartbeatAt) : "-",
       ];
       values.forEach((value, index) => {
         const td = document.createElement("td");
         td.textContent = value;
-        if (index === 2) td.className = job.status === "succeeded" ? "ok" : job.status === "failed" || job.status === "canceled" ? "bad" : "warn";
-        if (index === 4 && progress?.message) td.title = progress.message;
-        if (index === 6 && job.heartbeatAt) {
+        if (index === 3) td.className = job.displayStatus === "ok" ? "ok" : job.displayStatus === "running" || job.displayStatus === "queued" ? "warn" : "bad";
+        if (index === 5 && progress?.message) td.title = progress.message;
+        if (index === 8 && job.heartbeatAt) {
           td.dataset.lastSeen = job.heartbeatAt;
           td.title = formatUtcTimestamp(job.heartbeatAt);
         }
         tr.appendChild(td);
       });
-      tr.title = job.error || job.result?.summary || job.jobId;
+      tr.title = `${job.jobId} · lifecycle status: ${job.status}` + (job.error ? `\n${job.error}` : job.result?.summary ? `\n${job.result.summary}` : "");
       tb.appendChild(tr);
     });
-    if (!(data.jobs || []).length) {
+    if (!jobs.length) {
       const tr = document.createElement("tr");
       const td = document.createElement("td");
-      td.colSpan = 7;
+      td.colSpan = 9;
       td.className = "empty";
-      td.textContent = data.refreshedAt ? "no durable jobs" : "discovering durable jobs…";
+      td.textContent = (data.jobs || []).length ? "no jobs match the selected status" : data.refreshedAt ? "no durable jobs" : "discovering durable jobs…";
       tr.appendChild(td);
       tb.appendChild(tr);
     }
@@ -236,7 +255,11 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
   function loadJobs() {
     fetch("/api/jobs")
       .then((response) => response.json())
-      .then(renderJobs)
+      .then((data) => {
+        (data.jobs || []).forEach((job) => addOption(moduleSel, knownModules, job.moduleId || "core"));
+        (data.jobs || []).forEach((job) => addOption(statusSel, knownStatuses, job.displayStatus));
+        renderJobs(data);
+      })
       .catch(() => void 0);
   }
 
@@ -246,6 +269,7 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
     if (moduleSel.value) bits.push(moduleSel.value);
     if (statusSel.value) bits.push(statusSel.value);
     if (qEl.value.trim()) bits.push(`"${qEl.value.trim()}"`);
+    if (pollingToggle.checked) bits.push("polling shown");
     scopeEl.textContent = bits.length ? "— filtered by " + bits.join(" · ") : "";
   }
 
@@ -257,6 +281,7 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
     if (moduleSel.value) p.set("module", moduleSel.value);
     if (statusSel.value) p.set("status", statusSel.value);
     if (qEl.value.trim()) p.set("q", qEl.value.trim());
+    p.set("includeEngine", String(pollingToggle.checked));
 
     fetch("/api/events?" + p)
       .then((r) => r.json())
@@ -287,6 +312,7 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
         d.configured.forEach((c) => {
           addOption(nodeSel, knownNodes, c.name);
         });
+        (d.availableModules || []).forEach((module) => addOption(moduleSel, knownModules, module));
 
         const tb = document.querySelector("#summary tbody");
         tb.textContent = "";
@@ -405,6 +431,8 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
   }
 
   function renderNode(n) {
+    dlg.classList.add("node-detail-dialog");
+    dlgBody.classList.add("node-detail");
     document.getElementById("dlg-title").textContent = n.name;
     document.getElementById("dlg-role").textContent = n.role;
     dlgBody.textContent = "";
@@ -442,6 +470,19 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
       kv(cpu.dl, "max MHz", hw.cpu.maxMhz);
       dlgBody.appendChild(cpu);
     }
+
+    const gpu = section("GPU");
+    const gpus = (hw.accelerators || []).filter((accelerator) => accelerator.kind.toLowerCase() === "gpu");
+    kv(gpu.dl, "detected", gpus.length || "none");
+    gpus.forEach((device, index) => {
+      const details = [
+        device.vendor,
+        device.memoryMb === undefined ? undefined : `${device.memoryMb} MB VRAM`,
+        device.runtime && device.runtimeVersion ? `${device.runtime} ${device.runtimeVersion}` : device.runtime,
+      ].filter(Boolean);
+      box(gpu, device.model || `GPU ${index + 1}`, details);
+    });
+    dlgBody.appendChild(gpu);
 
     if (hw.memory) {
       const mem = section("Memory");
@@ -522,6 +563,8 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
   }
 
   function renderModule(data) {
+    dlg.classList.remove("node-detail-dialog");
+    dlgBody.classList.remove("node-detail");
     const module = data.module;
     const api = data.api;
     document.getElementById("dlg-title").textContent = module.name;
@@ -589,6 +632,8 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
   document.querySelector("#modules tbody").addEventListener("click", (ev) => {
     const tr = ev.target.closest("tr[data-module]");
     if (!tr) return;
+    dlg.classList.remove("node-detail-dialog");
+    dlgBody.classList.remove("node-detail");
     document.getElementById("dlg-title").textContent = tr.dataset.name;
     document.getElementById("dlg-role").textContent = "MCP API";
     dlgBody.textContent = "";
@@ -630,7 +675,7 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
     const e = JSON.parse(ev.data);
     addOption(nodeSel, knownNodes, e.node);
     addOption(moduleSel, knownModules, e.module || "core");
-    addOption(statusSel, knownStatuses, statusOf(e));
+    if (e.origin !== "engine" || pollingToggle.checked) addOption(statusSel, knownStatuses, statusOf(e));
     if (!following || !matches(e)) return;
     if (logEl.querySelector(".empty")) resetLog();
     addRow(e, true);
@@ -656,8 +701,19 @@ import { formatRelativeTime, formatUtcTimestamp } from "./time.js";
       });
   };
   nodeSel.onchange = load;
-  moduleSel.onchange = load;
-  statusSel.onchange = load;
+  moduleSel.onchange = () => {
+    load();
+    renderModules(latestModules.modules, latestModules.pending);
+    renderJobs(latestJobs);
+  };
+  statusSel.onchange = () => {
+    load();
+    renderJobs(latestJobs);
+  };
+  pollingToggle.onchange = () => {
+    pollingLabel.textContent = pollingToggle.checked ? "polling on" : "polling off";
+    load();
+  };
 
   let debounce;
   qEl.oninput = () => {

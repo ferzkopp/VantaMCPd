@@ -129,11 +129,36 @@ test("accepts schema v2 job lifecycle and retained node storage", () => {
       minFreeMb: 512,
       retainOnUninstall: true,
     },
+    installOptions: {
+      profileId: {
+        type: "string",
+        description: "Packaged content profile.",
+        values: ["small-arxiv-cs", "medium-arxiv-cs", "large-arxiv-cs"],
+        default: "small-arxiv-cs",
+      },
+      retentionDays: {
+        type: "integer",
+        description: "Synthetic integer option used to exercise manifest parsing.",
+        minimum: 1,
+        maximum: 30,
+        default: 7,
+      },
+      categories: {
+        type: "string-list",
+        description: "Included arXiv categories.",
+        minItems: 1,
+        maxItems: 50,
+        itemPattern: "^[A-Za-z0-9.-]{1,40}$",
+      },
+    },
     deployment: { mode: "singleton" },
   });
   assert.equal(parsed.schemaVersion, 2);
   assert.equal(parsed.lifecycle.execution.timeoutMs, 21_600_000);
   assert.equal(parsed.persistentData.relativePath, "vantamcpd/corpora/corpus-search");
+  assert.equal(parsed.installOptions.profileId.default, "small-arxiv-cs");
+  assert.equal(parsed.installOptions.retentionDays.default, 7);
+  assert.equal(parsed.installOptions.categories.type, "string-list");
 });
 
 test("keeps schema v1 manifests unchanged and rejects v2-only fields", () => {
@@ -226,6 +251,38 @@ test("requires configured storage for persistent-data modules", () => {
   }));
   assert.equal(result.status, "incompatible");
   assert.match(result.reasons.join("; "), /node-local storage/);
+});
+
+test("corpus-search requires at least 10 GiB of free storage", async () => {
+  const target = {
+    ...node({
+      cpu: { packageArch: "amd64", cores: 8 },
+      memory: { totalMb: 16384 },
+      os: { id: "debian", version: "12" },
+      filesystems: [{ mountpoint: "/", device: "/dev/mmcblk0p1" }, { mountpoint: "/mnt/ssd", device: "/dev/sda1" }],
+      accelerators: [],
+    }),
+    role: "worker+storage",
+    tags: ["worker", "storage"],
+    storage: { device: "/dev/sda1", mountpoint: "/mnt/ssd", fsType: "ext4", label: "clusterssd", nfs: { enabled: false, network: "10.0.0.0/24", options: "rw,sync,no_subtree_check" } },
+  };
+  const pool = {
+    exec: async () => ({
+      node: target.name,
+      host: target.host,
+      ok: true,
+      code: 0,
+      stdout: "command_bash|present\ncommand_python3|present\ncommand_sqlite3|present\ndisk_available_mb|1000\nstorage_mounted|yes\nstorage_available_mb|10239\nstorage_writable|yes\nstorage_distinct|yes\n",
+      stderr: "",
+      durationMs: 1,
+      truncated: false,
+      timedOut: false,
+    }),
+  };
+  const manager = new ModuleManager({ maxConcurrency: 1 }, pool, path.join(root, "modules"));
+  const [result] = await manager.check("corpus-search", [target]);
+  assert.equal(result.compatibility.status, "incompatible");
+  assert.match(result.compatibility.reasons.join("; "), /requires 10240 MB free storage/);
 });
 
 test("matches declared GPU capabilities and rejects an insufficient GPU", () => {
@@ -400,7 +457,7 @@ test("schema v2 installation submits a durable job after verified staging", asyn
     exec: async (_node, command, options = {}) => {
       commands.push({ command, options });
       if (command.includes("storage_mountpoint=")) {
-        return ok("command_bash|present\ncommand_python3|present\ncommand_sqlite3|present\ndisk_available_mb|1000\nstorage_mounted|yes\nstorage_available_mb|2000\nstorage_writable|yes\nstorage_distinct|yes\n");
+        return ok("command_bash|present\ncommand_python3|present\ncommand_sqlite3|present\ndisk_available_mb|1000\nstorage_mounted|yes\nstorage_available_mb|20000\nstorage_writable|yes\nstorage_distinct|yes\n");
       }
       if (command.includes("sha256sum")) return ok(corpus.files.map((file) => `${file.relativePath}|${file.sha256}`).join("\n"));
       return ok();
@@ -415,16 +472,30 @@ test("schema v2 installation submits a durable job after verified staging", asyn
     },
     list: async () => ({ jobs: [], unreachableNodes: [], invalidStates: [] }),
   };
-  const manager = new ModuleManager({ maxConcurrency: 1, nodes: [target] }, pool, path.join(root, "modules"), jobs);
-  const [result] = await manager.install("corpus-search", [target]);
+  const manager = new ModuleManager({
+    maxConcurrency: 1,
+    nodes: [target],
+    modules: { "corpus-search": { installOptions: { profileId: "medium-arxiv-cs" } } },
+  }, pool, path.join(root, "modules"), jobs);
+  const [result] = await manager.install("corpus-search", [target], 300_000, {
+    categories: ["cs.AI", "cs.LG"],
+  });
   assert.equal(result.ok, true);
   assert.equal(result.state, "provisioning");
   assert.equal(result.jobId, "12345678-1234-4234-8234-123456789abc");
   assert.equal(submitted.length, 1);
   assert.equal(submitted[0].input.kind, "module-install");
   assert.equal(submitted[0].input.environment.VANTA_MODULE_DATA_DIR, "/mnt/ssd/vantamcpd/corpora/corpus-search");
+  assert.equal(submitted[0].input.environment.VANTA_MODULE_OPTION_PROFILE_ID, "medium-arxiv-cs");
+  assert.equal(submitted[0].input.environment.VANTA_MODULE_OPTION_TARGET_RECORDS, undefined);
+  assert.equal(submitted[0].input.environment.VANTA_MODULE_OPTION_CATEGORIES, '["cs.AI","cs.LG"]');
   assert.ok(commands.some((entry) => entry.command.includes("/var/lib/vantamcpd/module-staging/corpus-search-")));
   assert.ok(!commands.at(-1).command.startsWith("rm -rf -- /tmp/vantamcpd-corpus-search-"));
+
+  await assert.rejects(
+    manager.install("corpus-search", [target], 300_000, { profileId: "unsupported-arxiv-cs" }),
+    /profileId must be one of: small-arxiv-cs, medium-arxiv-cs, large-arxiv-cs/,
+  );
 });
 
 test("persistent data purge requires uninstall and a module marker", async () => {
@@ -636,13 +707,35 @@ test("module manager lists and calls only advertised tools over SSH MCP", async 
   assert.equal(opened.length, 2);
   assert.equal(opened[0].command, "'python3' 'server.py'");
   assert.equal(opened[0].options.cwd, receipt.installDirectory);
+  assert.equal(opened[0].options.env, undefined);
+
+  target.storage = {
+    device: "/dev/sda1",
+    mountpoint: "/mnt/ssd",
+    fsType: "ext4",
+    label: "clusterssd",
+    nfs: { enabled: false, network: "10.0.0.0/24", options: "rw,sync,no_subtree_check" },
+  };
+  manager.catalog.modules.find((item) => item.manifest.id === "text-tools").manifest.persistentData = {
+    storage: "node",
+    relativePath: "vantamcpd/corpora/text-tools",
+    minFreeMb: 1,
+    retainOnUninstall: true,
+  };
+  await manager.listTools("text-tools", target);
+  assert.deepEqual(opened[2].options.env, {
+    VANTA_MODULE_DATA_DIR: "/mnt/ssd/vantamcpd/corpora/text-tools",
+    VANTA_MODULE_DATA_MOUNT: "/mnt/ssd",
+    VANTA_MODULE_RUN_AS: "test",
+  });
+  manager.catalog.modules.find((item) => item.manifest.id === "text-tools").manifest.persistentData = undefined;
 
   const firstRouted = await manager.callTool("text-tools", undefined, "regex_extract", {});
   const secondRouted = await manager.callTool("text-tools", undefined, "regex_extract", {});
   assert.equal(firstRouted.node, "test-node");
   assert.equal(secondRouted.node, "replica-node");
   assert.equal(firstRouted.selection, "automatic");
-  assert.deepEqual(opened.slice(2, 4).map((entry) => entry.node), ["test-node", "replica-node"]);
+  assert.deepEqual(opened.slice(3, 5).map((entry) => entry.node), ["test-node", "replica-node"]);
   const failed = await manager.callTool("text-tools", target, "fail", {});
   assert.equal(failed.ok, false);
   assert.equal(failed.output, "invalid input");

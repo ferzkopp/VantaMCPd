@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { withTool, withToolParameters, type AuditLog } from "./audit.js";
 import type { ClusterConfig } from "./config.js";
 import type { JobManager } from "./jobs/manager.js";
+import { jobStatusKey } from "./jobs/types.js";
 import type { ModuleManager, NodeModuleInventory } from "./modules/manager.js";
 
 /**
@@ -81,6 +82,10 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
   const moduleInventory = new Map<string, NodeModuleInventory & { refreshedAt: string; stale?: boolean }>();
   let moduleRefresh: Promise<void> | undefined;
   let moduleRefreshQueued = false;
+  const availableModuleIds = [
+    "core",
+    ...modules.catalog.modules.map((modulePackage) => modulePackage.manifest.id).sort(),
+  ];
 
   const activeModules = () =>
     modules.catalog.modules.flatMap((modulePackage) => {
@@ -192,14 +197,15 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
           lastSeq: audit.lastSeq,
           logFileUrl: currentLogFileUrl(config.monitoring.logDir),
           nodes: audit.nodes(),
-          modules: audit.modules(),
-          statuses: audit.statuses(),
+          modules: [...new Set([...availableModuleIds, ...audit.modules()])],
+          statuses: audit.statuses(p.get("includeEngine") !== "false"),
           events: audit.query({
             since: p.has("since") ? intParam(p.get("since"), 0, 0, Number.MAX_SAFE_INTEGER) : undefined,
             node: p.get("node") || undefined,
             module: p.get("module") || undefined,
             status: p.get("status") || undefined,
             q: p.get("q") || undefined,
+            includeEngine: p.get("includeEngine") !== "false",
             limit: intParam(p.get("limit"), 200, 1, 2000),
           }),
         });
@@ -234,15 +240,21 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
             };
           }),
           configured: config.nodes.map((n) => ({ name: n.name, role: n.role })),
+          availableModules: availableModuleIds,
           modules: activeModules(),
           moduleInventoryPending: config.nodes.some((node) => !moduleInventory.has(node.name)),
           lastSeq: audit.lastSeq,
         });
         return;
 
-      case "/api/jobs":
-        json(res, jobs?.snapshot() ?? { jobs: [] });
+      case "/api/jobs": {
+        const snapshot = jobs?.snapshot() ?? { jobs: [] };
+        json(res, {
+          ...snapshot,
+          jobs: snapshot.jobs.map((job) => ({ ...job, displayStatus: jobStatusKey(job) })),
+        });
         return;
+      }
 
       case "/api/module": {
         const moduleId = p.get("id");
