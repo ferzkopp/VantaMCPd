@@ -2,11 +2,13 @@
   "schemaVersion": 2,
   "id": "corpus-search",
   "name": "Scientific Corpus Search",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Provision and search a sampled, provenance-aware arXiv metadata corpus with SQLite FTS5/BM25.",
   "capabilities": [
     "search scientific paper metadata by topic, category and date",
+    "search papers with quoted phrases, exclusions, alternatives and field prefixes",
     "look up an exact arXiv record with its abstract and links",
+    "resolve a subject named in plain language to its arXiv category identifier",
     "report the local corpus coverage, freshness and record counts"
   ],
   "entrypoint": ["python3", "server.py"],

@@ -38,6 +38,31 @@ test("records an empty accelerator inventory when no GPU tool reports a device",
   assert.deepEqual(hardware.accelerators, []);
 });
 
+test("records an fstab network share that was idle when the node was probed", () => {
+  // NFS clients use x-systemd.automount, so df sees the share only while something is using it.
+  const hardware = parseHardware([
+    "cpu_cores|2",
+    "arch|armv7l",
+    "fs|mount=/ device=/dev/mmcblk0p1 type=ext4 size_gb=14.6",
+    "netfs|mount=/mnt/ssd source=192.168.42.36:/mnt/ssd type=nfs",
+    "discovered_at|2026-09-13T20:00:00Z",
+  ].join("\n"));
+
+  assert.deepEqual(hardware.networkMounts, [
+    { mountpoint: "/mnt/ssd", source: "192.168.42.36:/mnt/ssd", fsType: "nfs", mounted: false },
+  ]);
+
+  const mounted = parseHardware([
+    "cpu_cores|2",
+    "arch|armv7l",
+    "fs|mount=/ device=/dev/mmcblk0p1 type=ext4 size_gb=14.6",
+    "fs|mount=/mnt/ssd device=192.168.42.36:/mnt/ssd type=nfs4 size_gb=116.8",
+    "netfs|mount=/mnt/ssd source=192.168.42.36:/mnt/ssd type=nfs",
+    "discovered_at|2026-09-13T20:00:00Z",
+  ].join("\n"));
+  assert.equal(mounted.networkMounts[0].mounted, true);
+});
+
 test("marks an MBR extended partition as a container rather than a sizeless unformatted partition", () => {
   // Debian's guided partitioning on MBR: root, an extended container, and swap logical inside it.
   const hardware = parseHardware([

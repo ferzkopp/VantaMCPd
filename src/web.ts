@@ -69,20 +69,29 @@ function intParam(value: string | null, fallback: number, min: number, max: numb
 const IPV4 = /\b\d{1,3}(?:\.\d{1,3}){3}\b/g;
 
 /**
- * Masks every IPv4 address in a payload, wherever it is nested. Addresses reach the node detail from
- * more places than the obvious `host`: NFS mount sources in `filesystems`, hand-written descriptions,
- * export CIDRs. An allow-list of fields cannot catch those, so scrub the whole structure.
+ * Builds a scrubber that rewrites every IPv4 address in a payload, wherever it is nested. Addresses reach
+ * the node detail from more places than the obvious `host`: NFS mount sources in `filesystems` and
+ * `networkMounts`, hand-written descriptions, export CIDRs. An allow-list of fields cannot catch those,
+ * so scrub the whole structure. A configured node's address becomes its node name, which reads better
+ * than a mask and keeps the relationship between nodes visible.
  */
-function withoutAddresses<T>(value: T): T {
-  return JSON.parse(
-    // Four dotted groups are not necessarily an address: kernel and package versions look the same.
-    JSON.stringify(value).replace(IPV4, (match) =>
-      match.split(".").every((octet) => Number(octet) <= 255) ? "x.x.x.x" : match,
-    ),
-  ) as T;
+export function addressScrubber(config: ClusterConfig): <T>(value: T) => T {
+  const names = new Map(
+    config.nodes
+      .filter((node) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(node.host))
+      .map((node) => [node.host, node.name] as const),
+  );
+  return <T>(value: T): T =>
+    JSON.parse(
+      // Four dotted groups are not necessarily an address: kernel and package versions look the same.
+      JSON.stringify(value).replace(IPV4, (match) =>
+        match.split(".").every((octet) => Number(octet) <= 255) ? names.get(match) ?? "x.x.x.x" : match,
+      ),
+    ) as T;
 }
 
 export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: ModuleManager, jobs?: JobManager): Server | undefined {
+  const withoutAddresses = addressScrubber(config);
   const { port } = config.monitoring;
   const moduleInventory = new Map<string, NodeModuleInventory & { refreshedAt: string; stale?: boolean }>();
   let moduleRefresh: Promise<void> | undefined;

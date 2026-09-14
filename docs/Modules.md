@@ -42,7 +42,7 @@ reloads the local catalog.
 | Module | Package version | Requirements | Included tools | Guide |
 | --- | --- | --- | --- | --- |
 | Text Tools (`text-tools`) | `0.4.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | 111 bounded operations across twelve category tools | [Text Tools](../modules/text-tools/TextTools.md) |
-| Scientific Corpus Search (`corpus-search`) | `0.3.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 10 GiB free, Python 3, SQLite 3 | Search, exact record lookup, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
+| Scientific Corpus Search (`corpus-search`) | `0.4.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 10 GiB free, Python 3, SQLite 3 | Phrase/exclusion/field search, exact record lookup, category resolution, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
 
 ### Activate a Module
 
@@ -100,6 +100,8 @@ After installation, discover and use its tools with requests such as:
 
 VantaMCPd verifies the receipt and active version, launches the module through SSH stdio, completes the
 MCP handshake, checks that the requested tool is advertised, returns the result, and closes the process.
+An unrecognized tool name is rejected with the module's advertised names, so a wrong guess is corrected
+without a separate discovery call.
 
 ### Capability Discovery
 
@@ -461,7 +463,9 @@ or PDFs.
 Provisioning is a durable job that downloads the Cornell University snapshot ZIP, extracts and streams
 its JSONL metadata, then uses rate-limited OAI-PMH requests to add newer matching articles. ZIP download,
 JSON ingestion, and OAI pagination are resumable, and only a validated replacement database is activated.
-The tools are `corpus_search`, `corpus_get`, and `corpus_info`. All profiles require 10 GiB free because
+The tools are `corpus_search`, `corpus_get`, `corpus_categories`, and `corpus_info`. Searches accept
+quoted phrases, exclusions, alternatives, prefix terms, and field restrictions, and retry once with
+corrected spelling when a query finds nothing. All profiles require 10 GiB free because
 the ZIP and extracted JSON are retained regardless of sample percentage. See the
 [Scientific Corpus Search quickstart](../modules/corpus-search/CorpusSearch.md#quickstart) for profile
 selection, installation progress, verification, first use, recovery, and data lifecycle.

@@ -18,7 +18,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from corpus import SCHEMA_VERSION, connect, initialize, put_metadata, rebuild_search, upsert_papers, verify
+from corpus import SCHEMA_VERSION, connect, count_categories, initialize, put_metadata, rebuild_search, upsert_papers, verify
 
 API_URL = "https://export.arxiv.org/api/query"
 OAI_URL = "https://oaipmh.arxiv.org/oai"
@@ -598,6 +598,7 @@ def provision(
             "sample_percent": str(profile["samplePercent"]),
             "content_mode": "topics" if categories is not None else "profile",
             "configured_categories": json.dumps(profile["topics"], separators=(",", ":")),
+            "category_counts": json.dumps(count_categories(connection), separators=(",", ":"), sort_keys=True),
             "source": "arXiv bulk metadata snapshot with OAI-PMH catch-up",
             "source_url": os.environ.get("VANTA_ARXIV_SNAPSHOT_URL", SNAPSHOT_URL),
             "catchup_source_url": OAI_URL,

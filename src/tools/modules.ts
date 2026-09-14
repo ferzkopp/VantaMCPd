@@ -173,7 +173,9 @@ export function registerModuleTools(server: ToolServer, ctx: ToolContext): void 
         "When target is omitted, replicated modules use round-robin routing across reachable installations. " +
         "Inputs are sent as MCP data and are never interpolated into a shell command." +
         offered +
-        "Use cluster_list_module_tools for the exact operation names and argument schemas.",
+        "Use cluster_list_module_tools for the exact operation names and argument schemas. Call it before " +
+        "retrying whenever a module tool rejects an argument or returns an empty result, because module tools " +
+        "accept options and query syntax that this description does not repeat.",
       inputSchema: {
         moduleId: z.string().describe("Installed module ID."),
         target: z.string().optional().describe("Optional explicit node name; omit to use module routing."),

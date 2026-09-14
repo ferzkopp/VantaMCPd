@@ -44,6 +44,11 @@ The shortest path from an available storage node to a verified first search is:
 	> Search corpus-search for `retrieval augmented generation` and return the top 5 papers.
 	> Retrieve the complete corpus record for arXiv `<result-id>`.
 
+	Queries accept quoted phrases, `-exclusions`, `OR` alternatives, `prefix*` terms, and `title:` or
+	`category:` field restrictions, and a misspelled word is corrected when a query finds nothing:
+
+	> Find papers about `"large language model"` applied to robotics, excluding surveys.
+
 The target node must have configured node-local storage with at least 10 GiB free. All profiles download
 and retain the same ZIP and extracted JSON, so Small reduces database ingestion but does not avoid the
 source-data storage requirement or the initial download/extraction work.
@@ -63,9 +68,28 @@ sample stable across reinstalls and ensuring that the 1% population is contained
 which is contained in the 100% population. Percentages apply after topic filtering, so record counts
 depend on the current snapshot and selected topics rather than a fixed target.
 
-The packaged topic list covers `cs.AI`, `cs.LG`, `cs.CL`, `cs.IR`, `stat.ML`, `cs.CV`, `cs.RO`, `cs.SE`,
-`cs.DB`, `cs.DC`, `cs.CR`, `cs.NE`, `cs.HC`, `cs.PL`, and `cs.OS`. Records may carry additional cross-list
-categories. The active configuration combines a `profileId` with an optional topic override:
+The packaged topic list covers fifteen arXiv categories, using the identifiers from arXiv's own
+[category taxonomy](https://arxiv.org/category_taxonomy):
+
+| Category | Name | Category | Name |
+| --- | --- | --- | --- |
+| `cs.AI` | Artificial Intelligence | `cs.DB` | Databases |
+| `cs.LG` | Machine Learning | `cs.DC` | Distributed, Parallel, and Cluster Computing |
+| `cs.CL` | Computation and Language | `cs.CR` | Cryptography and Security |
+| `cs.IR` | Information Retrieval | `cs.NE` | Neural and Evolutionary Computing |
+| `stat.ML` | Machine Learning (Statistics) | `cs.HC` | Human-Computer Interaction |
+| `cs.CV` | Computer Vision and Pattern Recognition | `cs.PL` | Programming Languages |
+| `cs.RO` | Robotics | `cs.OS` | Operating Systems |
+| `cs.SE` | Software Engineering | | |
+
+`cs.LG` and `stat.ML` are separate identifiers for closely related work and are heavily cross-listed with
+each other; both are included so that neither archive's submissions are missed. Records may carry further
+cross-list categories outside this list, which are retained in each record and are searchable through the
+`category` filter even though they do not themselves select a record for ingestion. Use
+[`corpus_categories`](#corpus_categories) to see which identifiers a provisioned corpus actually contains
+and how many records each one reaches.
+
+The active configuration combines a `profileId` with an optional topic override:
 
 | Option | Bounds | Meaning |
 | --- | --- | --- |
@@ -187,8 +211,9 @@ only when the corpus is no longer wanted.
 
 | Tool | Purpose |
 | --- | --- |
-| `corpus_search` | Search titles, abstracts, authors, and categories with optional category/date filters |
+| `corpus_search` | Search titles, abstracts, authors, and categories using phrases, exclusions, alternatives, and field restrictions |
 | `corpus_get` | Retrieve one exact arXiv metadata record |
+| `corpus_categories` | Resolve a plain-language subject to an arXiv category identifier and see how populated it is |
 | `corpus_info` | Inspect profile, provenance, record counts, storage size, and refresh time |
 
 List the tools advertised by the installed module:
@@ -207,21 +232,89 @@ The target may be omitted because the module has exactly one active installation
 | `category` | no | 1-40 characters | Exact arXiv category membership, including cross-lists |
 | `publishedFrom` | no | `YYYY-MM-DD` | Inclusive lower bound on original publication date |
 | `publishedTo` | no | `YYYY-MM-DD` | Inclusive upper bound on original publication date |
+| `fuzzy` | no | boolean, default `true` | Retry a zero-result query with corrected spelling |
 | `limit` | no | 1-50, default 10 | Maximum results in this page |
 | `offset` | no | 0-10,000, default 0 | Results to skip for pagination |
 
-Query punctuation is normalized into terms and every term must match. Callers cannot inject raw SQL or
-FTS operators. Results are ordered by BM25 relevance with title matches weighted most heavily, then by
-publication date. A higher returned `score` is a stronger match within that result set. Scores are
-query-local ranking values and should not be compared across different queries. Spelling, hyphenation,
-pluralization, and abbreviations are not expanded automatically; broaden the query explicitly when
-those variants matter.
+#### Query syntax
+
+Every term is required unless stated otherwise. The supported operators are a deliberate subset of the
+familiar web-search conventions:
+
+| Form | Meaning |
+| --- | --- |
+| `robot learning` | Both terms must appear somewhere in the record |
+| `"robot learning"` | The words must appear adjacent, in that order |
+| `-survey` | Exclude records containing the term |
+| `robot OR drone` | Either term satisfies this position |
+| `transform*` | Match any word starting with the prefix |
+| `title:diffusion` | Restrict the term to one field: `title`, `abstract`, `author`, or `category` |
+
+The forms combine, so `title:"language model" robotics -survey` is a single valid query. A leading `+` is
+accepted and redundant. An unrecognized prefix such as `doi:` is treated as ordinary text rather than a
+field, so it neither errors nor silently drops the term.
+
+The words `AND`, `OR`, and `NOT` are recognized in any case, and `NOT term` is a synonym for `-term`.
+Web search engines require uppercase here to keep the common words searchable, but silently demanding a
+literal `or` is the worse failure: it returns plausible results for a query that was never run. To search
+for one of these words literally, quote it, as in `"not"`.
+
+Callers never reach FTS5 syntax. The parser recognizes the operators above and emits the match expression
+itself, placing user text only inside escaped string literals, so query punctuation cannot alter the
+search structure. A query consisting only of exclusions is rejected, because it would ask the corpus to
+return everything except a few records.
+
+#### Spelling correction
+
+Terms are not stemmed or expanded, so a typo would normally return nothing. When a query produces no
+results, the module retries once with each unrecognized word replaced by the closest spelling that
+actually occurs in the corpus, ranked by edit distance and then by how many records contain it.
+
+Correction is skipped entirely when the query already matched, when paginating past the first page, and
+when `fuzzy` is `false`. Only single required words are corrected; quoted phrases, prefix terms, and
+exclusions are left exactly as written. Candidates come from the corpus's own indexed vocabulary rather
+than a dictionary, so corrections always name a term that is present.
+
+When a substitution is made the response gains a `corrections` array, and it is absent otherwise:
+
+```json
+{
+	"query": "retreival augmented generation",
+	"corrections": [{ "from": "retreival", "to": "retrieval" }],
+	"results": []
+}
+```
+
+Report the correction when presenting results, since the answer no longer matches what was asked for.
+
+When a first page still matches nothing, the response carries a `hint` naming the syntax and the tools
+that explain the corpus, so a caller that never read this page can recover without guessing:
+
+```json
+{
+	"query": "quantum topology sheaf",
+	"results": [],
+	"hint": "No records matched. Terms are combined with AND and matched literally, without stemming. ..."
+}
+```
+
+Neither `corrections` nor `hint` appears on a query that returned results.
+
+Results are ordered by BM25 relevance with title matches weighted most heavily, then by publication date.
+A higher returned `score` is a stronger match within that result set. Scores are query-local ranking
+values and should not be compared across different queries. Terms are matched as written: hyphenation,
+pluralization, and abbreviations are not expanded, so use `OR` or a prefix term when those variants
+matter.
 
 Common requests:
 
 > Search corpus-search for `retrieval augmented generation` in category `cs.CL` and return the top 5 papers.
 
 > Find papers matching `robot learning` in `cs.RO`, published from `2026-08-20` through `2026-09-10`.
+
+> Find papers about `"large language model"` applied to robotics, excluding surveys and benchmarks.
+
+> Search the corpus for `diffusion` in the title only, for either `policy` or `planning`.
 
 > Search the scientific corpus for `language model`, return 10 results starting at offset 20, and include
 > each paper's arXiv link.
@@ -282,7 +375,7 @@ result in `output`:
 	"ok": true,
 	"node": "cluster4",
 	"moduleId": "corpus-search",
-	"moduleVersion": "0.3.0",
+	"moduleVersion": "0.4.0",
 	"toolName": "corpus_search",
 	"deployment": { "mode": "singleton" },
 	"selection": "explicit",
@@ -307,6 +400,54 @@ the full abstract in addition to the metadata returned by search. It does not fe
 	"arguments": { "id": "https://arxiv.org/abs/2608.21252v2" }
 }
 ```
+
+### `corpus_categories`
+
+Category filters are exact identifiers, so a request phrased in plain language has to be resolved first.
+`corpus_categories` does that against the corpus itself rather than from recall, and shows how populated
+each category actually is:
+
+> Which categories in the scientific corpus cover robotics?
+
+> Search the corpus for papers on the use of large language models in robotics.
+
+| Input | Required | Bounds | Meaning |
+| --- | --- | --- | --- |
+| `contains` | no | 1-80 characters | Case-insensitive substring matched against the identifier and the readable name |
+| `ingestedOnly` | no | boolean, default `false` | Restrict results to the profile's ingestion topics, excluding cross-listed categories |
+
+Each entry returns the `category` identifier, its `name` and `group` from arXiv's taxonomy,
+`ingestionTopic` for membership in the profile's topic list, `records` counting every occurrence
+including cross-lists, and `primaryRecords` counting only records whose primary category it is. Entries
+are ordered by record count. The response also returns `total`, the profile's `ingestionTopics`, and
+`countsIncludeCrossLists`.
+
+```json
+{
+	"categories": [
+		{
+			"category": "cs.RO",
+			"name": "Robotics",
+			"group": "Computer Science",
+			"ingestionTopic": true,
+			"records": 41822,
+			"primaryRecords": 29140
+		}
+	],
+	"total": 1,
+	"countsIncludeCrossLists": true,
+	"ingestionTopics": ["cs.AI", "cs.CL"]
+}
+```
+
+The gap between `records` and `primaryRecords` is the cross-list reach: papers filed primarily elsewhere
+that still carry the category. Because the `category` filter matches the complete list, all of them are
+reachable. A category with `ingestionTopic: false` was never used to select records for ingestion but is
+still searchable wherever it appears as a cross-list, so its counts reflect incidental coverage rather
+than deliberate sampling.
+
+`countsIncludeCrossLists` is `false` for a corpus provisioned before these counts were recorded. In that
+case `records` is `null` and only `primaryRecords` is populated; reinstalling repopulates it.
 
 ### `corpus_info`
 
@@ -339,10 +480,11 @@ response metadata identifies the automatically selected node and module version.
 ## Limits and Safety
 
 Search inputs, result counts, offsets, and total MCP output bytes are bounded. The service validates
-every argument, opens the corpus database read-only, and exposes neither paths nor SQL. It does not
-accept arbitrary FTS syntax, execute caller-provided code, contact arXiv during queries, or write search
-artifacts. A missing database, invalid date/category/ID, out-of-range limit, or unknown record is returned
-as an MCP tool error.
+every argument, opens the corpus database read-only, and exposes neither paths nor SQL. Query operators
+are recognized by the module's own parser, which emits the match expression and confines caller text to
+escaped string literals, so raw FTS5 syntax never reaches the engine. It does not execute caller-provided
+code, contact arXiv during queries, or write search artifacts. A missing database, invalid
+date/category/ID, out-of-range limit, or unknown record is returned as an MCP tool error.
 
 Each call validates the remote installation receipt and active version before launching the module.
 The proxy prefers `structuredContent`, so successful JSON is not duplicated as escaped text.
@@ -382,7 +524,7 @@ abstract and PDF pages.
 | Preflight reports insufficient storage | Configure a distinct node-local storage mount with at least 10 GiB free; root filesystem space does not satisfy this requirement |
 | Job appears paused after `catchup` reaches all topics | Check its heartbeat and log; FTS rebuild, analysis, and integrity verification do not currently emit separate progress markers |
 | Install fails or is canceled | Read the job log, correct the cause, and reinstall with the same profile to reuse retained downloads and checkpoints |
-| Search returns no results | Inspect `corpus_info` for profile/topics, then try fewer terms or explicit spelling, hyphenation, singular/plural, and abbreviation variants |
+| Search returns no results | Inspect `corpus_info` for profile/topics and `corpus_categories` for the identifier; check the response for a `corrections` array, then broaden with `OR` or a prefix term |
 | Dashboard shows an old catalog or module version | Run `npm run build`, restart the local VantaMCPd MCP server, then refresh the dashboard; the inventory and catalog are loaded by that process |
 | A different profile or topic set is needed | Uninstall first, then reinstall with the new options; singleton placement rejects a second active instance |
 
@@ -401,4 +543,5 @@ node --test test/corpus-search.test.mjs
 ```
 
 The fixture tests do not contact Kaggle or arXiv. They build a temporary snapshot ZIP and corpus,
-exercise bulk ingestion, OAI catch-up, all three tools, and input bounds, then remove the data afterward.
+exercise bulk ingestion, OAI catch-up, every tool, query operators, spelling correction, and input
+bounds, then remove the data afterward.

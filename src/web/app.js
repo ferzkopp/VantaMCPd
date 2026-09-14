@@ -549,9 +549,18 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
     if (hw.filesystems && hw.filesystems.length) {
       const fs = section("Mounted filesystems");
       hw.filesystems.forEach((f) => {
-        kv(fs.dl, f.mountpoint, `${f.fsType || "?"} · ${f.sizeGb || "?"} GB · ${f.device || "?"}`);
+        kv(fs.dl, f.mountpoint, `${f.fsType || "?"} · ${f.sizeGb ?? "?"} GB · ${f.device || "?"}`);
       });
       dlgBody.appendChild(fs);
+    }
+
+    if (hw.networkMounts && hw.networkMounts.length) {
+      const nm = section("Network mounts");
+      hw.networkMounts.forEach((m) => {
+        // These are usually x-systemd.automount, so "idle" is normal rather than a fault.
+        kv(nm.dl, m.mountpoint, `${m.fsType || "?"} · ${m.source} · ${m.mounted ? "mounted" : "idle, mounts on access"}`);
+      });
+      dlgBody.appendChild(nm);
     }
 
     if (hw.os) {

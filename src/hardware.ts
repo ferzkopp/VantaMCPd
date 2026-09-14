@@ -74,6 +74,11 @@ if command -v lsblk >/dev/null 2>&1; then
 fi
 df -PT -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null |
   awk 'NR>1{printf "fs|mount=%s device=%s type=%s size_gb=%.1f\n",$7,$1,$2,$3/1048576}'
+# Network shares are often x-systemd.automount, so df misses them while idle; fstab is the durable record.
+if command -v findmnt >/dev/null 2>&1; then
+  findmnt --fstab -t nfs,nfs4,cifs,smb3 -no TARGET,SOURCE,FSTYPE 2>/dev/null |
+    awk '{printf "netfs|mount=%s source=%s type=%s\n",$1,$2,$3}'
+fi
 [ -r /etc/machine-id ] && echo "machine_id|$(cat /etc/machine-id)"
 exit 0
 `;
@@ -244,6 +249,20 @@ export function parseHardware(stdout: string, node?: ResolvedNode): NodeHardware
     )
     .filter((f): f is NonNullable<typeof f> => f !== undefined);
 
+  const mountedPoints = new Set(filesystems.map((f) => f.mountpoint));
+  const networkMounts = list(kv.netfs)
+    .map((line) => parsePairs(line))
+    .filter((p) => p.mount && p.source)
+    .map((p) =>
+      prune({
+        mountpoint: p.mount as string,
+        source: p.source as string,
+        fsType: first(p.type),
+        mounted: mountedPoints.has(p.mount as string),
+      }),
+    )
+    .filter((m): m is NonNullable<typeof m> => m !== undefined);
+
   return {
     cpu: prune({
       model: first(kv.cpu_model),
@@ -263,6 +282,7 @@ export function parseHardware(stdout: string, node?: ResolvedNode): NodeHardware
     accelerators,
     disks: disks.length > 0 ? disks : undefined,
     filesystems: filesystems.length > 0 ? filesystems : undefined,
+    networkMounts: networkMounts.length > 0 ? networkMounts : undefined,
     os: prune({
       name: first(kv.os_name),
       id: first(kv.os_id),

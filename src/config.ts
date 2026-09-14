@@ -87,6 +87,14 @@ const FilesystemSchema = z.object({
   sizeGb: z.number().nonnegative().optional(),
 });
 
+const NetworkMountSchema = z.object({
+  mountpoint: z.string(),
+  source: z.string(),
+  fsType: z.string().optional(),
+  /** False for an on-demand mount that was idle when the node was probed. */
+  mounted: z.boolean().optional(),
+});
+
 const OsSchema = z.object({
   name: z.string().optional(),
   id: z.string().optional(),
@@ -113,6 +121,7 @@ const HardwareSchema = z.object({
   accelerators: z.array(AcceleratorSchema).optional(),
   disks: z.array(DiskSchema).optional(),
   filesystems: z.array(FilesystemSchema).optional(),
+  networkMounts: z.array(NetworkMountSchema).optional(),
   os: OsSchema.optional(),
   machineId: z.string().optional(),
   discoveredAt: z.string().optional(),

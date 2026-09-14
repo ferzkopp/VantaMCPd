@@ -8,9 +8,36 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "../dist/web/time.js";
-import { startWebServer } from "../dist/web.js";
+import { addressScrubber, startWebServer } from "../dist/web.js";
 
 const now = Date.parse("2026-09-12T12:00:00.000Z");
+
+test("names known node addresses and masks every other IPv4 in a payload", () => {
+  const scrub = addressScrubber({
+    nodes: [
+      { name: "cluster4", host: "192.168.42.36" },
+      { name: "cluster1", host: "192.168.42.39" },
+      { name: "byname", host: "storage.local" },
+    ],
+  });
+
+  const scrubbed = scrub({
+    host: "192.168.42.39",
+    description: "NFS client of 192.168.42.36:/mnt/ssd.",
+    networkMounts: [{ source: "192.168.42.36:/mnt/ssd" }],
+    exports: "192.168.42.0/24(rw)",
+    kernel: "4.14.14-sunxi",
+    version: "1.2.3.4",
+  });
+
+  assert.equal(scrubbed.host, "cluster1");
+  assert.equal(scrubbed.description, "NFS client of cluster4:/mnt/ssd.");
+  assert.equal(scrubbed.networkMounts[0].source, "cluster4:/mnt/ssd");
+  // An unconfigured address, such as an export CIDR, is still masked rather than named.
+  assert.equal(scrubbed.exports, "x.x.x.x/24(rw)");
+  assert.equal(scrubbed.kernel, "4.14.14-sunxi", "a kernel version is not an address");
+  assert.equal(scrubbed.version, "x.x.x.x", "four small dotted groups are indistinguishable from an address");
+});
 
 test("formats dashboard last-seen timestamps as elapsed minutes, hours, and days", () => {
   assert.equal(formatRelativeTime("2026-09-12T11:59:30.000Z", now), "0 min ago");

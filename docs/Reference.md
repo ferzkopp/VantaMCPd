@@ -300,9 +300,11 @@ mounted filesystems and OS.
 The payload behind it is built as an **allow-list**, so a field added to the inventory later cannot leak
 by accident. Deliberately excluded: the node's address, `privateKeyPath` (it can contain the local host
 username) and the SSH user. Every remaining value is then passed through an IPv4 scrub, because
-addresses arrive from places an allow-list cannot anticipate — NFS mount sources in `filesystems`,
-export CIDRs, and hand-written `description` text. They render as `x.x.x.x`. Dotted groups whose parts
-are not valid octets, such as a quad-dotted kernel or package version, are left alone.
+addresses arrive from places an allow-list cannot anticipate — NFS mount sources in `filesystems` and
+`networkMounts`, export CIDRs, and hand-written `description` text. An address belonging to a configured
+node is replaced by that node's name, so `192.168.42.36:/mnt/ssd` reads as `cluster4:/mnt/ssd` and the
+relationship between nodes stays visible; every other address renders as `x.x.x.x`. Dotted groups whose
+parts are not valid octets, such as a quad-dotted kernel or package version, are left alone.
 
 This makes the node-detail view safe to screenshot. The **Interactions** list retains operational detail:
 commands and MCP input parameters are stored after redaction and clipping, but can still contain

@@ -569,7 +569,12 @@ export class ModuleManager {
     const result = await this.withClient(modulePackage, selectedNode, async (client, timeout) => {
       const listed = await client.listTools({}, { timeout, maxTotalTimeout: timeout });
       if (!listed.tools.some((tool) => tool.name === toolName)) {
-        throw new Error(`Module ${moduleId} does not advertise tool ${toolName}.`);
+        // The list is already in hand, so name the alternatives rather than forcing a discovery round trip.
+        const advertised = listed.tools.map((tool) => tool.name).sort().join(", ");
+        throw new Error(
+          `Module ${moduleId} does not advertise tool ${toolName}. Available tools: ${advertised}. ` +
+          `Call cluster_list_module_tools for their argument schemas.`,
+        );
       }
       return client.callTool(
         { name: toolName, arguments: args },

@@ -43,7 +43,7 @@ routes its tools according to the module's deployment policy.
 | --- | --- | --- | --- | --- |
 | **Core** (`core`, built in) | Cluster inventory, health, packages, services, files, storage, jobs, and module lifecycle | Runs on the Vanta host; fans out over SSH | Node.js 20.11+, OpenSSH client, and configured Debian/Armbian nodes | [Built-in tools](#tools) |
 | **Text Tools** (`text-tools`, v0.4.0) | 111 bounded text, data, date/time, document, security, and developer operations across twelve category tools | Replicated; on demand; round-robin routing | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 40 MB disk | [Text Tools](modules/text-tools/TextTools.md) |
-| **Scientific Corpus Search** (`corpus-search`, v0.3.0) | Provenance-aware arXiv metadata search using SQLite FTS5/BM25 | Singleton; on demand; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 10 GiB free node storage | [Scientific Corpus Search](modules/corpus-search/CorpusSearch.md) |
+| **Scientific Corpus Search** (`corpus-search`, v0.4.0) | Provenance-aware arXiv metadata search using SQLite FTS5/BM25, with phrase, exclusion, and field query syntax | Singleton; on demand; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 10 GiB free node storage | [Scientific Corpus Search](modules/corpus-search/CorpusSearch.md) |
 
 Use `cluster_list_modules` to see install options, compatibility, deployment policies, and live
 installation state. See [Node modules](docs/Modules.md) for architecture and lifecycle details.

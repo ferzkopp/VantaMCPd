@@ -115,8 +115,9 @@ test("provisions fixture metadata and serves bounded MCP search tools", { skip: 
       { name: "corpus_get", arguments: { id: "2609.00001v2" } },
       { name: "corpus_info", arguments: {} },
       { name: "corpus_search", arguments: { query: "x", limit: 500 } },
+      { name: "corpus_categories", arguments: { contains: "retrieval" } },
     ]);
-    assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), ["corpus_search", "corpus_get", "corpus_info"]);
+    assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), ["corpus_search", "corpus_get", "corpus_info", "corpus_categories"]);
     assert.equal(responses[2].result.structuredContent.results[0].id, "2609.00001");
     assert.equal(responses[3].result.structuredContent.authors[0], "Ada Example");
     assert.equal(responses[4].result.structuredContent.records, 2);
@@ -126,6 +127,52 @@ test("provisions fixture metadata and serves bounded MCP search tools", { skip: 
     assert.match(responses[4].result.structuredContent.source, /bulk metadata snapshot/);
     assert.match(responses[4].result.structuredContent.catchUpSourceUrl, /oaipmh\.arxiv\.org/);
     assert.equal(responses[5].result.isError, true);
+
+    // A plain-language subject must resolve to the identifier corpus_search accepts.
+    const categories = responses[6].result.structuredContent;
+    assert.equal(categories.countsIncludeCrossLists, true);
+    assert.deepEqual(categories.categories.map((entry) => entry.category), ["cs.IR"]);
+    assert.equal(categories.categories[0].name, "Information Retrieval");
+    assert.equal(categories.categories[0].group, "Computer Science");
+    assert.equal(categories.categories[0].ingestionTopic, true);
+    assert.ok(categories.categories[0].records > 0);
+  } finally {
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("applies query operators and corrects spelling only when a query finds nothing", { skip: !pythonCommand }, () => {
+  const dataDirectory = mkdtempSync(path.join(tmpdir(), "vanta-corpus-query-"));
+  try {
+    provisionFixture(dataDirectory);
+    const ids = (response) => response.result.structuredContent.results.map((paper) => paper.id);
+    const responses = runProtocol(dataDirectory, [
+      { name: "corpus_search", arguments: { query: '"document retrieval"' } },
+      { name: "corpus_search", arguments: { query: "example -database" } },
+      { name: "corpus_search", arguments: { query: "retrieval OR database" } },
+      { name: "corpus_search", arguments: { query: "title:database" } },
+      { name: "corpus_search", arguments: { query: "datab*" } },
+      { name: "corpus_search", arguments: { query: "retreival" } },
+      { name: "corpus_search", arguments: { query: "retreival", fuzzy: false } },
+      { name: "corpus_search", arguments: { query: "retrieval" } },
+      { name: "corpus_search", arguments: { query: "-database" } },
+    ]);
+
+    assert.deepEqual(ids(responses[2]), ["2609.00001"], "quoted phrase matches adjacent words");
+    assert.deepEqual(ids(responses[3]), ["2609.00001"], "-term excludes a match");
+    assert.deepEqual(ids(responses[4]).sort(), ["2609.00001", "2609.00002"], "OR admits either term");
+    assert.deepEqual(ids(responses[5]), ["2609.00002"], "field prefix restricts to one column");
+    assert.deepEqual(ids(responses[6]), ["2609.00002"], "trailing * matches by prefix");
+
+    assert.deepEqual(ids(responses[7]), ["2609.00001"], "a misspelling still finds the paper");
+    assert.deepEqual(responses[7].result.structuredContent.corrections, [{ from: "retreival", to: "retrieval" }]);
+    assert.deepEqual(ids(responses[8]), [], "fuzzy: false leaves the misspelling uncorrected");
+    assert.match(responses[8].result.structuredContent.hint, /combined with AND/, "an empty result explains the syntax");
+
+    // A query that matches must never be silently rewritten.
+    assert.equal(responses[9].result.structuredContent.corrections, undefined);
+    assert.equal(responses[9].result.structuredContent.hint, undefined);
+    assert.equal(responses[10].result.isError, true, "exclusions alone are not a search");
   } finally {
     rmSync(dataDirectory, { recursive: true, force: true });
   }

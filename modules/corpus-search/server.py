@@ -5,10 +5,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from corpus import get_paper, info, search, self_test, verify, connect
+from corpus import get_paper, info, list_categories, search, self_test, verify, connect
 
 PROTOCOL_VERSION = "2025-06-18"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 
 def database_path() -> Path:
@@ -23,14 +23,29 @@ def database_path() -> Path:
 
 TOOLS = {
     "corpus_search": {
-        "description": "Search the installed scientific metadata corpus using bounded BM25 full-text ranking.",
+        "description": (
+            "Search the installed scientific metadata corpus by relevance over titles, abstracts, authors, and categories. "
+            "Terms are matched literally and combined with AND, so prefer two or three precise words over a sentence. "
+            "Query syntax: \"exact phrase\", -excluded, alternative OR alternative, prefix*, and the field prefixes "
+            "title:, abstract:, author:, category:. Example: title:\"language model\" robotics -survey. "
+            "Words are not stemmed or expanded, so use OR or prefix* for plural and spelling variants. "
+            "A misspelled word is corrected automatically when the query finds nothing; when the response contains "
+            "a corrections array, say which words were changed before presenting results. "
+            "Resolve a subject named in plain language with corpus_categories before filtering by category."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "minLength": 1, "maxLength": 500},
-                "category": {"type": "string", "maxLength": 40},
+                "query": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "description": "Search terms. All terms are required unless separated by OR. Prefix a term with - to exclude it; a query of only exclusions is rejected.",
+                },
+                "category": {"type": "string", "maxLength": 40, "description": "Exact arXiv category identifier such as cs.RO, matched against cross-lists too. Use corpus_categories to find it."},
                 "publishedFrom": {"type": "string", "description": "Inclusive YYYY-MM-DD date."},
                 "publishedTo": {"type": "string", "description": "Inclusive YYYY-MM-DD date."},
+                "fuzzy": {"type": "boolean", "default": True, "description": "Retry a zero-result query with corrected spelling and report the substitutions. Set false to test whether a term appears verbatim."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
                 "offset": {"type": "integer", "minimum": 0, "maximum": 10000, "default": 0}
             },
@@ -53,6 +68,18 @@ TOOLS = {
         "description": "Describe the installed corpus profile, provenance, record counts, size, and refresh cutoff.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         "handler": lambda _arguments: info(database_path()),
+    },
+    "corpus_categories": {
+        "description": "List the arXiv subject categories present in the corpus with their readable names and record counts. Use this to resolve a subject named in plain language, such as robotics or cryptography, into the category identifier accepted by corpus_search.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "contains": {"type": "string", "minLength": 1, "maxLength": 80, "description": "Case-insensitive substring matched against the identifier and the category name."},
+                "ingestedOnly": {"type": "boolean", "default": False, "description": "Restrict results to the profile's ingestion topics, excluding cross-listed categories."}
+            },
+            "additionalProperties": False
+        },
+        "handler": lambda arguments: list_categories(database_path(), arguments),
     },
 }
 
