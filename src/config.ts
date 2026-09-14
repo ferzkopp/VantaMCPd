@@ -62,6 +62,9 @@ const PartitionSchema = z.object({
   sizeGb: z.number().nonnegative().optional(),
   fsType: z.string().optional(),
   label: z.string().optional(),
+  partitionType: z.string().optional(),
+  /** MBR extended partition: a container for logical partitions, never a filesystem. */
+  container: z.boolean().optional(),
   mountpoint: z.string().optional(),
 });
 

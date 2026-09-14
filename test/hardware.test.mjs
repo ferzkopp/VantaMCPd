@@ -37,3 +37,31 @@ test("records an empty accelerator inventory when no GPU tool reports a device",
 
   assert.deepEqual(hardware.accelerators, []);
 });
+
+test("marks an MBR extended partition as a container rather than a sizeless unformatted partition", () => {
+  // Debian's guided partitioning on MBR: root, an extended container, and swap logical inside it.
+  const hardware = parseHardware([
+    "cpu_cores|4",
+    "arch|x86_64",
+    'disk|NAME="sda" TYPE="disk" SIZE="34359738368" ROTA="1" RM="0" MODEL="QEMU HARDDISK"',
+    'part|NAME="sda1" PKNAME="sda" TYPE="part" SIZE="32550944768" FSTYPE="ext4" LABEL="" MOUNTPOINT="/" PARTTYPE="0x83" PARTTYPENAME="Linux"',
+    'part|NAME="sda2" PKNAME="sda" TYPE="part" SIZE="1024" FSTYPE="" LABEL="" MOUNTPOINT="" PARTTYPE="0xf" PARTTYPENAME="W95 Ext\'d (LBA)"',
+    'part|NAME="sda5" PKNAME="sda" TYPE="part" SIZE="1805647872" FSTYPE="swap" LABEL="" MOUNTPOINT="[SWAP]" PARTTYPE="0x82" PARTTYPENAME="Linux swap / Solaris"',
+    "root_device|/dev/sda1",
+    "root_disk|sda",
+    "discovered_at|2026-09-13T20:00:00Z",
+  ].join("\n"));
+
+  const [root, extended, swap] = hardware.disks[0].partitions;
+  assert.equal(extended.container, true);
+  assert.equal(extended.partitionType, "W95 Ext'd (LBA)");
+  assert.equal(extended.fsType, undefined);
+
+  // Only the extended container carries the flag; real partitions keep their filesystem detail.
+  assert.equal(root.container, undefined);
+  assert.equal(root.fsType, "ext4");
+  assert.equal(root.mountpoint, "/");
+  assert.equal(swap.container, undefined);
+  assert.equal(swap.partitionType, "Linux swap / Solaris");
+  assert.equal(swap.mountpoint, undefined, '"[SWAP]" is a state, not a mountpoint');
+});

@@ -528,12 +528,17 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
       hw.disks.forEach((d) => {
         const head = `${d.name}  —  ${d.role || "?"}${d.roleSource === "configured" ? " (set by you)" : ""}`;
         const lines = [
-          `${d.sizeGb || "?"} GB${d.model ? " · " + d.model : ""}${d.removable ? " · removable" : ""}` +
+          `${d.sizeGb ?? "?"} GB${d.model ? " · " + d.model : ""}${d.removable ? " · removable" : ""}` +
             `${d.rotational === false ? " · non-rotational" : ""}`,
         ];
         (d.partitions || []).forEach((p) => {
+          if (p.container) {
+            // Size and filesystem are meaningless for an extended container; showing them reads as a fault.
+            lines.push(`  ${p.name} · extended partition container${p.partitionType ? " · " + p.partitionType : ""}`);
+            return;
+          }
           lines.push(
-            `  ${p.name} · ${p.sizeGb || "?"} GB · ${p.fsType || "no filesystem"}` +
+            `  ${p.name} · ${p.sizeGb ?? "?"} GB · ${p.fsType || p.partitionType || "no filesystem"}` +
               `${p.label ? ' · "' + p.label + '"' : ""}${p.mountpoint ? " → " + p.mountpoint : ""}`,
           );
         });

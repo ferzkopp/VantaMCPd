@@ -70,7 +70,7 @@ fi
 if command -v lsblk >/dev/null 2>&1; then
   # -P emits key="value" for every column, so empty fields never shift the parse.
   lsblk -bnP -o NAME,TYPE,SIZE,ROTA,RM,MODEL 2>/dev/null | grep 'TYPE="disk"' | sed 's/^/disk|/'
-  lsblk -bnP -o NAME,PKNAME,TYPE,SIZE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null | grep 'TYPE="part"' | sed 's/^/part|/'
+  lsblk -bnP -o NAME,PKNAME,TYPE,SIZE,FSTYPE,LABEL,MOUNTPOINT,PARTTYPE,PARTTYPENAME 2>/dev/null | grep 'TYPE="part"' | sed 's/^/part|/'
 fi
 df -PT -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null |
   awk 'NR>1{printf "fs|mount=%s device=%s type=%s size_gb=%.1f\n",$7,$1,$2,$3/1048576}'
@@ -101,6 +101,9 @@ function parsePairs(line: string): Record<string, string> {
 }
 
 const BYTES_PER_GB = 1024 ** 3;
+
+/** MBR partition types that only contain logical partitions: extended CHS, extended LBA, Linux extended. */
+const EXTENDED_PARTITION_TYPES = new Set(["0x5", "0x05", "0xf", "0x0f", "0x85"]);
 
 function first(value: string | string[] | undefined): string | undefined {
   const s = Array.isArray(value) ? value[0] : value;
@@ -173,6 +176,10 @@ export function parseHardware(stdout: string, node?: ResolvedNode): NodeHardware
       sizeGb: p.size ? Math.round((Number(p.size) / BYTES_PER_GB) * 10) / 10 : undefined,
       fsType: first(p.fstype),
       label: first(p.label),
+      partitionType: first(p.parttypename),
+      // An MBR extended partition is a container for logical partitions; it holds only an EBR
+      // descriptor, so its ~1 KiB size and absent filesystem are expected rather than a fault.
+      container: EXTENDED_PARTITION_TYPES.has((first(p.parttype) ?? "").toLowerCase()) || undefined,
       // lsblk reports "[SWAP]" in the MOUNTPOINT column; that is a state, not a path.
       mountpoint: p.mountpoint === "[SWAP]" ? undefined : first(p.mountpoint),
     });
