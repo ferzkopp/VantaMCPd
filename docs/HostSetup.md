@@ -14,6 +14,9 @@ For the current stdio transport, the agent must be able to start a process on th
 agent and VantaMCPd commonly run on the same Windows or Linux machine. A cloud-only agent cannot launch
 this local stdio server unless its runtime is hosted on the same network and filesystem.
 
+Before enrollment, prepare each managed machine using the OS, network, account, SSH, and sudo checklist
+in [Node setup](NodeSetup.md).
+
 ## Support Matrix
 
 “Validated” means exercised by this repository’s current development setup. “Compatible” means the
@@ -55,7 +58,8 @@ See [MCP client integration](Clients.md) for exact configurations and verificati
 | RPM-based Linux, BSD, Windows | Future |
 
 CPU architecture is not a host restriction. Managed nodes may be ARM, x86, or accelerator-equipped when
-the requested tool or module declares compatible requirements.
+the requested tool or module declares compatible requirements. See [Node setup](NodeSetup.md) for the
+recommended platform and first-boot procedure.
 
 ## Host Prerequisites
 

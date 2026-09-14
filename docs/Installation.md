@@ -2,7 +2,7 @@
 
 This guide expands the six steps in the [QuickStart](../README.md#quickstart). Run commands from the
 repository root unless stated otherwise. Managed nodes also need a one-time OS and account prerequisite
-before enrollment.
+before enrollment; follow [Node setup](NodeSetup.md) for that short checklist.
 
 | Step | Action | Where it acts | What it needs from you |
 | --- | --- | --- | --- |
@@ -14,7 +14,8 @@ before enrollment.
 | 6 | Discover and install node modules | agent and selected nodes | explicit targets and installation approval |
 
 The Windows and Linux support matrix and standalone enrollment commands are in
-[Host setup](HostSetup.md).
+[Host setup](HostSetup.md). Managed-node operating system and first-boot requirements are in
+[Node setup](NodeSetup.md).
 
 ## 1. Install host prerequisites and build
 
@@ -72,53 +73,10 @@ Portable npm scripts are `npm run build`, `npm test`, `npm start`, and `npm run 
 
 ## Managed-node prerequisite
 
-VantaMCPd manages nodes; it does not image them. Each node needs an OS, a name, and an account before
-enrollment. Do this once per node.
-
-**1. Flash the OS.** Download an [Armbian](https://www.armbian.com/download/) image for the exact board
-(or Raspberry Pi OS Lite or plain Debian where applicable) and write it to the SD card with
-[balenaEtcher](https://etcher.balena.io/) or Raspberry Pi Imager. Prefer a **minimal / CLI** image.
-Debian 12 (bookworm) is what the tools are tested against.
-
-**2. Complete the first boot.** Connect Ethernet and power. Log in over serial, HDMI, or SSH as the
-image's default account. Armbian uses `root` / `1234`, forces a password change, and then walks through
-creating a normal user. Record that username for `defaults.user` in the inventory.
-
-**3. Set the hostname** to the name used in the inventory so logs and prompts match:
-
-```bash
-sudo hostnamectl set-hostname cluster1
-sudo sed -i "s/127.0.1.1.*/127.0.1.1\tcluster1/" /etc/hosts
-```
-
-**4. Give it a stable address.** Use a DHCP reservation on the router or a static lease. The inventory
-stores an IP address for each node, so it must not move.
-
-**5. Make sure SSH is running and the account can use sudo:**
-
-```bash
-sudo systemctl enable --now ssh
-sudo timedatectl set-ntp true      # apt and TLS both depend on an accurate clock
-id -nG                             # must include sudo (or wheel)
-sudo apt-get update && sudo apt-get -y upgrade
-```
-
-**6. Attach any extra disks**, such as a USB stick for swap or an SSD for shared storage. They do not
-need to be partitioned or formatted in advance: `cluster_swap` and `cluster_storage` handle that, and
-discovery classifies them automatically.
-
-Record these values for the inventory:
-
-| Field | Example | Goes into |
-| --- | --- | --- |
-| node name | `cluster1` | `nodes[].name` (match the hostname) |
-| IP address | `10.0.0.11` | `nodes[].host` |
-| username | `configure` | `defaults.user` (or `nodes[].user`) |
-| role | `worker`, `worker+storage` | `nodes[].role` |
-| storage device | `/dev/sda1` | `nodes[].storage.device` on storage nodes |
-
-After enrollment, VantaMCPd uses a dedicated key and a NOPASSWD sudo rule; it never asks the agent for
-a node password.
+VantaMCPd manages nodes; it does not image them. Before continuing, prepare each machine with a
+supported Debian-based OS, stable network address, SSH service, synchronized clock, and sudo-capable
+login account by following [Node setup](NodeSetup.md). That guide also lists the values to record for
+the inventory and explains how to handle optional swap and storage disks.
 
 ## 2. Create and edit the inventory
 

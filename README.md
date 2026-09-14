@@ -29,8 +29,24 @@ Three parts are deliberately independent:
 | **Managed nodes** | The Debian/Armbian machines VantaMCPd reaches over SSH; ARM, x86, and accelerators use the same inventory model |
 
 With stdio MCP, the agent launches VantaMCPd on its own host. The agent and Vanta host are therefore
-usually the same machine, but they are different roles in the architecture. See [Host setup](docs/HostSetup.md)
-and [MCP client integration](docs/Clients.md) for the currently supported combinations.
+usually the same machine, but they are different roles in the architecture. See
+[Host setup](docs/HostSetup.md), [Node setup](docs/NodeSetup.md), and
+[MCP client integration](docs/Clients.md) for the currently supported combinations.
+
+## Modules
+
+Modules extend managed nodes with MCP tools for useful workloads. VantaMCPd checks each module's
+declared hardware and software requirements, installs it only on compatible nodes after approval, and
+routes its tools according to the module's deployment policy.
+
+| Module | Purpose | Deployment | Requirements | Guide |
+| --- | --- | --- | --- | --- |
+| **Core** (`core`, built in) | Cluster inventory, health, packages, services, files, storage, jobs, and module lifecycle | Runs on the Vanta host; fans out over SSH | Node.js 20.11+, OpenSSH client, and configured Debian/Armbian nodes | [Built-in tools](#tools) |
+| **Text Tools** (`text-tools`, v0.2.0) | Bounded text transformation, extraction, analysis, conversion, document, table, and developer tools | Replicated; on demand; round-robin routing | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 40 MB disk | [Text Tools](modules/text-tools/TextTools.md) |
+| **Scientific Corpus Search** (`corpus-search`, v0.3.0) | Provenance-aware arXiv metadata search using SQLite FTS5/BM25 | Singleton; on demand; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 10 GiB free node storage | [Scientific Corpus Search](modules/corpus-search/CorpusSearch.md) |
+
+Use `cluster_list_modules` to see install options, compatibility, deployment policies, and live
+installation state. See [Node modules](docs/Modules.md) for architecture and lifecycle details.
 
 ## QuickStart
 
@@ -72,7 +88,8 @@ test -e cluster.config.local.json || cp cluster.config.example.json cluster.conf
 ```
 
 Set the real node names, addresses, user, roles, and storage in `cluster.config.local.json`. The managed
-nodes must already run Debian/Armbian with SSH and a sudo-capable account.
+nodes must already run Debian/Armbian with SSH and a sudo-capable account; see
+[Node setup](docs/NodeSetup.md) for the short first-boot checklist.
 
 **3. Bootstrap key authentication and passwordless sudo on each node.**
 
@@ -111,32 +128,15 @@ for Claude Code, Hermes Agent, OpenClaw, and generic MCP clients are in [MCP cli
 
 > List the available node modules and their deployment policies.
 >
-> Check whether text-tools is compatible with cluster1 and cluster2.
+> Check whether text-tools is compatible with cluster1 and cluster2, then install it there.
 >
-> Install text-tools on cluster1 and cluster2.
->
-> Check whether corpus-search is compatible with the storage node.
->
-> Install corpus-search on the storage node using the Medium profile, then show its job progress.
+> Check whether corpus-search is compatible with the storage node, install it using the Medium profile,
+> then show its job progress.
 
-The install prompt requires your approval before VantaMCPd calls `cluster_install_module` with
-`confirm: true`. Installations always use explicit node names or tags; they never default to the entire
-cluster. Replicated modules such as Text Tools may be installed on multiple compatible nodes, while
-singleton modules reject a second installation.
-
-Long-running module activation returns a durable job ID instead of holding the MCP request open. The
-job continues under systemd on the target node across SSH disconnects and VantaMCPd restarts. Use the
-job tools or the dashboard to follow phase, progress, heartbeat, logs, and the terminal result.
-
-The corpus module downloads and retains an arXiv metadata ZIP plus extracted JSON and therefore requires
-at least 10 GiB free on configured node-local storage. Its Small, Medium, and Large profiles ingest 1%,
-25%, or 100% of records matching the selected topics. See the
-[Corpus Search quickstart](modules/corpus-search/CorpusSearch.md#quickstart) for installation,
-verification, first-query, recovery, and reconfiguration steps.
-
-At daemon startup, validated module receipts are compared with the local catalog. Installed older
-versions are upgraded automatically after hardware discovery; absent modules are not installed and
-newer node versions are not downgraded. Set `defaults.autoUpdateModules` to `false` to opt out.
+Module installation requires approval and explicit target nodes or tags. See [Node modules](docs/Modules.md)
+for deployment, routing, durable jobs, and update behavior, and the
+[Corpus Search quickstart](modules/corpus-search/CorpusSearch.md#quickstart) for profiles, storage,
+installation, and recovery.
 
 **Re-running the whole block on a working cluster is safe.** Every step is idempotent: an existing SSH
 key is reused, `authorized_keys` and `/etc/sudoers.d/99-vanta` are left alone once correct (so you are
@@ -190,43 +190,74 @@ Then ask your agent: *"Check the status of all cluster nodes"*.
 So `targets: ["storage"]` hits every storage node and `targets: ["worker"]` every worker, on any cluster,
 without hard-coding names.
 
+### Physical topology
+
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph HOST["Vanta host · Windows or Linux"]
-        direction TB
-        AGENT["MCP-capable agent<br/>Copilot · Claude · Hermes · OpenClaw"]
-      MCP["vantamcpd<br/>built-in tools · module lifecycle + routing"]
-        INV[("cluster.config.local.json<br/>inventory + hardware")]
-      CAT[("trusted module catalog<br/>replicated · singleton")]
-        KEY[("~/.ssh/vanta_cluster_ed25519")]
-        AGENT <-->|"MCP tool calls"| MCP
-        MCP --- INV
-      MCP --- CAT
-        MCP --- KEY
+        direction LR
+        AGENT["MCP-capable agent"]:::client -->|"MCP"| VANTA["VantaMCPd<br/>core tools + module router"]:::control
+        INVENTORY[("Inventory<br/>hardware + roles")]:::config --> VANTA
+        CATALOG[("Module catalog")]:::config --> VANTA
+        KEY[("SSH key")]:::config --> VANTA
+        VANTA --> MONITOR["Local monitor<br/>127.0.0.1:7420"]:::monitor
     end
 
-    subgraph LAN["Cluster LAN"]
-        direction TB
-      W1["cluster1 · <b>worker</b><br/>SD card: system<br/>USB stick: swap<br/>optional: text-tools replica"]
-      W2["cluster2 · <b>worker</b><br/>SD card: system<br/>USB stick: swap<br/>optional: text-tools replica"]
-        W3["cluster3 · <b>worker</b><br/>SD card: system<br/>USB stick: swap"]
-        S1["cluster4 · <b>worker+storage</b><br/>SD card: system<br/>USB stick: swap<br/>SSD: /mnt/ssd"]
-        S1 -->|"NFS export of /mnt/ssd"| W1
-        S1 --> W2
-        S1 --> W3
+    subgraph NODES["Managed Linux nodes"]
+        direction LR
+        N1["cluster1<br/>worker"]:::worker
+        N2["cluster2<br/>worker"]:::worker
+        N3["cluster3<br/>worker"]:::worker
+        N4["cluster4<br/>worker + storage<br/>/mnt/ssd"]:::storage
     end
 
-    MCP -->|"SSH :22 · built-in commands + module MCP stdio"| W1
-    MCP --> W2
-    MCP --> W3
-    MCP --> S1
+    VANTA -->|"SSH :22"| N1
+    VANTA -->|"SSH :22"| N2
+    VANTA -->|"SSH :22"| N3
+    VANTA -->|"SSH :22"| N4
+    N4 -.->|"NFS"| N1
+    N4 -.->|"NFS"| N2
+    N4 -.->|"NFS"| N3
+
+    classDef client fill:#dbeafe,stroke:#2563eb,color:#172554,stroke-width:2px
+    classDef control fill:#dcfce7,stroke:#16a34a,color:#052e16,stroke-width:2px
+    classDef config fill:#f3f4f6,stroke:#6b7280,color:#111827
+    classDef monitor fill:#cffafe,stroke:#0891b2,color:#164e63
+    classDef worker fill:#fef3c7,stroke:#d97706,color:#451a03
+    classDef storage fill:#fee2e2,stroke:#dc2626,color:#450a0a,stroke-width:2px
 ```
 
-  Every operation starts on the same path: the agent calls an MCP tool and the daemon resolves explicit
-  `targets` against the inventory or routes a targetless module call according to its manifest. Built-in
-  cluster tools fan out over SSH with bounded concurrency and drive stock `apt`, `systemctl`, `journalctl`,
-  `lsblk` and friends. Optional modules are installed on compatible nodes, then launched through SSH stdio
-  on demand or managed as systemd services according to their runtime policy.
+### Request and module flow
+
+```mermaid
+flowchart TB
+    REQUEST["Agent request"]:::client --> VANTA["VantaMCPd"]:::control
+    VANTA -->|"built-in cluster_* tool"| CORE["Core operation"]:::core
+    CORE -->|"bounded SSH command"| TARGETS["Explicit node targets"]:::node
+
+    VANTA -->|"module tool"| DISCOVER["Validate catalog<br/>and receipts"]:::module
+    DISCOVER --> POLICY{"Deployment policy"}:::decision
+    POLICY -->|"replicated"| REPLICA["Round-robin or<br/>explicit target"]:::module
+    POLICY -->|"singleton"| SINGLE["Sole installation"]:::module
+    REPLICA --> PROCESS["Node-side MCP process"]:::module
+    SINGLE --> PROCESS
+
+    TARGETS --> RESULT["Normalized result"]:::result
+    PROCESS --> RESULT
+    RESULT --> REQUEST
+
+    classDef client fill:#dbeafe,stroke:#2563eb,color:#172554,stroke-width:2px
+    classDef control fill:#dcfce7,stroke:#16a34a,color:#052e16,stroke-width:2px
+    classDef core fill:#cffafe,stroke:#0891b2,color:#164e63
+    classDef node fill:#fef3c7,stroke:#d97706,color:#451a03
+    classDef module fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+    classDef decision fill:#ffedd5,stroke:#ea580c,color:#431407
+    classDef result fill:#f3f4f6,stroke:#6b7280,color:#111827
+```
+
+Core tools fan out over SSH with bounded concurrency and drive stock utilities such as `apt`,
+`systemctl`, `journalctl`, and `lsblk`. Module calls validate live installation receipts, apply the
+manifest's deployment policy, and launch the selected node-side MCP process over SSH stdio.
 
 Inventory files:
 
@@ -243,12 +274,13 @@ Set `VANTA_CONFIG` when the daemon should load an inventory from a different pat
 
 The QuickStart above covers the shortest path to a working cluster. For the complete six-step Windows
 and Linux walkthrough, including managed-node preparation, enrollment checks, and command variants, see
-**[Installation](docs/Installation.md)**. Platform support details and standalone SSH procedures remain
-in **[Host setup](docs/HostSetup.md)**.
+**[Installation](docs/Installation.md)**. Prepare each managed machine with **[Node setup](docs/NodeSetup.md)**;
+platform support details and standalone SSH procedures remain in **[Host setup](docs/HostSetup.md)**.
 
 ## Operate the cluster
 
-Once connected, ask the agent:
+The built-in **Core** module provides the cluster management capabilities below. Once connected, ask
+the agent:
 
 **Health and triage**
 
@@ -310,6 +342,10 @@ Once connected, ask the agent:
 
 Destructive work (formatting, partitioning, reboots, `rm -rf`) is refused until you approve it
 explicitly, so it is safe to ask for it and then read back what the agent proposes.
+
+Installed modules add workload-specific tools beyond these Core operations. See the [module catalog](#modules)
+for the available modules and [Node modules](docs/Modules.md) for installation, routing, lifecycle, and
+usage details.
 
 ## Monitoring
 
@@ -391,6 +427,7 @@ module usage, architecture, implemented packages, and the roadmap are documented
 | --- | --- |
 | [Installation](docs/Installation.md) | Complete Windows/Linux setup from host prerequisites through module installation |
 | [Host setup](docs/HostSetup.md) | Windows/Linux host support, node enrollment, and baseline preparation |
+| [Node setup](docs/NodeSetup.md) | Managed-node OS, network, account, SSH, sudo, and first-boot prerequisites |
 | [MCP clients](docs/Clients.md) | VS Code/Copilot, Claude Code, Hermes Agent, OpenClaw, and generic stdio configuration |
 | [Node modules](docs/Modules.md) | Available modules, activation, package lifecycle, architecture, and future module catalog |
 | [Hardware inventory](docs/Reference.md#hardware-inventory) | What the daemon records per node, and how disk roles (`system`/`swap`/`storage`) are decided |
