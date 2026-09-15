@@ -50,7 +50,7 @@ Detection is authoritative for `system` and `swap`. For anything that lands on `
 The Windows bootstrap helper runs this path automatically:
 
 ```jsonc
-{ "name": "cluster4", "diskRoles": { "sdc": "storage" } }
+{ "name": "storage-a", "diskRoles": { "sdc": "storage" } }
 ```
 
 `diskRoles` is yours, not the daemon's: it overrides detection and is never overwritten by a refresh.
@@ -70,7 +70,7 @@ whether an `/etc/fstab` entry exists for it. `swapPersistent: false` means some 
 2. The daemon on startup, for any node that has no `hardware` block yet — in the background, so start-up
    is not delayed. Disable with `"autoDiscoverHardware": false` in `defaults`.
 3. On demand: `cluster_hardware { refresh: true }`, or `npm run discover` (optionally
-   `npm run discover -- --assign cluster4`).
+  `npm run discover -- --assign storage-a`).
 
 Refreshing rewrites the block in the inventory file, preserving every other key. Re-run it after adding
 a disk, resizing the SD card or upgrading the OS.
@@ -79,15 +79,15 @@ a disk, resizing the SD card or upgrading the OS.
 
 ## Swap
 
-These boards have 1GB of RAM, so swap on an external USB stick is worth having — and SD-card swap is
-slow and wears the card, so a dedicated stick is the right place for it.
+On low-memory nodes, swap on an external USB device may be worthwhile. SD-card swap is slow and wears
+the card, so a dedicated device is preferable when the hardware supports one.
 
 ```text
 cluster_swap { action: "status" }                                         # safe, read-only
 cluster_swap { action: "persist" }                                        # fstab entries for active swap
-cluster_swap { action: "create", targets: ["cluster4"], device: "/dev/sdb",
+cluster_swap { action: "create", targets: ["storage-a"], device: "/dev/sdb",
                confirmDevice: "/dev/sdb" }                                # WIPES THE WHOLE DISK
-cluster_swap { action: "enable", targets: ["cluster4"], device: "/dev/sdb1",
+cluster_swap { action: "enable", targets: ["storage-a"], device: "/dev/sdb1",
                confirmDevice: "/dev/sdb1" }                               # wipes that partition only
 cluster_swap { action: "disable", device: "/dev/sdb1", removeFstab: true }
 ```
@@ -197,7 +197,7 @@ Unit names are validated against a strict character set. The read-only actions (
 | `sudo` | Read as root. Default true, which is what full system logs need |
 
 ```text
-cluster_logs { targets: ["cluster2"], unit: "ssh", priority: "err", lines: 50 }
+cluster_logs { targets: ["worker-b"], unit: "ssh", priority: "err", lines: 50 }
 cluster_logs { source: "dmesg", grep: "usb|mmc|I/O error" }
 cluster_logs { source: "file", path: "/var/log/syslog", lines: 200 }
 ```
@@ -217,9 +217,9 @@ into the command line.
 
 ```text
 cluster_list_dir { path: "/etc/systemd/system", recursiveDepth: 2 }
-cluster_read_file { node: "cluster4", path: "/etc/exports" }
+cluster_read_file { node: "storage-a", path: "/etc/exports" }
 cluster_write_file { path: "/etc/sysctl.d/60-vanta.conf", content: "vm.swappiness=10\n", sudo: true, mode: "644" }
-cluster_download { node: "cluster4", remotePath: "/etc/exports", localPath: "~/backup/exports" }
+cluster_download { node: "storage-a", remotePath: "/etc/exports", localPath: "~/backup/exports" }
 ```
 
 Remote paths must be absolute and free of newlines. Local paths expand `~`. `cluster_write_file` keeps a
@@ -254,7 +254,7 @@ See [Security model](#security-model) for the rule set.
 | `delayMinutes` | 0-60. Default 0, meaning now |
 
 ```text
-cluster_power { action: "reboot", targets: ["cluster2"], confirm: true }
+cluster_power { action: "reboot", targets: ["worker-b"], confirm: true }
 ```
 
 `poweroff` on a headless SBC needs physical access to undo, so confirmation is part of the schema rather
@@ -267,8 +267,6 @@ than a runtime check: a call without it never reaches a node.
 Every SSH interaction is recorded at the one place they all funnel through (`SshPool.exec`), so nothing
 a tool does can bypass it.
 
-![Dashboard](monitor.png)
-
 The module filter is populated from observed interactions. Module-specific operations use their module
 ID, while built-in and generic operations use `core`. The **copy log path** button at the right of the
 **Interactions** heading copies the current day's persisted JSONL `file://` URL without asking the
@@ -279,8 +277,6 @@ browser to navigate to a local resource.
 The **Modules** table summarizes active installations using the dashboard's cached inventory. Clicking
 a row connects to one reachable installation and shows the module's live MCP server identity, advertised
 tools, descriptions, and input schemas.
-
-![Module MCP API](monitor-module.png)
 
 ### Durable jobs
 
@@ -295,8 +291,6 @@ Clicking a row in **Nodes** opens that node's configuration and recorded hardwar
 CPU, detected GPUs with VRAM and CUDA/ROCm capability, memory and swap devices, the configured storage block, disks with their roles and partitions,
 mounted filesystems and OS.
 
-![Node detail](monitor-node.png)
-
 The payload behind it is built as an **allow-list**, so a field added to the inventory later cannot leak
 by accident. Deliberately excluded: the node's address, `privateKeyPath` (it can contain the local host
 username) and the SSH user.
@@ -305,7 +299,7 @@ Every dashboard response is then passed through an IPv4 substitution during seri
 polled endpoints and the live event stream alike. Addresses arrive from places an allow-list cannot
 anticipate — NFS mount sources in `filesystems` and `networkMounts`, export CIDRs, hand-written
 `description` text, recorded command text, and SSH error messages. An address belonging to a configured
-node is replaced by that node's name, so `192.168.42.36:/mnt/ssd` reads as `cluster4:/mnt/ssd` and the
+node is replaced by that node's name, so `192.0.2.21:/srv/storage` reads as `storage-a:/srv/storage` and the
 relationship between nodes stays visible; every other address renders as `x.x.x.x`. Dotted groups whose
 parts are not valid octets, such as a quad-dotted kernel or package version, are left alone. The
 substitution is presentation only: the on-disk JSONL log retains the raw host for anyone who needs it.
@@ -347,7 +341,7 @@ One JSON object per line (JSONL), appended as each interaction completes, in
 `ConvertFrom-Json` all work without a parser.
 
 ```json
-{"node":"cluster1","host":"10.0.0.11","kind":"exec","command":"install text-tools","sudo":true,"ok":true,"code":0,"durationMs":36,"bytesOut":0,"bytesErr":0,"module":"text-tools","tool":"cluster_install_module","parameters":"{\"moduleId\":\"text-tools\",\"targets\":[\"cluster1\"],\"confirm\":true}","seq":1,"ts":"2026-09-13T00:10:55.609Z"}
+{"node":"worker-a","host":"192.0.2.11","kind":"exec","command":"install text-tools","sudo":true,"ok":true,"code":0,"durationMs":36,"bytesOut":0,"bytesErr":0,"module":"text-tools","tool":"cluster_install_module","parameters":"{\"moduleId\":\"text-tools\",\"targets\":[\"worker-a\"],\"confirm\":true}","seq":1,"ts":"2026-01-15T00:10:55.609Z"}
 ```
 
 | Field | Type | Meaning |
@@ -560,8 +554,8 @@ Nothing secret belongs in the inventory either — it only holds hosts, users an
     }
   },
   "nodes": [
-    { "name": "cluster1", "host": "10.0.0.11", "role": "worker", "tags": [] },
-    { "name": "cluster2", "host": "10.0.0.12", "role": "worker+storage", "storage": { },
+    { "name": "worker-a", "host": "192.0.2.11", "role": "worker", "tags": [] },
+    { "name": "storage-a", "host": "192.0.2.21", "role": "worker+storage", "storage": { },
       "diskRoles": { "sdc": "storage" } }   // optional, overrides disk-role detection
     // a "hardware" block is added to each node automatically - see "Hardware inventory" above
   ]

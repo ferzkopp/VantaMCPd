@@ -82,6 +82,7 @@ const PARAMETERS_MAX = 1000;
 const PREVIEW_MAX = 400;
 const LOG_FILE_RE = /^vanta-\d{4}-\d{2}-\d{2}\.jsonl$/;
 const SENSITIVE_PARAMETER_KEY = /pass(?:word|wd)?|secret|token|api[_-]?key|authorization|private[_-]?key/i;
+const URL_PARAMETER_KEY = /^(?:url|uri)$|(?:Url|URL|Uri|URI)$/;
 
 /**
  * Secrets normally travel on stdin rather than the command line, but a caller can still paste one
@@ -105,12 +106,27 @@ function clip(text: string, max: number): string {
   return t.length <= max ? t : `${t.slice(0, max)}… (+${t.length - max} bytes)`;
 }
 
+function sanitizeParameterUrl(value: string): string {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return `${parsed.protocol}[redacted]`;
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return "[invalid-url]";
+  }
+}
+
 function formatParameters(parameters: unknown): string | undefined {
   if (parameters === undefined) return undefined;
   const seen = new WeakSet<object>();
   try {
     const serialized = JSON.stringify(parameters, (key, value: unknown) => {
       if (key && SENSITIVE_PARAMETER_KEY.test(key)) return "***";
+      if (key && URL_PARAMETER_KEY.test(key) && typeof value === "string") return sanitizeParameterUrl(value);
       if (typeof value === "bigint") return value.toString();
       if (typeof value === "object" && value !== null) {
         if (seen.has(value)) return "[Circular]";

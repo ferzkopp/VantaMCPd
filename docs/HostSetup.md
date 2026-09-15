@@ -119,7 +119,7 @@ Useful checks:
 
 ```powershell
 .\scripts\bootstrap.ps1 -Verify
-.\scripts\bootstrap.ps1 -Nodes cluster4
+.\scripts\bootstrap.ps1 -Nodes storage-a
 ```
 
 Passwords are entered directly into `ssh` and `sudo`; the script does not read or retain them.
@@ -139,14 +139,14 @@ test -f "$KEY" || ssh-keygen -t ed25519 -a 100 -N '' -C 'vantamcpd cluster' -f "
 Install the public key. Verify the host fingerprint shown by OpenSSH before accepting it:
 
 ```bash
-ssh-copy-id -i "$KEY.pub" -p 22 configure@192.168.1.101
+ssh-copy-id -i "$KEY.pub" -p 22 configure@192.0.2.11
 ```
 
 Install a sudoers rule. The temporary file is validated before the atomic root-owned installation; this
 prompts for the remote sudo password once:
 
 ```bash
-ssh -t -p 22 -i "$KEY" configure@192.168.1.101 \
+ssh -t -p 22 -i "$KEY" configure@192.0.2.11 \
   'tmp=$(mktemp); printf "%s ALL=(ALL) NOPASSWD:ALL\n" "$USER" > "$tmp"; \
    sudo visudo -cf "$tmp" && sudo install -m 0440 -o root -g root "$tmp" /etc/sudoers.d/99-vanta; \
    rc=$?; rm -f "$tmp"; exit $rc'
@@ -155,7 +155,7 @@ ssh -t -p 22 -i "$KEY" configure@192.168.1.101 \
 Verify key login and non-interactive sudo:
 
 ```bash
-ssh -p 22 -i "$KEY" -o BatchMode=yes configure@192.168.1.101 \
+ssh -p 22 -i "$KEY" -o BatchMode=yes configure@192.0.2.11 \
   'id -un; hostname; sudo -n true; uname -srm'
 ```
 
@@ -194,7 +194,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\prepare-nodes.ps1
 From Linux, run the following once per ordinary node after enrollment:
 
 ```bash
-ssh -p 22 -i "$KEY" configure@192.168.1.101 \
+ssh -p 22 -i "$KEY" configure@192.0.2.11 \
   'sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update -q -o DPkg::Lock::Timeout=300 && \
    sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
      -o DPkg::Lock::Timeout=300 -o Dpkg::Use-Pty=0 \

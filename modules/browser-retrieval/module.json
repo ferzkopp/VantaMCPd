@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "id": "browser-retrieval",
+  "name": "Browser Retrieval",
+  "version": "0.2.2",
+  "description": "Retrieve node-reachable JavaScript-rendered webpages as bounded, untrusted text and structured data.",
+  "capabilities": [
+    "read JavaScript-rendered webpages as Markdown or plain text",
+    "inspect headings and links on rendered webpages",
+    "extract selected fields from rendered webpage elements",
+    "extract structured tables from rendered webpages"
+  ],
+  "entrypoint": ["python3", "server.py"],
+  "compatibility": {
+    "os": ["debian", "ubuntu"],
+    "architectures": ["amd64"],
+    "minCores": 2,
+    "minRamMb": 3072,
+    "minDiskMb": 2048,
+    "requiredCommands": ["bash", "python3", "chromium", "systemctl"],
+    "accelerators": []
+  },
+  "packages": {
+    "apt": ["python3", "chromium", "ca-certificates", "passwd"]
+  },
+  "lifecycle": {
+    "install": "install.sh",
+    "uninstall": "uninstall.sh"
+  },
+  "deployment": { "mode": "replicated", "routing": "round-robin" },
+  "runtime": {
+    "mode": "service",
+    "systemdUnit": "browser-retrieval.service"
+  },
+  "limits": {
+    "startupMs": 10000,
+    "callMs": 60000,
+    "maxInputBytes": 65536,
+    "maxOutputBytes": 262144
+  }
+}

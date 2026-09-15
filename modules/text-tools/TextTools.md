@@ -23,11 +23,11 @@ The shortest path from an available worker node to a verified first operation is
 
 1. Check compatibility and free disk:
 
-	> Check whether text-tools is compatible with cluster1.
+	> Check whether text-tools is compatible with worker-a.
 
 2. Install it on one or more explicit nodes. Two installations give you interchangeable replicas:
 
-	> Install text-tools on cluster1 and cluster2.
+	> Install text-tools on worker-a and worker-b.
 
 3. Confirm the operation. Installation performs live preflight, installs any missing declared apt
 	packages, repeats preflight, verifies staged file hashes, runs the module self-test, activates the
@@ -56,22 +56,22 @@ during module uninstall.
 
 In Copilot Chat Agent mode, check placement before installing:
 
-> Check whether text-tools is compatible with cluster1.
+> Check whether text-tools is compatible with worker-a.
 
 Then install it on explicit nodes:
 
-> Install text-tools on cluster1.
+> Install text-tools on worker-a.
 
 To provide two interchangeable instances:
 
-> Install text-tools on cluster1 and cluster2.
+> Install text-tools on worker-a and worker-b.
 
 The corresponding MCP arguments are:
 
 ```json
 {
 	"moduleId": "text-tools",
-	"targets": ["cluster1", "cluster2"],
+	"targets": ["worker-a", "worker-b"],
 	"confirm": true
 }
 ```
@@ -112,7 +112,7 @@ List the tools advertised by the installed module:
 
 To ask a specific replica instead, name it:
 
-> List the tools provided by text-tools on cluster1.
+> List the tools provided by text-tools on worker-a.
 
 Most requests need neither the module name nor a node. The manifest declares the module's capabilities,
 VantaMCPd puts them in the instructions and proxy-tool descriptions it sends the agent, and routing
@@ -162,13 +162,13 @@ The underlying generic proxy call for the regex example is:
 ```
 
 With no `target`, successive calls round-robin over reachable nodes where `text-tools` is installed.
-Set `"target": "cluster1"` to pin a call. The proxy response identifies the selected node and module
+Set `"target": "worker-a"` to pin a call. The proxy response identifies the selected node and module
 version, then places the tool's structured result in `output`:
 
 ```json
 {
 	"ok": true,
-	"node": "cluster1",
+	"node": "worker-a",
 	"moduleId": "text-tools",
 	"moduleVersion": "0.4.1",
 	"toolName": "developer_text",
@@ -197,7 +197,7 @@ prompt naming either the module or a node:
 > Using text-tools with automatic routing, run these independent operations in parallel and report the
 > node for each result: extract `OPS-142` and `OPS-207` from
 > `release=2026.09 tickets=OPS-142,OPS-207`; normalize
-> `node;status\ncluster1;ready\ncluster2;ready` as CSV; parse
+> `node;status\nworker-a;ready\nworker-b;ready` as CSV; parse
 > `level=info module=text-tools replicas:2 routing=round-robin`; and extract content from
 > `<h2>Deployment report</h2><p>Two replicas ready.</p>`.
 
@@ -228,7 +228,7 @@ process over SSH stdio, and invokes only a tool returned by `tools/list`.
 The module keeps no state: every call is independent and nothing is written outside the installation
 directory. Uninstall the payload and receipt with:
 
-> Uninstall text-tools from cluster1.
+> Uninstall text-tools from worker-a.
 
 Uninstallation requires approval and an explicit target. It validates the receipt before removing the
 active payload and receipt, and repeating it after removal is safe. Shared apt packages installed during

@@ -8,7 +8,7 @@ This document defines:
 
 - the architecture for packaging and deploying node-side MCP modules;
 - the minimum implementation needed to prove the complete lifecycle;
-- feasibility on the currently connected nodes; and
+- hardware-driven feasibility guidance; and
 - the catalog of possible future modules and data sources.
 
 ## Using Modules
@@ -41,8 +41,9 @@ reloads the local catalog.
 
 | Module | Package version | Requirements | Included tools | Guide |
 | --- | --- | --- | --- | --- |
-| Text Tools (`text-tools`) | `0.4.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | 111 bounded operations across twelve category tools | [Text Tools](../modules/text-tools/TextTools.md) |
+| Text Tools (`text-tools`) | `0.4.1` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | 111 bounded operations across twelve category tools | [Text Tools](../modules/text-tools/TextTools.md) |
 | Scientific Corpus Search (`corpus-search`) | `0.4.1` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 10 GiB free, Python 3, SQLite 3 | Phrase/exclusion/field search, exact record lookup, category resolution, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
+| Browser Retrieval (`browser-retrieval`) | `0.2.2` | Debian/Ubuntu `amd64`, 2 CPU cores, 3 GiB RAM, 2 GiB root disk, Chromium, systemd | Rendered page retrieval, selector queries, and table extraction | [Browser Retrieval](../modules/browser-retrieval/BrowserRetrieval.md) |
 
 ### Activate a Module
 
@@ -50,13 +51,13 @@ Activation installs the versioned package on one or more nodes. Runtime can be o
 service, and a manifest can move a long-running installation into a durable job. Start with these
 requests in any connected MCP agent:
 
-> List the available node modules for cluster1.
+> List the available node modules for worker-a.
 
-> Check whether text-tools is compatible with cluster1.
+> Check whether text-tools is compatible with worker-a.
 
-> Install text-tools on cluster1.
+> Install text-tools on worker-a.
 
-> Install text-tools on cluster1 and cluster2.
+> Install text-tools on worker-a and worker-b.
 
 Installation never defaults to the entire cluster. The agent must use explicit node names or tags and
 must obtain approval before calling `cluster_install_module` with `confirm: true`. VantaMCPd stages the
@@ -172,7 +173,7 @@ parallel, submit independent calls concurrently. For example:
 > Using text-tools with automatic routing, run these independent operations in parallel and report the
 > node for each result: extract `OPS-142` and `OPS-207` from
 > `release=2026.09 tickets=OPS-142,OPS-207`; normalize
-> `node;status\ncluster1;ready\ncluster2;ready` as CSV; parse
+> `node;status\nworker-a;ready\nworker-b;ready` as CSV; parse
 > `level=info module=text-tools replicas:2 routing=round-robin`; and extract content from
 > `<h2>Deployment report</h2><p>Two replicas ready.</p>`.
 
@@ -185,7 +186,7 @@ already in progress, or aggregation of results; the caller owns those concerns.
 
 Deactivate an installed module with a request such as:
 
-> Uninstall text-tools from cluster1.
+> Uninstall text-tools from worker-a.
 
 The agent must use explicit node names or tags and obtain approval before calling
 `cluster_uninstall_module` with `confirm: true`. VantaMCPd validates the root-owned receipt before it
@@ -225,11 +226,13 @@ The unit should reference the stable `/opt/vantamcpd/modules/<module-id>/current
 own restart policy, resource limits, user, and writable directories. On-demand modules declare
 `"runtime": { "mode": "on-demand" }`.
 
-## Hardware Model and Current Environment
+## Hardware Model and Compatibility Profiles
 
 The module architecture is hardware-neutral. A cluster may mix ARMv7, arm64, x86-64, GPU-equipped, and other accelerator-backed nodes. Adding a more capable node must expand the set of eligible modules without requiring a new package format, lifecycle, or proxy protocol.
 
-The currently connected cluster happens to consist of four ARMv7 nodes with approximately two CPU cores and 1 GB RAM each. They run Debian 12 on Armbian. The system disk is relatively small; one node also provides larger shared storage. This is the first compatibility profile to test, not the target architecture of the module system.
+For planning, a deployment may define illustrative profiles such as a constrained ARMv7 worker with two
+CPU cores and 1 GiB RAM, or a CPU-only AMD64 worker with four cores and 4 GiB RAM. These examples are
+not fixed classes in the module system; recorded inventory and live preflight determine eligibility.
 
 These constraints are part of the design, not exceptional conditions. A module must declare its requirements, and VantaMCPd must reject installation when known hardware or platform facts do not satisfy them.
 
@@ -249,7 +252,7 @@ Missing or stale required facts produce an `unknown` result and a request to ref
 - Expose an installed module's MCP tools through the existing VantaMCPd connection.
 - Record module deployment and execution in the existing audit log.
 - Show read-only module status for each node in the monitoring dashboard.
-- Prove the design with one small module that runs on the current cluster.
+- Prove the design with one small module that runs on a supported node profile.
 
 ## Non-goals for the First Release
 
@@ -476,14 +479,36 @@ the ZIP and extracted JSON are retained regardless of sample percentage. See the
 [Scientific Corpus Search quickstart](../modules/corpus-search/CorpusSearch.md#quickstart) for profile
 selection, installation progress, verification, first use, recovery, and data lifecycle.
 
-## Current-node Feasibility Snapshot
+## Browser Retrieval
 
-Ratings below describe a useful implementation on the current ARMv7/1 GB nodes only. They are not global module ratings. The same manifests may evaluate differently on future x86-64, arm64, high-memory, GPU, or accelerator-backed nodes.
+`browser-retrieval` is a replicated service module for compatible CPU-only AMD64 nodes. Its MCP
+entrypoint remains a short-lived SSH stdio adapter, while a hardened systemd broker launches a fresh
+sandboxed Chromium process for each call and controls it through DevTools pipes rather than a TCP
+debugging port. Eligibility comes from manifest requirements rather than a node name or role.
+
+The tools are `web_retrieve`, `web_query`, and `web_tables`. They return rendered Markdown or text,
+headings and links, allowlisted fields selected from the rendered DOM, and bounded table data. Calls are
+stateless and do not accept credentials, cookies, custom headers, arbitrary JavaScript, clicks, forms,
+downloads, screenshots, PDFs, or raw HTML. Every result identifies its content as untrusted external
+data so an agent does not mistake text from a page for instructions.
+
+HTTP(S) destinations on any valid port are permitted, including private and loopback addresses.
+Chromium uses the node's normal DNS, proxy, and routing configuration and may load page-selected
+subresources without module-level network filtering. It retains a fresh profile, its Linux sandbox,
+and bounded CPU, memory, processes, bytes, DOM size, and execution time. See the
+[Browser Retrieval quickstart](../modules/browser-retrieval/BrowserRetrieval.md#quickstart) for usage,
+security behavior, limits, and troubleshooting.
+
+## Capability Feasibility Guide
+
+Ratings below compare constrained ARMv7/1 GiB and general-purpose AMD64 profiles. They are planning
+guidance rather than global module ratings; manifests must still be evaluated against each node's
+recorded inventory and live preflight.
 
 | Module | Feasibility | Practical first scope or blocker |
 | --- | --- | --- |
 | Regex, parsing, and extraction | High | Python standard library; selected MVP |
-| Artifact storage | High | Local filesystem or existing NFS, with quotas and retention |
+| Artifact storage | High | Local filesystem or an NFS share, with quotas and retention |
 | Documentation/scientific corpus | Implemented with selectable sampling | SQLite FTS5/BM25 over 1%, 25%, or 100% of matching arXiv snapshot metadata; no embeddings |
 | Image processing | High for basic transforms | Pillow or ImageMagick resize/crop/filter; no neural models |
 | Python execution | Medium | Basic Python only; needs sandbox and resource limits |
@@ -493,11 +518,14 @@ Ratings below describe a useful implementation on the current ARMv7/1 GB nodes o
 | Geospatial compute | Medium for basic operations | Shapely/GeoJSON only; PostGIS is too heavy for the MVP |
 | Durable job runner | Implemented for trusted lifecycle work | systemd oneshots and node-local JSON state; no arbitrary command submission |
 | Wikipedia knowledge store | Low for full English corpus | Use a curated SQLite/Kiwix subset on large storage first |
-| Browserless webpage retrieval | Low | Current Playwright support covers x86-64/arm64, not ARMv7 |
-| Vision/ML inference | Low on current nodes | PyTorch, Transformers, CLIP, YOLO, and vLLM exceed the current profile; capable GPU nodes may qualify |
-| Vector database service | Low on current nodes | Milvus and Weaviate exceed the current profile; evaluate them normally on larger future nodes |
+| Browserless webpage retrieval | Implemented on AMD64; low on ARMv7 | Sandboxed Chromium retrieval, rendered selectors, and tables on a compatible AMD64 worker; no interaction or binary artifacts |
+| Vision/ML inference | Low on constrained CPU-only profiles | PyTorch, Transformers, CLIP, YOLO, and vLLM generally require more capable CPU, memory, or accelerator profiles |
+| Vector database service | Low on constrained profiles | Evaluate Milvus and Weaviate normally on nodes with sufficient memory and storage |
 
-Intel MKL is not an option for the current ARM nodes; OpenBLAS is appropriate for this profile. A future x86-64 profile may select MKL or another optimized backend. Compatibility with a Python project also depends on whether its current releases provide artifacts for the node's architecture and accelerator stack or can use maintained distribution packages.
+Intel MKL is not available on ARM; OpenBLAS is appropriate for that profile. An x86-64 profile may
+select MKL or another optimized backend. Compatibility with a Python project also depends on whether
+its releases provide artifacts for the node's architecture and accelerator stack or can use maintained
+distribution packages.
 
 ## Future Module Catalog
 
@@ -513,19 +541,24 @@ Potential stacks include pandas, NumPy, Polars, DuckDB, matplotlib, Plotly, scik
 
 #### NumPy/SciPy Compute
 
-Possible capabilities include matrix operations, optimization, signal processing, and statistical tests. See the [SciPy installation guide](https://scipy.org/install/) and [OpenBLAS](https://www.openblas.net/). The current cluster should use tested Debian armhf packages where possible and reject inputs that exceed memory budgets.
+Possible capabilities include matrix operations, optimization, signal processing, and statistical tests. See the [SciPy installation guide](https://scipy.org/install/) and [OpenBLAS](https://www.openblas.net/). ARMv7 deployments should use tested Debian armhf packages where possible and reject inputs that exceed memory budgets.
 
 ### Retrieval and web processing
 
-#### Browserless Retrieval
+#### Browserless Retrieval (Implemented Baseline)
 
-Possible capabilities include HTML retrieval, rendered DOM extraction, scripted interaction, screenshots, and PDF rendering. Candidate projects are [Browserless](https://www.browserless.io/), [Playwright](https://playwright.dev/docs/intro), and [Puppeteer](https://pptr.dev/).
+The implemented `browser-retrieval` baseline uses Debian Chromium on AMD64 for public-page navigation,
+rendered text and Markdown extraction, allowlisted CSS-selector fields, and tables. It runs behind a
+isolated systemd broker with per-call profiles, node-reachable HTTP(S) access, and no browser control port.
 
-Current Playwright Linux support is limited to x86-64 and arm64 on supported Debian/Ubuntu releases. A practical deployment therefore requires a future arm64/x86-64 node or an external browser service rather than the current ARMv7 workers.
+Scripted interaction, authenticated sessions, screenshots, and PDF rendering remain deferred. Binary
+outputs depend on shared artifact storage, while clicks, forms, credentials, and persistent sessions
+require a separate authorization and state-isolation design. ARMv7 workers are incompatible with the
+current browser package manifest.
 
 #### Screenshot and OCR
 
-Possible capabilities include image capture, OCR, and structured text blocks. [Tesseract](https://github.com/tesseract-ocr/tesseract) is the practical CPU option for supplied images. [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) and its model runtimes are unlikely to be practical on the current nodes. Screenshot capture depends on resolving the browser-runtime limitation separately.
+Possible capabilities include image capture, OCR, and structured text blocks. [Tesseract](https://github.com/tesseract-ocr/tesseract) is the practical CPU option for supplied images. [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) and its model runtimes are unlikely to be practical on constrained workers. Screenshot capture depends on resolving the browser-runtime limitation separately.
 
 #### PDF Parsing and Summarization
 
@@ -547,7 +580,7 @@ The implemented `corpus-search` baseline uses SQLite FTS5/BM25 and selectable ar
 Future adapters could add curated technical documentation, internal engineering documents, or other
 approved collections. Candidate orchestration libraries include [Haystack](https://haystack.deepset.ai/), [LangChain](https://python.langchain.com/), and [Hugging Face Datasets](https://huggingface.co/docs/datasets/).
 
-The first storage backend should be SQLite FTS5 with BM25. Optional future backends include [Qdrant](https://qdrant.tech/documentation/), [Milvus](https://milvus.io/docs), and [Weaviate](https://docs.weaviate.io/weaviate). Those vector systems are not assumed to support or fit the current nodes, but remain candidates for compatible future nodes. Embeddings may be generated locally on a qualifying accelerator node or on another capable machine and copied with the corpus.
+The first storage backend should be SQLite FTS5 with BM25. Optional future backends include [Qdrant](https://qdrant.tech/documentation/), [Milvus](https://milvus.io/docs), and [Weaviate](https://docs.weaviate.io/weaviate). Those vector systems require separate compatibility evaluation. Embeddings may be generated locally on a qualifying accelerator node or on another capable machine and copied with the corpus.
 
 ##### Scientific corpus adapters
 
@@ -582,7 +615,8 @@ Possible capabilities include GeoJSON operations, distance calculations, spatial
 
 Possible capabilities include resize, crop, format conversion, filtering, OCR, embeddings, and object detection. Candidate technologies include [Pillow](https://pillow.readthedocs.io/), [OpenCV](https://opencv.org/), [CLIP](https://github.com/openai/CLIP), and [Ultralytics YOLO](https://docs.ultralytics.com/).
 
-Basic Pillow or ImageMagick transforms are feasible. CLIP and YOLO model inference are not practical on the current nodes and require a future accelerator or larger worker profile.
+Basic Pillow or ImageMagick transforms are feasible. CLIP and YOLO model inference generally require
+an accelerator or larger worker profile.
 
 ### Agent infrastructure
 
@@ -592,21 +626,25 @@ Trusted module lifecycle work now returns a job ID and exposes status, cancel, l
 through a lightweight systemd runner. General caller-defined jobs and arbitrary command submission are
 not supported. Candidate technologies for a broader queue include [Celery](https://docs.celeryq.dev/), [RQ](https://python-rq.org/), and [Dramatiq](https://dramatiq.io/).
 
-For the current cluster, a small SQLite-backed runner managed by systemd may be a better first implementation than a resident Redis deployment. Queue semantics, recovery, cancellation, quotas, and artifact ownership must be specified first.
+For a small resource-constrained cluster, a SQLite-backed runner managed by systemd may be a better
+first implementation than a resident Redis deployment. Queue semantics, recovery, cancellation,
+quotas, and artifact ownership must be specified first.
 
 #### Artifact Storage
 
 Compute and job modules need a shared way to return outputs too large for MCP tool results. Future tools should support put, inspect, list, fetch, and delete with content hashes, MIME types, owner/module attribution, quotas, expiration, and path containment.
 
-Candidate backends include the local filesystem, the existing NFS storage node, [MinIO](https://min.io/), and [IPFS](https://ipfs.tech/). Local/NFS storage is the appropriate first backend; MinIO and IPFS add services and operational cost that are not justified for the lifecycle MVP.
+Candidate backends include the local filesystem, an NFS-backed storage node, [MinIO](https://min.io/), and [IPFS](https://ipfs.tech/). Local/NFS storage is the appropriate first backend; MinIO and IPFS add services and operational cost that are not justified for the lifecycle MVP.
 
 ## Implemented Lifecycle
 
 The repository implements validated local packages, recorded and live compatibility checks, SFTP
 staging with SHA-256 verification, root-owned receipts, replicated/singleton placement, MCP-over-SSH
 proxying, startup updates, durable lifecycle jobs, retained storage, explicit purge, and read-only
-module/job dashboard views. Automated tests use offline corpus fixtures; live acceptance remains an
-operator action because it changes a configured node and the corpus source is networked.
+module/job dashboard views. Browser Retrieval adds transactional service activation, a local Unix
+broker, and node-reachable rendered retrieval on AMD64. Automated tests use offline corpus and
+browser fixtures; live acceptance remains an operator action because it changes a configured node and
+uses networked sources.
 
 ## Acceptance Criteria
 
@@ -615,7 +653,7 @@ The first release is complete when:
 - an invalid module package cannot be listed or installed;
 - compatibility explains why a module is compatible, incompatible, or unknown;
 - install and uninstall require explicit targets and confirmation;
-- `text-tools` installs successfully on one current node without assuming that all future nodes share its architecture;
+- `text-tools` installs successfully on one compatible node without assuming that all nodes share its architecture;
 - VantaMCPd lists and calls its actual MCP tools over SSH stdio;
 - all inputs, outputs, errors, and execution times remain bounded;
 - deployment and calls appear in the existing audit stream;
@@ -628,10 +666,10 @@ The first release is complete when:
 1. Promote healthy remote tools to dynamic first-class VantaMCPd tools and send `tools/list_changed` notifications after lifecycle changes.
 2. Add explicit rollback and old-version garbage-collection policies.
 3. Add signed packages and an authenticated remote registry.
-4. Add persistent service modules and narrowly scoped network exposure rules.
+4. Extend the proven service-module isolation policy to any future module that exposes a network listener.
 5. Extend trusted lifecycle jobs with quotas and additional allowlisted job kinds.
 6. Add shared artifact storage and retention controls.
 7. Add dashboard lifecycle actions only after authentication, authorization, CSRF, and confirmation UX are designed.
 8. Add corpus adapters beyond the implemented sampled arXiv metadata profiles.
 9. Add precomputed embeddings and vector backends only for compatible node profiles.
-10. Add more capable arm64/x86-64 or accelerator-backed nodes for browser and ML modules; discover their capabilities through the same inventory and evaluate them through the same manifest contract.
+10. Add more capable arm64/x86-64 or accelerator-backed nodes for ML modules and browser replicas; discover their capabilities through the same inventory and evaluate them through the same manifest contract.

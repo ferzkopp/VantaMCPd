@@ -42,8 +42,9 @@ routes its tools according to the module's deployment policy.
 | Module | Purpose | Deployment | Requirements | Guide |
 | --- | --- | --- | --- | --- |
 | **Core** (`core`, built in) | Cluster inventory, health, packages, services, files, storage, jobs, and module lifecycle | Runs on the Vanta host; fans out over SSH | Node.js 20.11+, OpenSSH client, and configured Debian/Armbian nodes | [Built-in tools](#tools) |
-| **Text Tools** (`text-tools`, v0.4.0) | 111 bounded text, data, date/time, document, security, and developer operations across twelve category tools | Replicated; on demand; round-robin routing | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 40 MB disk | [Text Tools](modules/text-tools/TextTools.md) |
+| **Text Tools** (`text-tools`, v0.4.1) | 111 bounded text, data, date/time, document, security, and developer operations across twelve category tools | Replicated; on demand; round-robin routing | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 40 MB disk | [Text Tools](modules/text-tools/TextTools.md) |
 | **Scientific Corpus Search** (`corpus-search`, v0.4.1) | Provenance-aware arXiv metadata search using SQLite FTS5/BM25, with phrase, exclusion, and field query syntax | Singleton; on demand; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 10 GiB free node storage | [Scientific Corpus Search](modules/corpus-search/CorpusSearch.md) |
+| **Browser Retrieval** (`browser-retrieval`, v0.2.2) | JavaScript-rendered page retrieval, selector queries, and table extraction across node-reachable HTTP(S) sites | Replicated; isolated service broker; stateless calls | Debian/Ubuntu `amd64`; 2 cores; 3 GiB RAM; 2 GiB root disk; Chromium | [Browser Retrieval](modules/browser-retrieval/BrowserRetrieval.md) |
 
 Use `cluster_list_modules` to see install options, compatibility, deployment policies, and live
 installation state. See [Node modules](docs/Modules.md) for architecture and lifecycle details.
@@ -128,16 +129,21 @@ for Claude Code, Hermes Agent, OpenClaw, and generic MCP clients are in [MCP cli
 
 > List the available node modules and their deployment policies.
 >
-> Check whether text-tools is compatible with cluster1 and cluster2, then install it there.
+> Check whether text-tools is compatible with worker-a and worker-b, then install it there.
 >
-> Check whether corpus-search is compatible with the storage node, install it using the Medium profile,
+> Check whether corpus-search is compatible with storage-a, install it using the Medium profile,
 > then show its job progress.
+>
+> Check whether browser-retrieval is compatible with browser-worker, install it there, and retrieve
+> `https://example.com/` as Markdown.
 
 Module installation requires approval and explicit target nodes or tags. See [Node modules](docs/Modules.md)
 for deployment, routing, durable jobs, and update behavior, the
 [Text Tools quickstart](modules/text-tools/TextTools.md#quickstart) for replicas and routing, and the
 [Corpus Search quickstart](modules/corpus-search/CorpusSearch.md#quickstart) for profiles, storage,
-installation, and recovery.
+installation, and recovery. See the
+[Browser Retrieval quickstart](modules/browser-retrieval/BrowserRetrieval.md#quickstart) for public
+network policy, rendered extraction, and service isolation.
 
 **Re-running the whole block on a working cluster is safe.** Every step is idempotent: an existing SSH
 key is reused, `authorized_keys` and `/etc/sudoers.d/99-vanta` are left alone once correct (so you are
@@ -206,10 +212,10 @@ flowchart TB
 
     subgraph NODES["Managed Linux nodes"]
         direction LR
-        N1["cluster1<br/>worker"]:::worker
-        N2["cluster2<br/>worker"]:::worker
-        N3["cluster3<br/>worker"]:::worker
-        N4["cluster4<br/>worker + storage<br/>/mnt/ssd"]:::storage
+        N1["worker-a<br/>worker"]:::worker
+        N2["worker-b<br/>worker"]:::worker
+        N3["worker-c<br/>worker"]:::worker
+        N4["storage-a<br/>worker + storage<br/>/srv/storage"]:::storage
     end
 
     VANTA -->|"SSH :22"| N1
@@ -295,7 +301,7 @@ the agent:
 >
 > Has any node rebooted recently, or is a reboot pending?
 >
-> Show the last 50 ssh journal errors on cluster2
+> Show the last 50 ssh journal errors on worker-b
 >
 > Check dmesg on all nodes for USB or SD-card I/O errors
 
@@ -305,7 +311,7 @@ the agent:
 >
 > Where can I watch what you are doing on the cluster?
 >
-> Re-probe the hardware on cluster4, I swapped a disk
+> Re-probe the hardware on storage-a, I swapped a disk
 >
 > Which disks are unassigned, and what do you think they are for?
 >
@@ -331,7 +337,7 @@ the agent:
 >
 > Point apt's cache at the shared SSD so the nodes stop re-downloading the same packages
 >
-> cluster4 lost its swap after a reboot - find out why and fix it
+> storage-a lost its swap after a reboot - find out why and fix it
 
 **Files and config**
 
@@ -339,7 +345,7 @@ the agent:
 >
 > Back up /etc/exports from the storage node to my machine
 >
-> Add a 2GB swap file on the shared SSD for cluster1
+> Add a 2GB swap file on the shared SSD for worker-a
 
 Destructive work (formatting, partitioning, reboots, `rm -rf`) is refused until you approve it
 explicitly, so it is safe to ask for it and then read back what the agent proposes.
@@ -355,8 +361,6 @@ The daemon records every SSH interaction and serves a live dashboard at **<http:
 > **Multiple launches:** Each stdio client starts its own VantaMCPd process, and only one process can
 > bind the default dashboard port `7420`. Use a different `monitoring.port` in each client's inventory,
 > or disable web monitoring for all but one process. See [Multiple clients](docs/Clients.md#multiple-clients).
-
-![VantaMCPd monitor dashboard](docs/monitor.png)
 
 - **Nodes** — every configured node, installed-module count, calls, failures, timing, bytes moved,
   last tool and last activity. Click a row for configuration, module IDs and recorded hardware.
@@ -413,7 +417,7 @@ discover them with `cluster_list_module_tools` and invoke them through `cluster_
 | `cluster_get_job_log` | Read the bounded tail of a durable job log |
 | `cluster_cancel_job` | Cancel a running durable job (always requires `confirm: true`) |
 
-`targets` accepts node names (`["cluster1","cluster4"]`), roles/tags (`["storage"]`, `["worker"]`), or is
+`targets` accepts node names (`["worker-a","storage-a"]`), roles/tags (`["storage"]`, `["worker"]`), or is
 omitted / `["all"]` to hit every node. Commands fan out with bounded concurrency (default 4).
 
 ---

@@ -99,7 +99,7 @@ test("startup reconciliation updates only older installations and then removes t
 test("loads the text-tools package deterministically", () => {
   const catalog = loadModuleCatalog(path.join(root, "modules"));
   assert.deepEqual(catalog.errors, []);
-  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["corpus-search", "text-tools"]);
+  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["browser-retrieval", "corpus-search", "text-tools"]);
   const textTools = catalog.modules.find((item) => item.manifest.id === "text-tools");
   assert.ok(textTools.files.some((file) => file.relativePath === "server.py"));
   assert.deepEqual(textTools.manifest.deployment, { mode: "replicated", routing: "round-robin" });
@@ -233,6 +233,26 @@ test("evaluates an x86-64 node through the same manifest", () => {
     accelerators: [],
   }));
   assert.equal(result.status, "compatible");
+});
+
+test("browser-retrieval targets the CPU-only AMD64 VM and rejects ARM workers", () => {
+  const catalog = loadModuleCatalog(path.join(root, "modules"));
+  const manifest = catalog.modules.find((item) => item.manifest.id === "browser-retrieval").manifest;
+  const amd64 = evaluateCompatibility(manifest, node({
+    cpu: { arch: "x86_64", packageArch: "amd64", cores: 4 },
+    memory: { totalMb: 3921 },
+    os: { id: "debian", version: "13" },
+    accelerators: [],
+  }));
+  const arm = evaluateCompatibility(manifest, node({
+    cpu: { arch: "armv7l", packageArch: "armhf", cores: 2 },
+    memory: { totalMb: 1000 },
+    os: { id: "debian", version: "12" },
+    accelerators: [],
+  }));
+  assert.equal(amd64.status, "compatible");
+  assert.equal(arm.status, "incompatible");
+  assert.match(arm.reasons.join("; "), /architecture armhf is not supported/);
 });
 
 test("requires configured storage for persistent-data modules", () => {
@@ -431,11 +451,13 @@ test("install stages, verifies, installs, writes a receipt, and cleans up", asyn
   assert.equal(inventoryChanges, 1);
   assert.equal(uploads.length, files.length);
   assert.equal(sftpEnded, true);
-  assert.ok(commands.some((entry) => entry.command.includes("bash 'install.sh'") && entry.options.sudo === true));
+  assert.ok(commands.some((entry) => entry.command.includes("bash 'install.sh'") && entry.options.sudo === true && entry.options.env.VANTA_MODULE_RUN_AS === target.user));
   assert.ok(commands.some((entry) => entry.command.includes(`chown -R root:root '/opt/vantamcpd/modules/text-tools/${TEXT_TOOLS_VERSION}'`) && entry.options.sudo === true));
-  assert.ok(commands.some((entry) => entry.command.includes("systemctl enable --now 'vantamcpd-text-tools.service'") && entry.options.sudo === true));
+  assert.ok(commands.some((entry) => entry.command.includes("systemctl enable 'vantamcpd-text-tools.service'") && entry.options.sudo === true));
+  assert.ok(commands.some((entry) => entry.command.includes("systemctl restart 'vantamcpd-text-tools.service'") && entry.command.includes("systemctl is-active --quiet 'vantamcpd-text-tools.service'")));
   assert.ok(commands.some((entry) => entry.command.includes("/var/lib/vantamcpd/modules/text-tools.json") && entry.options.sudo === true));
   assert.ok(commands.some((entry) => entry.command.includes("rollback()") && entry.options.sudo === true));
+  assert.ok(commands.some((entry) => entry.command.includes("rollback_service()") && entry.command.includes("receipt_backup=$(mktemp)") && entry.command.includes("unit_backup=$(mktemp)")));
   assert.match(commands.at(-1).command, /^rm -rf -- /);
 });
 

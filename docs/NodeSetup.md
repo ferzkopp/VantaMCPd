@@ -34,7 +34,7 @@ port 22 directly and the address stays stable.
 
 The installer defaults are fine except for three screens:
 
-1. **Hostname** — set it to the inventory node name, for example `cluster5`. The domain may be left
+1. **Hostname** — set it to the inventory node name, for example `worker-a`. The domain may be left
    blank. Setting it here means you do not need `hostnamectl` afterwards.
 
 2. **Root password** — **leave it empty**. Debian then disables the root account, installs `sudo`, and
@@ -64,7 +64,7 @@ Flash a current Debian-based CLI image for the exact board, complete its first-b
 apply normal OS updates. Set a recognizable hostname, matching the inventory node name:
 
 ```bash
-sudo hostnamectl set-hostname cluster1
+sudo hostnamectl set-hostname worker-a
 ```
 
 ## Verify Before Enrolling
@@ -103,8 +103,8 @@ Record these values before editing `cluster.config.local.json`:
 
 | Value | Example | Inventory field |
 | --- | --- | --- |
-| Node name | `cluster5` | `nodes[].name` |
-| Stable IP address or hostname | `192.168.1.105` | `nodes[].host` |
+| Node name | `worker-a` | `nodes[].name` |
+| Stable IP address or hostname | `192.0.2.11` | `nodes[].host` |
 | Login user | `configure` | `defaults.user` or `nodes[].user` |
 | Role | `worker` or `worker+storage` | `nodes[].role` |
 | Tags, for targeting a subset | `["amd64", "vm"]` | `nodes[].tags` |
@@ -121,8 +121,8 @@ existing nodes untouched:
 
 ```powershell
 # Windows Vanta host
-.\scripts\bootstrap.ps1     -Nodes cluster5     # SSH key + passwordless sudo, prompts for passwords once
-.\scripts\prepare-nodes.ps1 -Nodes cluster5     # baseline packages
+.\scripts\bootstrap.ps1     -Nodes worker-a     # SSH key + passwordless sudo, prompts for passwords once
+.\scripts\prepare-nodes.ps1 -Nodes worker-a     # baseline packages
 ```
 
 On Linux, follow [Linux node enrollment](HostSetup.md#linux-node-enrollment) and
@@ -136,12 +136,12 @@ Then:
    it is running stays invisible until then.
 3. Confirm the node from the agent:
 
-   > Ping the cluster nodes and show the status of cluster5.
+   > Ping the cluster nodes and show the status of worker-a.
 
 4. Install any modules it should run. Compatibility is evaluated per node, so a node of a different
    architecture is checked against each module's declared support before anything is installed:
 
-   > Check whether text-tools is compatible with cluster5, then install it there.
+   > Check whether text-tools is compatible with worker-a, then install it there.
 
 The Vanta host stores the dedicated SSH key and inventory. Passwords are used only during enrollment and
 are entered directly into SSH and sudo prompts; VantaMCPd and the agent do not receive them.

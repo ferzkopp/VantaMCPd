@@ -18,11 +18,11 @@ The shortest path from an available storage node to a verified first search is:
 
 1. Check compatibility and free storage:
 
-	> Check whether corpus-search is compatible with cluster4.
+	> Check whether corpus-search is compatible with storage-a.
 
 2. Install a profile. Small is the 1% default; Medium is a practical broader starting point:
 
-	> Install corpus-search on cluster4 using the Medium profile.
+	> Install corpus-search on storage-a using the Medium profile.
 
 3. Keep the returned job ID and follow the durable installation:
 
@@ -120,26 +120,26 @@ primarily changes ingestion and FTS indexing time.
 
 In Copilot Chat Agent mode, check placement before starting the download:
 
-> Check whether corpus-search is compatible with cluster4.
+> Check whether corpus-search is compatible with storage-a.
 
 Then install it on one explicit storage-backed node:
 
-> Install corpus-search on cluster4.
+> Install corpus-search on storage-a.
 
 The default Small profile ingests a 1% sample. Select Medium for a 25% sample:
 
-> Install corpus-search on cluster4 using the Medium profile.
+> Install corpus-search on storage-a using the Medium profile.
 
 To ingest every matching record for a custom topic list:
 
-> Install corpus-search on cluster4 using the Large profile with only `cs.AI`, `cs.LG`, and `cs.CL`.
+> Install corpus-search on storage-a using the Large profile with only `cs.AI`, `cs.LG`, and `cs.CL`.
 
 The corresponding MCP arguments use manifest-declared install options:
 
 ```json
 {
 	"moduleId": "corpus-search",
-	"targets": ["cluster4"],
+	"targets": ["storage-a"],
 	"options": {
 		"profileId": "large-arxiv-cs",
 		"categories": ["cs.AI", "cs.LG", "cs.CL"]
@@ -175,7 +175,7 @@ Editing `installOptions` alone changes nothing on an installed node. Automatic m
 only the module version, so a node already running the catalog version is skipped before install options
 are read. Configured options apply to the next install that actually runs.
 
-To switch cluster4 from Medium to Large:
+To switch storage-a from Medium to Large:
 
 1. Set the profile in `cluster.config.local.json`:
 
@@ -193,11 +193,11 @@ To switch cluster4 from Medium to Large:
 3. Uninstall the current instance. This removes the service, install directory, and receipt, and retains
 	the corpus data directory on the storage mount.
 
-	> Uninstall corpus-search from cluster4.
+	> Uninstall corpus-search from storage-a.
 
 4. Reinstall on the same node. This starts a new durable provisioning job.
 
-	> Install corpus-search on cluster4.
+	> Install corpus-search on storage-a.
 
 Steps 1 and 2 are only needed to change the default. To reinstall without editing the inventory, pass the
 options on the install call instead; explicit `cluster_install_module` options override configured
@@ -222,7 +222,7 @@ only when the corpus is no longer wanted.
 
 List the tools advertised by the installed module:
 
-> List the tools provided by corpus-search on cluster4.
+> List the tools provided by corpus-search on storage-a.
 
 The target may be omitted because the module has exactly one active installation:
 
@@ -361,7 +361,7 @@ The underlying generic proxy call is:
 ```json
 {
 	"moduleId": "corpus-search",
-	"target": "cluster4",
+	"target": "storage-a",
 	"toolName": "corpus_search",
 	"arguments": {
 		"query": "retrieval augmented generation",
@@ -377,7 +377,7 @@ result in `output`:
 ```json
 {
 	"ok": true,
-	"node": "cluster4",
+	"node": "storage-a",
 	"moduleId": "corpus-search",
 	"moduleVersion": "0.4.1",
 	"toolName": "corpus_search",
@@ -508,7 +508,7 @@ identity differs.
 
 Uninstall the executable payload and receipt with:
 
-> Uninstall corpus-search from cluster4.
+> Uninstall corpus-search from storage-a.
 
 Uninstallation requires approval and retains the corpus under the configured storage mount, allowing a
 later install to reuse the data. To remove it permanently, uninstall first and then use the separately

@@ -920,11 +920,22 @@ export class ModuleManager {
       const receiptDirectory = path.posix.dirname(receiptPath);
       const serviceUnitName = `vantamcpd-${id}.service`;
       const serviceUnitPath = `/etc/systemd/system/${serviceUnitName}`;
+      const servicePreparation = modulePackage.manifest.runtime.mode === "service"
+        ? `receipt_backup=$(mktemp); unit_backup=$(mktemp); had_receipt=0; had_unit=0; ` +
+          `[ ! -f ${q(receiptPath)} ] || { cp -p ${q(receiptPath)} "$receipt_backup"; had_receipt=1; }; ` +
+          `[ ! -f ${q(serviceUnitPath)} ] || { cp -p ${q(serviceUnitPath)} "$unit_backup"; had_unit=1; }; ` +
+          `cleanup_service_backups() { rm -f -- "$receipt_backup" "$unit_backup"; }; trap cleanup_service_backups EXIT; ` +
+          `rollback_service() { ` +
+          `if [ "$had_receipt" = 1 ]; then cp -p "$receipt_backup" ${q(receiptPath)}; else rm -f -- ${q(receiptPath)}; fi; ` +
+          `if [ "$had_unit" = 1 ]; then cp -p "$unit_backup" ${q(serviceUnitPath)}; else rm -f -- ${q(serviceUnitPath)}; fi; ` +
+          `systemctl daemon-reload; if [ "$had_unit" = 1 ]; then systemctl restart ${q(serviceUnitName)} || true; ` +
+          `else systemctl disable --now ${q(serviceUnitName)} 2>/dev/null || true; fi; }; `
+        : "";
       const serviceActivation = modulePackage.manifest.runtime.mode === "service"
         ? `if ! (set -e; install -m 0644 ${q(`${installDirectory}/${modulePackage.manifest.runtime.systemdUnit}`)} ` +
-          `${q(serviceUnitPath)}; systemctl daemon-reload; systemctl enable --now ${q(serviceUnitName)}); then ` +
-          `systemctl disable --now ${q(serviceUnitName)} 2>/dev/null || true; rm -f -- ${q(serviceUnitPath)}; ` +
-          `rm -f -- ${q(receiptPath)}; systemctl daemon-reload; rollback; exit 1; fi; `
+          `${q(serviceUnitPath)}; systemctl daemon-reload; systemctl enable ${q(serviceUnitName)}; ` +
+          `systemctl restart ${q(serviceUnitName)}; systemctl is-active --quiet ${q(serviceUnitName)}); then ` +
+          `rollback; rollback_service; exit 1; fi; cleanup_service_backups; trap - EXIT; `
         : "";
       const data = modulePackage.manifest.persistentData;
       const dataDirectory = data && node.storage ? path.posix.join(node.storage.mountpoint, data.relativePath) : undefined;
@@ -935,6 +946,7 @@ export class ModuleManager {
       const lifecycleCommand =
         `previous=$(readlink ${q(currentLink)} 2>/dev/null || true); ` +
         `rollback() { if [ -n "$previous" ]; then ln -sfn "$previous" ${q(currentLink)}; else rm -f ${q(currentLink)}; fi; }; ` +
+        servicePreparation +
         dataSetup +
         `if ! bash ${q(modulePackage.manifest.lifecycle.install)}; then rollback; exit 1; fi; ` +
         `if ! chown -R root:root ${q(installDirectory)} || ! chmod 0755 ${q(installDirectory)}; then rollback; exit 1; fi; ` +
@@ -947,12 +959,12 @@ export class ModuleManager {
         VANTA_MODULE_STAGE: stage,
         VANTA_MODULE_INSTALL_DIR: installDirectory,
         VANTA_MODULE_CURRENT_LINK: currentLink,
+        VANTA_MODULE_RUN_AS: node.user,
         ...optionEnvironment,
         ...(dataDirectory && node.storage
           ? {
               VANTA_MODULE_DATA_DIR: dataDirectory,
               VANTA_MODULE_DATA_MOUNT: node.storage.mountpoint,
-              VANTA_MODULE_RUN_AS: node.user,
             }
           : {}),
       };

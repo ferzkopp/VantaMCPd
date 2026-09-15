@@ -1,0 +1,45 @@
+[Unit]
+Description=VantaMCPd Browser Retrieval broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vantamcpd-browser
+Group=vantamcpd-browser
+EnvironmentFile=/etc/vantamcpd/browser-retrieval.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/vantamcpd/modules/browser-retrieval/current/service.py
+Restart=on-failure
+RestartSec=3s
+RuntimeDirectory=vantamcpd-browser
+RuntimeDirectoryMode=0755
+UMask=0077
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+MemoryHigh=1500M
+MemoryMax=1800M
+CPUQuota=200%
+TasksMax=128
+TimeoutStopSec=8s
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

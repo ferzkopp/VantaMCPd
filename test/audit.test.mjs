@@ -46,6 +46,24 @@ test("attributes redacted tool parameters to downstream audit events", () => {
   }
 });
 
+test("removes credentials, queries, and fragments from URL audit parameters", () => {
+  const attribution = withToolParameters(
+    "cluster_call_module_tool",
+    {
+      moduleId: "browser-retrieval",
+      arguments: {
+        url: "https://user:password@example.com/docs/page?token=secret-value#private",
+        sourceUrl: "https://example.org/source?signature=hidden",
+      },
+    },
+    () => currentAuditAttribution(),
+  );
+
+  assert.match(attribution.parameters, /https:\/\/example\.com\/docs\/page/);
+  assert.match(attribution.parameters, /https:\/\/example\.org\/source/);
+  assert.doesNotMatch(attribution.parameters, /user|password|token|secret-value|private|signature|hidden/);
+});
+
 test("attributes non-module operations to core", () => {
   const logDir = mkdtempSync(path.join(tmpdir(), "vantamcpd-audit-"));
   try {

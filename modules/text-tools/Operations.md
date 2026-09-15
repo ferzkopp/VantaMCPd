@@ -90,7 +90,7 @@ the decision can be revisited when a constraint changes.
 | Markdown linting | Deferred | Requires a rule set and a quality contract of its own |
 | Profanity filtering | Deferred | Requires an explicit language, policy, and maintained word list |
 | Named entities, language detection, sentiment, topics, classification | Deferred | Useful quality requires model data and more CPU/RAM than this module budget |
-| Grammar correction, paraphrasing, abstractive summaries | Excluded on current nodes | Requires large language models or external services |
+| Grammar correction, paraphrasing, abstractive summaries | Excluded from this module | Requires large language models or external services |
 | Fake identities, addresses, random quotes | Deferred | Locale datasets and provenance policy are required |
 
 ## JSON Schema Contract

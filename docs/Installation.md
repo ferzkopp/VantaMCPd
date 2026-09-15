@@ -123,7 +123,7 @@ Useful variants:
 
 ```powershell
 .\scripts\bootstrap.ps1 -Verify                      # check state, change nothing
-.\scripts\bootstrap.ps1 -Nodes cluster4              # single node
+.\scripts\bootstrap.ps1 -Nodes storage-a             # single node
 .\scripts\bootstrap.ps1 -InstallBaseline             # also install usbutils, jq, curl, nfs-common
 .\scripts\bootstrap.ps1 -ConfigPath D:\other.json    # explicit inventory, skips the gate
 ```
@@ -155,7 +155,7 @@ whether a reboot is pending, and whether passwordless sudo works. It is idempote
 are left alone and nothing is upgraded. Use `cluster_packages` for upgrades.
 
 ```powershell
-.\scripts\prepare-nodes.ps1 -Nodes cluster4 -ExtraPackages tmux,htop
+.\scripts\prepare-nodes.ps1 -Nodes storage-a -ExtraPackages tmux,htop
 ```
 
 Exit code `0` means all nodes are ready. Exit code `1` means at least one node needs attention; its
@@ -182,15 +182,15 @@ Start with these requests in the connected agent:
 
 > List the available node modules and their deployment policies.
 >
-> Check whether text-tools is compatible with cluster1 and cluster2.
+> Check whether text-tools is compatible with worker-a and worker-b.
 >
-> Install text-tools on cluster1 and cluster2.
+> Install text-tools on worker-a and worker-b.
 >
 > List the tools provided by text-tools.
 >
-> Check whether corpus-search is compatible with the storage node.
+> Check whether corpus-search is compatible with storage-a.
 >
-> Install corpus-search on the storage node using the Medium profile, then show its job progress.
+> Install corpus-search on storage-a using the Medium profile, then show its job progress.
 
 The install request requires approval before VantaMCPd calls `cluster_install_module` with
 `confirm: true`. Installations always use explicit node names or tags; they never default to the entire
