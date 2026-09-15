@@ -44,6 +44,7 @@ reloads the local catalog.
 | Text Tools (`text-tools`) | `0.4.1` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | 111 bounded operations across twelve category tools | [Text Tools](../modules/text-tools/TextTools.md) |
 | Scientific Corpus Search (`corpus-search`) | `0.4.1` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 10 GiB free, Python 3, SQLite 3 | Phrase/exclusion/field search, exact record lookup, category resolution, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
 | Browser Retrieval (`browser-retrieval`) | `0.2.2` | Debian/Ubuntu `amd64`, 2 CPU cores, 3 GiB RAM, 2 GiB root disk, Chromium, systemd | Rendered page retrieval, selector queries, and table extraction | [Browser Retrieval](../modules/browser-retrieval/BrowserRetrieval.md) |
+| Python Compute (`python-compute`) | `0.1.5` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, 2 CPU cores, 900 MB RAM, 2.5 GB root disk, Python 3, bubblewrap, systemd | Environment discovery and sandboxed Python execution with values, tables, and charts | [Python Compute](../modules/python-compute/PythonCompute.md) |
 
 ### Activate a Module
 
@@ -71,14 +72,23 @@ names, invalid types, and out-of-range values are rejected before any remote wor
 only declared values to the trusted lifecycle script through namespaced environment variables.
 
 Persistent installation defaults may be set in `cluster.config.local.json`; explicit tool arguments
-override them. Defaults use the same manifest validation before any SSH work. Restart VantaMCPd after
-editing the inventory because configuration is loaded once at startup:
+override them. A `nodes` block sets per-node overrides for a heterogeneous cluster, so a larger worker
+can carry limits the rest of the cluster cannot support. Precedence is explicit tool arguments, then the
+per-node block, then the module-wide block, then the manifest defaults. Defaults use the same manifest
+validation before any SSH work. Restart VantaMCPd after editing the inventory because configuration is
+loaded once at startup:
 
 ```json
 {
   "modules": {
     "corpus-search": {
       "installOptions": { "profileId": "medium-arxiv-cs" }
+    },
+    "python-compute": {
+      "installOptions": { "bundle": "full" },
+      "nodes": {
+        "worker-b": { "installOptions": { "maxMemoryMb": 2048, "concurrentCalls": 3 } }
+      }
     }
   }
 }
@@ -86,7 +96,13 @@ editing the inventory because configuration is loaded once at startup:
 
 These defaults apply to the next install that runs; they do not reconfigure an already-installed node.
 Automatic updates compare versions only, so a node already running the catalog version is skipped before
-options are read. To apply changed options to a current installation, uninstall and reinstall it.
+options are read. To apply changed options to a current installation, uninstall and reinstall it. An
+update that does run re-applies the configured options, so per-node values must live in the inventory
+rather than being passed once by hand.
+
+An option that declares no default is simply absent from the installer's environment, which lets a
+lifecycle script size a value from the target node instead. `python-compute` uses this to derive memory,
+concurrency, and rate limits from the node's own RAM and CPU count.
 
 Schema-v2 job-backed activation returns `state: "provisioning"` and a `jobId` after verified staging.
 The remote systemd oneshot owns the lifecycle operation from that point, so it survives an MCP or SSH
@@ -353,7 +369,7 @@ The manifest will be validated with Zod before any remote operation. Its initial
 }
 ```
 
-Manifest IDs and relative paths use conservative character sets. Package loading rejects unsupported schema versions, duplicate IDs, missing files, symbolic links, path traversal, malformed versions, oversized packages, and unknown manifest properties. Schema v2 adds `lifecycle.execution` for job-backed installation and `persistentData` for a contained path under the target node's configured storage mount; schema v1 remains supported unchanged.
+Manifest IDs and relative paths use conservative character sets. Package loading rejects unsupported schema versions, duplicate IDs, missing files, symbolic links, path traversal, malformed versions, oversized packages, and unknown manifest properties. Schema v2 requires `lifecycle.execution` for job-backed installation and optionally adds `persistentData` for a contained path under the target node's configured storage mount; a module that keeps no state between calls omits it. Schema v1 remains supported unchanged.
 
 Compatibility fields are optional constraints rather than a fixed list of node classes. `minDiskMb` is
 free space on the **root** filesystem, where the versioned payload, job staging, and any missing apt
@@ -499,6 +515,31 @@ and bounded CPU, memory, processes, bytes, DOM size, and execution time. See the
 [Browser Retrieval quickstart](../modules/browser-retrieval/BrowserRetrieval.md#quickstart) for usage,
 security behavior, limits, and troubleshooting.
 
+## Python Compute
+
+`python-compute` is a replicated service module that runs agent-authored Python on a cluster node,
+including constrained ARMv7 workers. Installation is a durable job: it provisions a selected bundle of
+Debian scientific packages, records a capability inventory, and verifies a real sandbox before the
+service becomes active. Its MCP entrypoint is a short-lived SSH stdio adapter in front of a hardened
+systemd broker that starts a fresh sandboxed interpreter for each call.
+
+The tools are `python_env` and `python_run`. Discovery comes first: `python_env` reports the interpreter,
+isolation, every limit, the helper API, and the installed modules grouped by capability, because
+submitted code cannot install packages. `python_run` executes code and returns printed output, a
+JSON-converted value, a bounded traceback, and base64 artifacts. An injected `vanta` helper returns
+values, CSV tables, text, JSON, and PNG images, and open matplotlib figures are captured automatically.
+
+Each call runs under bubblewrap with private user, mount, PID, IPC, UTS, and cgroup namespaces, an empty
+network namespace, a read-only system view, and one writable working directory that is deleted
+afterwards. POSIX limits bound address space, CPU time, file size, open files, and processes, and the
+process group is terminated when the wall-clock budget expires. Those limits, the service cgroup caps,
+the concurrency, and the call rate are sized from the target node's own memory and CPU count at
+installation and may be overridden per node in the inventory. Calls are stateless, carry no credentials,
+and reach neither the network nor other modules' data. This is defense in depth for trusted
+agent-authored code rather than a hostile-code security boundary. See the
+[Python Compute quickstart](../modules/python-compute/PythonCompute.md#quickstart) for bundle selection,
+installation progress, discovery, returning rendered content, limits, and lifecycle.
+
 ## Capability Feasibility Guide
 
 Ratings below compare constrained ARMv7/1 GiB and general-purpose AMD64 profiles. They are planning
@@ -511,8 +552,8 @@ recorded inventory and live preflight.
 | Artifact storage | High | Local filesystem or an NFS share, with quotas and retention |
 | Documentation/scientific corpus | Implemented with selectable sampling | SQLite FTS5/BM25 over 1%, 25%, or 100% of matching arXiv snapshot metadata; no embeddings |
 | Image processing | High for basic transforms | Pillow or ImageMagick resize/crop/filter; no neural models |
-| Python execution | Medium | Basic Python only; needs sandbox and resource limits |
-| NumPy/SciPy compute | Medium | Prefer Debian armhf packages and OpenBLAS; memory limits apply |
+| Python execution | Implemented on ARMv7 and AMD64 | Sandboxed stateless execution with discovery, bounded results, and rendered artifacts |
+| NumPy/SciPy compute | Implemented through distribution packages | Debian `armhf` NumPy, SciPy, pandas and matplotlib behind per-call memory and time limits |
 | Screenshot and OCR | Medium for OCR | Tesseract on supplied images; browser capture is a separate blocker |
 | PDF parsing | Medium for text extraction | pdfminer.six or command-line tools; tables/OCR can be expensive |
 | Geospatial compute | Medium for basic operations | Shapely/GeoJSON only; PostGIS is too heavy for the MVP |
@@ -535,13 +576,22 @@ The sections below remain design candidates except where an implemented baseline
 
 #### Python Kernel
 
-Possible capabilities include bounded Python snippets, parameterized notebooks, stdout, structured JSON, plots, and artifact references. Candidate technologies include [Jupyter Kernel Gateway](https://github.com/jupyter-server/kernel_gateway), [Papermill](https://github.com/nteract/papermill), [uv](https://docs.astral.sh/uv/), and [micromamba](https://mamba.readthedocs.io/en/latest/user_guide/micromamba.html).
+The implemented `python-compute` baseline runs bounded, stateless Python snippets behind namespace
+isolation and POSIX resource limits, returning stdout, JSON values, tables, and PNG charts from a
+curated distribution package set.
+
+Parameterized notebooks, persistent kernels or sessions, caller-installed dependencies, and network
+access from submitted code remain deferred. Candidate technologies for those extensions include
+[Jupyter Kernel Gateway](https://github.com/jupyter-server/kernel_gateway), [Papermill](https://github.com/nteract/papermill), [uv](https://docs.astral.sh/uv/), and [micromamba](https://mamba.readthedocs.io/en/latest/user_guide/micromamba.html).
 
 Potential stacks include pandas, NumPy, Polars, DuckDB, matplotlib, Plotly, scikit-learn, spaCy, Sentence Transformers, PyTorch, and Transformers. These stacks must be separate compatibility profiles; they are not one installable baseline. Arbitrary code execution requires filesystem, process, network, CPU, memory, and time isolation.
 
 #### NumPy/SciPy Compute
 
-Possible capabilities include matrix operations, optimization, signal processing, and statistical tests. See the [SciPy installation guide](https://scipy.org/install/) and [OpenBLAS](https://www.openblas.net/). ARMv7 deployments should use tested Debian armhf packages where possible and reject inputs that exceed memory budgets.
+Matrix operations, optimization, signal processing, and statistical tests are available through the
+`python-compute` bundles, which use tested Debian packages and OpenBLAS rather than building wheels on
+the node. See the [SciPy installation guide](https://scipy.org/install/) and [OpenBLAS](https://www.openblas.net/). Inputs that exceed the per-call memory budget are rejected by the
+sandbox rather than by the node running out of RAM.
 
 ### Retrieval and web processing
 
@@ -642,9 +692,10 @@ The repository implements validated local packages, recorded and live compatibil
 staging with SHA-256 verification, root-owned receipts, replicated/singleton placement, MCP-over-SSH
 proxying, startup updates, durable lifecycle jobs, retained storage, explicit purge, and read-only
 module/job dashboard views. Browser Retrieval adds transactional service activation, a local Unix
-broker, and node-reachable rendered retrieval on AMD64. Automated tests use offline corpus and
-browser fixtures; live acceptance remains an operator action because it changes a configured node and
-uses networked sources.
+broker, and node-reachable rendered retrieval on AMD64. Python Compute adds job-backed package
+provisioning without persistent data and namespace-isolated code execution on constrained ARMv7 nodes.
+Automated tests use offline corpus and browser fixtures and offline sandbox argv checks; live acceptance
+remains an operator action because it changes a configured node and uses networked sources.
 
 ## Acceptance Criteria
 

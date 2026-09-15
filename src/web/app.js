@@ -630,10 +630,11 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
     const installations = section("Installations");
     kv(installations.dl, "nodes", `${module.nodeCount} of ${module.configuredNodeCount}`);
     module.installedNodes.forEach((node) => {
+      const readAt = node.refreshedAt ? ` · read ${formatRelativeTime(node.refreshedAt)}` : "";
       kv(
         installations.dl,
         node.node,
-        `${node.version}${node.stale ? " · stale" : node.reachable ? " · reachable" : " · unreachable"}`,
+        `${node.version}${node.stale ? " · stale" : node.reachable ? " · reachable" : " · unreachable"}${readAt}`,
       );
     });
     dlgBody.appendChild(installations);

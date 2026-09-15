@@ -112,8 +112,49 @@ test("submits an allowlisted job as a remote systemd unit", async () => {
   assert.equal(listOptions.sudo, true);
 });
 
-test("reconciliation fails a nonterminal job whose systemd unit is inactive", async () => {
+test("reports a job the moment it settles so cached module state can refresh", async () => {
   const target = node();
+  const base = {
+    schemaVersion: 1,
+    jobId: "12345678-1234-4234-8234-123456789abc",
+    kind: "module-install",
+    targetNode: target.name,
+    moduleId: "python-compute",
+    resourceKeys: ["module:python-compute:storage-node"],
+    createdAt: "2026-09-15T12:00:00.000Z",
+    startedAt: "2026-09-15T12:00:01.000Z",
+  };
+  const encode = (state) => Buffer.from(JSON.stringify(state)).toString("base64") + "\n";
+  let payload = encode({ ...base, status: "running" });
+  const pool = { execMany: async () => [execResult(target, payload)], exec: async () => execResult(target) };
+  const registry = new JobRegistry();
+  registry.register("module-install");
+  const manager = new JobManager(config(target), pool, registry, path.join(root, "src", "jobs", "remote-runner.py"));
+
+  const settled = [];
+  const unsubscribe = manager.onJobSettled((job) => settled.push(job));
+
+  await manager.list();
+  assert.deepEqual(settled, [], "a running job must not be reported as settled");
+
+  payload = encode({ ...base, status: "succeeded", finishedAt: "2026-09-15T12:05:00.000Z" });
+  await manager.list();
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].jobId, base.jobId);
+  assert.equal(settled[0].kind, "module-install");
+
+  await manager.list();
+  assert.equal(settled.length, 1, "a settled job must only be reported once");
+
+  unsubscribe();
+  payload = encode({ ...base, jobId: "22345678-1234-4234-8234-123456789abc", status: "running" });
+  await manager.list();
+  payload = encode({ ...base, jobId: "22345678-1234-4234-8234-123456789abc", status: "failed", finishedAt: "2026-09-15T12:06:00.000Z" });
+  await manager.list();
+  assert.equal(settled.length, 1, "an unsubscribed listener stops receiving jobs");
+});
+
+test("reconciliation fails a nonterminal job whose systemd unit is inactive", async () => {  const target = node();
   const active = {
     schemaVersion: 1,
     jobId: "12345678-1234-4234-8234-123456789abc",

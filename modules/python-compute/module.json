@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 2,
+  "id": "python-compute",
+  "name": "Python Compute",
+  "version": "0.1.5",
+  "description": "Run bounded Python 3 code in a sandboxed process with a curated scientific package set.",
+  "capabilities": [
+    "calculate, solve equations and simulate instead of estimating an answer",
+    "fit curves, run regressions, correlations and statistical tests on data",
+    "do exact, symbolic or arbitrary-precision math with SymPy",
+    "analyze CSV or JSON datasets: aggregate, pivot, join and summarize",
+    "plot data as PNG chart images and return tables as CSV",
+    "analyze graphs and networks: paths, centrality and connectivity",
+    "resize, convert and inspect images",
+    "run supplied Python code and return values, output and errors",
+    "report which Python packages and versions a node provides"
+  ],
+  "entrypoint": ["python3", "server.py"],
+  "compatibility": {
+    "os": ["debian", "ubuntu"],
+    "architectures": ["armhf", "arm64", "amd64"],
+    "minCores": 2,
+    "minRamMb": 900,
+    "minDiskMb": 2560,
+    "requiredCommands": ["bash", "python3", "bwrap", "prlimit", "systemctl", "apt-get"],
+    "accelerators": []
+  },
+  "packages": { "apt": ["python3", "bubblewrap", "passwd", "util-linux"] },
+  "lifecycle": {
+    "install": "install.sh",
+    "uninstall": "uninstall.sh",
+    "execution": { "mode": "job", "timeoutMs": 5400000 }
+  },
+  "installOptions": {
+    "bundle": {
+      "type": "string",
+      "description": "Package set provisioned on the node. core is NumPy only, science adds SciPy, pandas, matplotlib and SymPy, full adds scikit-learn, statsmodels, Shapely and document parsers.",
+      "values": ["core", "science", "full"],
+      "default": "science"
+    },
+    "memoryMb": {
+      "type": "integer",
+      "description": "Default per-call address-space limit in MB. Omit to size it from the node's memory.",
+      "minimum": 128,
+      "maximum": 4096
+    },
+    "maxMemoryMb": {
+      "type": "integer",
+      "description": "Highest per-call address-space limit a caller may request in MB. Omit to size it from the node's memory.",
+      "minimum": 128,
+      "maximum": 4096
+    },
+    "maxTimeoutMs": {
+      "type": "integer",
+      "description": "Highest per-call wall-clock limit a caller may request. Omit for the full 10 minutes.",
+      "minimum": 1000,
+      "maximum": 600000
+    },
+    "concurrentCalls": {
+      "type": "integer",
+      "description": "Calls this node runs at once. Omit to size it from the node's CPU cores.",
+      "minimum": 1,
+      "maximum": 4
+    },
+    "callsPerMinute": {
+      "type": "integer",
+      "description": "Calls this node accepts per minute. Omit to derive it from the concurrency.",
+      "minimum": 1,
+      "maximum": 120
+    }
+  },
+  "deployment": { "mode": "replicated", "routing": "round-robin" },
+  "runtime": {
+    "mode": "service",
+    "systemdUnit": "python-compute.service"
+  },
+  "limits": {
+    "startupMs": 15000,
+    "callMs": 660000,
+    "maxInputBytes": 262144,
+    "maxOutputBytes": 2000000
+  }
+}

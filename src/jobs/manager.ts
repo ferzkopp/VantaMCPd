@@ -39,6 +39,7 @@ function unitName(jobId: string): string {
 
 export class JobManager {
   private readonly cache = new Map<string, JobState>();
+  private readonly settledListeners = new Set<(job: JobState) => void>();
   private refreshedAt?: string;
   private timer?: NodeJS.Timeout;
   private readonly runner: string;
@@ -131,9 +132,17 @@ export class JobManager {
     return state;
   }
 
+  /** Fires once when a job this process has seen running reaches a terminal state. */
+  onJobSettled(listener: (job: JobState) => void): () => void {
+    this.settledListeners.add(listener);
+    return () => this.settledListeners.delete(listener);
+  }
+
   async list(nodes = this.config.nodes): Promise<ListedJobs> {
     const command = `for file in ${JOB_ROOT}/*/state.json; do [ -f "$file" ] || continue; base64 -w0 "$file"; printf '\\n'; done`;
     const results = await this.pool.execMany(nodes, command, { sudo: true, timeoutMs: 30_000, maxOutputBytes: 2_000_000 });
+    const previousStatus = new Map([...this.cache].map(([jobId, state]) => [jobId, state.status]));
+    const settled: JobState[] = [];
     const jobs: JobState[] = [];
     const unreachableNodes: string[] = [];
     const invalidStates: { node: string; error: string }[] = [];
@@ -151,6 +160,8 @@ export class JobManager {
           if (state.targetNode !== result.node) throw new Error(`targetNode is ${state.targetNode}`);
           jobs.push(state);
           this.cache.set(state.jobId, state);
+          const previous = previousStatus.get(state.jobId);
+          if (previous !== undefined && !isTerminalJobStatus(previous) && isTerminalJobStatus(state.status)) settled.push(state);
         } catch (error) {
           invalidStates.push({ node: result.node, error: (error as Error).message });
         }
@@ -158,6 +169,9 @@ export class JobManager {
     }
     jobs.sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.jobId.localeCompare(right.jobId));
     this.refreshedAt = new Date().toISOString();
+    for (const job of settled) {
+      for (const listener of this.settledListeners) listener(job);
+    }
     return { jobs, unreachableNodes, invalidStates };
   }
 

@@ -99,7 +99,7 @@ test("startup reconciliation updates only older installations and then removes t
 test("loads the text-tools package deterministically", () => {
   const catalog = loadModuleCatalog(path.join(root, "modules"));
   assert.deepEqual(catalog.errors, []);
-  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["browser-retrieval", "corpus-search", "text-tools"]);
+  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["browser-retrieval", "corpus-search", "python-compute", "text-tools"]);
   const textTools = catalog.modules.find((item) => item.manifest.id === "text-tools");
   assert.ok(textTools.files.some((file) => file.relativePath === "server.py"));
   assert.deepEqual(textTools.manifest.deployment, { mode: "replicated", routing: "round-robin" });
@@ -179,6 +179,22 @@ test("keeps schema v1 manifests unchanged and rejects v2-only fields", () => {
       },
     }),
     /requires schemaVersion 2/,
+  );
+});
+
+test("allows a job-backed v2 module that keeps no persistent data", () => {
+  const manifest = textToolsPackage().manifest;
+  const parsed = parseModuleManifest({
+    ...manifest,
+    schemaVersion: 2,
+    id: "example-compute",
+    lifecycle: { ...manifest.lifecycle, execution: { mode: "job", timeoutMs: 600_000 } },
+  });
+  assert.equal(parsed.persistentData, undefined);
+  assert.equal(parsed.lifecycle.execution.timeoutMs, 600_000);
+  assert.throws(
+    () => parseModuleManifest({ ...manifest, schemaVersion: 2 }),
+    /is required for schemaVersion 2/,
   );
 });
 
@@ -521,6 +537,60 @@ test("schema v2 installation submits a durable job after verified staging", asyn
     manager.install("corpus-search", [target], 300_000, { profileId: "unsupported-arxiv-cs" }),
     /profileId must be one of: small-arxiv-cs, medium-arxiv-cs, large-arxiv-cs/,
   );
+});
+
+test("per-node install options override the cluster-wide defaults", async () => {
+  const target = {
+    ...node({
+      cpu: { packageArch: "amd64", cores: 8 },
+      memory: { totalMb: 16384 },
+      os: { id: "debian", version: "12" },
+      filesystems: [{ mountpoint: "/", device: "/dev/mmcblk0p1" }, { mountpoint: "/mnt/ssd", device: "/dev/sda1" }],
+      accelerators: [],
+    }),
+    role: "worker+storage",
+    tags: ["worker", "storage"],
+    storage: { device: "/dev/sda1", mountpoint: "/mnt/ssd", fsType: "ext4", label: "clusterssd", nfs: { enabled: false, network: "10.0.0.0/24", options: "rw,sync,no_subtree_check" } },
+  };
+  const corpus = loadModuleCatalog(path.join(root, "modules")).modules.find((item) => item.manifest.id === "corpus-search");
+  const ok = (stdout = "") => ({ node: target.name, host: target.host, ok: true, code: 0, stdout, stderr: "", durationMs: 1, truncated: false, timedOut: false });
+  const pool = {
+    execMany: async () => [ok("")],
+    exec: async (_node, command) => {
+      if (command.includes("storage_mountpoint=")) {
+        return ok("command_bash|present\ncommand_python3|present\ncommand_sqlite3|present\ndisk_available_mb|1000\nstorage_mounted|yes\nstorage_available_mb|20000\nstorage_writable|yes\nstorage_distinct|yes\n");
+      }
+      if (command.includes("sha256sum")) return ok(corpus.files.map((file) => `${file.relativePath}|${file.sha256}`).join("\n"));
+      return ok();
+    },
+    sftp: async () => ({ fastPut: (_local, _remote, callback) => callback(null), end: () => void 0 }),
+  };
+  const submitted = [];
+  const jobs = {
+    submit: async (targetNode, input) => {
+      submitted.push({ targetNode, input });
+      return { jobId: "12345678-1234-4234-8234-123456789abc", status: "queued" };
+    },
+    list: async () => ({ jobs: [], unreachableNodes: [], invalidStates: [] }),
+  };
+  const manager = new ModuleManager({
+    maxConcurrency: 1,
+    nodes: [target],
+    modules: {
+      "corpus-search": {
+        installOptions: { profileId: "small-arxiv-cs" },
+        nodes: { [target.name]: { installOptions: { profileId: "large-arxiv-cs" } } },
+      },
+    },
+  }, pool, path.join(root, "modules"), jobs);
+
+  const [result] = await manager.install("corpus-search", [target], 300_000);
+  assert.equal(result.ok, true);
+  assert.equal(submitted[0].input.environment.VANTA_MODULE_OPTION_PROFILE_ID, "large-arxiv-cs");
+
+  // An explicit tool argument still wins over both configured layers.
+  await manager.install("corpus-search", [target], 300_000, { profileId: "medium-arxiv-cs" });
+  assert.equal(submitted[1].input.environment.VANTA_MODULE_OPTION_PROFILE_ID, "medium-arxiv-cs");
 });
 
 test("persistent data purge requires uninstall and a module marker", async () => {

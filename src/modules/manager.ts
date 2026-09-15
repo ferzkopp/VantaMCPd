@@ -340,8 +340,16 @@ export class ModuleManager {
   ): Promise<ModuleInstallResult[]> {
     return this.withModuleMutation(moduleId, async () => {
       const modulePackage = this.get(moduleId);
-      const configuredOptions = this.config.modules?.[moduleId]?.installOptions ?? {};
-      const optionEnvironment = installOptionEnvironment(modulePackage, { ...configuredOptions, ...options });
+      const configured = this.config.modules?.[moduleId];
+      // Resolved per node and before any remote work, so an invalid value fails the whole request early.
+      const optionEnvironments = new Map(nodes.map((node) => [
+        node.name,
+        installOptionEnvironment(modulePackage, {
+          ...(configured?.installOptions ?? {}),
+          ...(configured?.nodes?.[node.name]?.installOptions ?? {}),
+          ...options,
+        }),
+      ]));
       await this.assertInstallPlacement(modulePackage, nodes, timeoutMs);
       const checks = await this.check(moduleId, nodes, Math.min(timeoutMs, 30_000));
       const results = await mapLimit(nodes, this.config.maxConcurrency, async (node, index) => {
@@ -385,7 +393,7 @@ export class ModuleManager {
             error: `post-dependency preflight ${check.compatibility.status}: ${detail}`,
           };
         }
-        return this.installOnNode(modulePackage, node, timeoutMs, optionEnvironment);
+        return this.installOnNode(modulePackage, node, timeoutMs, optionEnvironments.get(node.name) ?? {});
       });
       this.routeCursors.delete(moduleId);
       if (results.some((result) => result.ok)) this.notifyInventoryChanged();
@@ -690,7 +698,7 @@ export class ModuleManager {
     await this.moduleMutations.get(moduleId)?.catch(() => undefined);
   }
 
-  private notifyInventoryChanged(): void {
+  notifyInventoryChanged(): void {
     for (const listener of this.inventoryChangeListeners) listener();
   }
 

@@ -108,7 +108,7 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
         if (!inventory) return [];
         const version = inventory.moduleVersions?.[manifest.id];
         if (version === undefined) return [];
-        return [{ node: node.name, version, reachable: inventory.reachable, stale: inventory.stale === true }];
+        return [{ node: node.name, version, reachable: inventory.reachable, stale: inventory.stale === true, refreshedAt: inventory.refreshedAt }];
       });
       if (installedNodes.length === 0) return [];
       return [{

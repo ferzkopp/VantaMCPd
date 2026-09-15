@@ -178,9 +178,6 @@ export const ModuleManifestSchema = z
     if (manifest.lifecycle.execution === undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["lifecycle", "execution"], message: "is required for schemaVersion 2" });
     }
-    if (manifest.persistentData === undefined) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["persistentData"], message: "is required for schemaVersion 2" });
-    }
   });
 
 export type ModuleManifest = z.infer<typeof ModuleManifestSchema>;

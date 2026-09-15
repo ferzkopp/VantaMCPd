@@ -189,7 +189,11 @@ const JobsSchema = z.object({
 
 const ModuleDefaultsSchema = z.record(
   z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  z.object({ installOptions: z.record(z.unknown()).default({}) }).strict(),
+  z.object({
+    installOptions: z.record(z.unknown()).default({}),
+    /** Per-node overrides, so a larger worker can raise limits the rest of the cluster cannot support. */
+    nodes: z.record(z.string().min(1), z.object({ installOptions: z.record(z.unknown()).default({}) }).strict()).default({}),
+  }).strict(),
 ).default({});
 
 const ConfigSchema = z.object({

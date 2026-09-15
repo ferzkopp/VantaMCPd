@@ -51,6 +51,11 @@ async function main(): Promise<void> {
   jobRegistry.register("module-install");
   const jobs = new JobManager(config, pool, jobRegistry);
   const modules = new ModuleManager(config, pool, undefined, jobs);
+  // A job-backed install writes its receipt long after the tool call returns, so cached module state
+  // is only correct once the job settles.
+  jobs.onJobSettled((job) => {
+    if (job.kind === "module-install") modules.notifyInventoryChanged();
+  });
   const ctx: ToolContext = { config, pool, jobs, modules };
 
   const capabilities = capabilitySummary(modules.catalog);
@@ -70,7 +75,8 @@ async function main(): Promise<void> {
             "whenever it matches one of these capabilities, even if the user does not name the module or the node:\n" +
             `${capabilities}\n` +
             "These operations are deterministic, bounded and auditable, so prefer them over answering from memory for " +
-            "conversion, extraction, redaction, comparison and formatting work. Use cluster_list_modules to confirm " +
+            "calculation, data analysis, charting, conversion, extraction, redaction, comparison and formatting work. " +
+            "Use cluster_list_modules to confirm " +
             "what is installed, and cluster_list_module_tools for exact operation names and argument schemas.\n"
           : "") +
         (config.monitoring.enabled && config.monitoring.web

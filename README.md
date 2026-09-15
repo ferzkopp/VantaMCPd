@@ -45,6 +45,7 @@ routes its tools according to the module's deployment policy.
 | **Text Tools** (`text-tools`, v0.4.1) | 111 bounded text, data, date/time, document, security, and developer operations across twelve category tools | Replicated; on demand; round-robin routing | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 40 MB disk | [Text Tools](modules/text-tools/TextTools.md) |
 | **Scientific Corpus Search** (`corpus-search`, v0.4.1) | Provenance-aware arXiv metadata search using SQLite FTS5/BM25, with phrase, exclusion, and field query syntax | Singleton; on demand; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 10 GiB free node storage | [Scientific Corpus Search](modules/corpus-search/CorpusSearch.md) |
 | **Browser Retrieval** (`browser-retrieval`, v0.2.2) | JavaScript-rendered page retrieval, selector queries, and table extraction across node-reachable HTTP(S) sites | Replicated; isolated service broker; stateless calls | Debian/Ubuntu `amd64`; 2 cores; 3 GiB RAM; 2 GiB root disk; Chromium | [Browser Retrieval](modules/browser-retrieval/BrowserRetrieval.md) |
+| **Python Compute** (`python-compute`, v0.1.5) | Python environment discovery and sandboxed execution returning values, tables, and rendered charts, with NumPy, SciPy, pandas and matplotlib | Replicated; isolated service broker; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 2 cores; 900 MB RAM; 2.5 GB root disk; bubblewrap | [Python Compute](modules/python-compute/PythonCompute.md) |
 
 Use `cluster_list_modules` to see install options, compatibility, deployment policies, and live
 installation state. See [Node modules](docs/Modules.md) for architecture and lifecycle details.
@@ -136,6 +137,9 @@ for Claude Code, Hermes Agent, OpenClaw, and generic MCP clients are in [MCP cli
 >
 > Check whether browser-retrieval is compatible with browser-worker, install it there, and retrieve
 > `https://example.com/` as Markdown.
+>
+> Install python-compute on worker-a with the science bundle, then ask it which Python packages the
+> node provides.
 
 Module installation requires approval and explicit target nodes or tags. See [Node modules](docs/Modules.md)
 for deployment, routing, durable jobs, and update behavior, the
@@ -143,7 +147,9 @@ for deployment, routing, durable jobs, and update behavior, the
 [Corpus Search quickstart](modules/corpus-search/CorpusSearch.md#quickstart) for profiles, storage,
 installation, and recovery. See the
 [Browser Retrieval quickstart](modules/browser-retrieval/BrowserRetrieval.md#quickstart) for public
-network policy, rendered extraction, and service isolation.
+network policy, rendered extraction, and service isolation, and the
+[Python Compute quickstart](modules/python-compute/PythonCompute.md#quickstart) for package bundles,
+sandbox behavior, and returning rendered content.
 
 **Re-running the whole block on a working cluster is safe.** Every step is idempotent: an existing SSH
 key is reused, `authorized_keys` and `/etc/sudoers.d/99-vanta` are left alone once correct (so you are
@@ -362,6 +368,8 @@ The daemon records every SSH interaction and serves a live dashboard at **<http:
 > bind the default dashboard port `7420`. Use a different `monitoring.port` in each client's inventory,
 > or disable web monitoring for all but one process. See [Multiple clients](docs/Clients.md#multiple-clients).
 
+![VantaMCPd monitoring dashboard showing nodes, modules, durable jobs, and live interactions](docs/monitor.png)
+
 - **Nodes** — every configured node, installed-module count, calls, failures, timing, bytes moved,
   last tool and last activity. Click a row for configuration, module IDs and recorded hardware.
 - **Modules** — active module versions, node coverage, deployment, runtime and package size. Click a row
@@ -373,6 +381,16 @@ The daemon records every SSH interaction and serves a live dashboard at **<http:
   `following` pauses it, and `copy log path` copies today's persisted JSONL `file://` URL.
 - **Filters** — by node, module, status (`ok`, `exit 1`, `exit 4`, `error` … built from what actually
   happened), and a free-text search across command, module, tool, parameters and error. They combine.
+
+Clicking a node opens its access settings, installed modules, hardware, storage, filesystems, and
+operating-system details without exposing its configured address or key path.
+
+![Node configuration and hardware detail](docs/monitor-node.png)
+
+Clicking an installed module opens its manifest details, compatibility requirements, installations,
+and live MCP tool API. Tool input schemas are available inline from the same dialog.
+
+![Python Compute module MCP API](docs/monitor-module.png)
 
 It binds to **loopback only** and there is deliberately no setting to change that: the log contains your
 hostnames, usernames and full command lines. Events are also appended to `~/.vanta/logs/vanta-<date>.jsonl`
