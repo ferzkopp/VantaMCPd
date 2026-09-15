@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { AuditLog, currentAuditAttribution, withTool, withToolParameters } from "../dist/audit.js";
+import { AuditLog, currentAuditAttribution, setCurrentAuditResult, withTool, withToolParameters } from "../dist/audit.js";
 
 test("attributes redacted tool parameters to downstream audit events", () => {
   const logDir = mkdtempSync(path.join(tmpdir(), "vantamcpd-audit-"));
@@ -103,7 +103,15 @@ test("preserves captured attribution when work completes under another context",
     const attribution = withToolParameters(
       "cluster_call_module_tool",
       { moduleId: "text-tools" },
-      () => currentAuditAttribution(),
+      () => {
+        const captured = currentAuditAttribution();
+        setCurrentAuditResult({
+          complete: false,
+          truncationReasons: ["row-pagination"],
+          responseLimitBytes: 1000,
+        });
+        return captured;
+      },
     );
     const event = withTool("dashboard_module_refresh", () =>
       audit.record({
@@ -116,7 +124,7 @@ test("preserves captured attribution when work completes under another context",
         ok: true,
         code: 0,
         durationMs: 1,
-        bytesOut: 0,
+        bytesOut: 125,
         bytesErr: 0,
       }));
 
@@ -124,6 +132,13 @@ test("preserves captured attribution when work completes under another context",
     assert.equal(event.tool, "cluster_call_module_tool");
     assert.equal(event.origin, "agent");
     assert.match(event.parameters, /"moduleId":"text-tools"/);
+    assert.deepEqual(event.result, {
+      complete: false,
+      truncationReasons: ["row-pagination"],
+      responseBytes: 125,
+      responseLimitBytes: 1000,
+      responseLimitPercent: 12.5,
+    });
   } finally {
     rmSync(logDir, { recursive: true, force: true });
   }

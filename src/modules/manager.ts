@@ -4,6 +4,7 @@ import type { SFTPWrapper } from "ssh2";
 import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { aptGet, aptUpdate } from "../apt.js";
+import { setCurrentAuditResult } from "../audit.js";
 import type { ClusterConfig, ResolvedNode } from "../config.js";
 import { parseKeyValueLines } from "../format.js";
 import { isTerminalJobStatus } from "../jobs/types.js";
@@ -566,6 +567,7 @@ export class ModuleManager {
     const selection = node === undefined ? "automatic" : "explicit";
     await this.waitForModuleMutation(moduleId);
     const selectedNode = node ?? await this.selectInstalledNode(modulePackage, true);
+    let output: unknown;
     const result = await this.withClient(modulePackage, selectedNode, async (client, timeout) => {
       const listed = await client.listTools({}, { timeout, maxTotalTimeout: timeout });
       if (!listed.tools.some((tool) => tool.name === toolName)) {
@@ -576,11 +578,24 @@ export class ModuleManager {
           `Call cluster_list_module_tools for their argument schemas.`,
         );
       }
-      return client.callTool(
+      const called = await client.callTool(
         { name: toolName, arguments: args },
         undefined,
         { timeout, maxTotalTimeout: timeout },
       );
+      output = normalizeModuleOutput(called);
+      const outputRecord = typeof output === "object" && output !== null && !Array.isArray(output)
+        ? output as Record<string, unknown>
+        : undefined;
+      const truncationReasons = Array.isArray(outputRecord?.truncationReasons)
+        ? outputRecord.truncationReasons.filter((reason): reason is string => typeof reason === "string")
+        : undefined;
+      setCurrentAuditResult({
+        ...(typeof outputRecord?.complete === "boolean" ? { complete: outputRecord.complete } : {}),
+        ...(truncationReasons === undefined ? {} : { truncationReasons }),
+        responseLimitBytes: modulePackage.manifest.limits.maxOutputBytes,
+      });
+      return called;
     });
     return {
       ok: result.isError !== true,
@@ -590,7 +605,7 @@ export class ModuleManager {
       toolName,
       deployment: modulePackage.manifest.deployment,
       selection,
-      output: normalizeModuleOutput(result),
+      output: output ?? normalizeModuleOutput(result),
     };
   }
 

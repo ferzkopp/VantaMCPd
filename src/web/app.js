@@ -41,6 +41,16 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
     return e.ok ? "ok" : e.code === null ? "error" : "exit " + e.code;
   }
 
+  function resultOf(e) {
+    if (!e.result) return { text: "-", className: "dim" };
+    const percent = Number.isFinite(e.result.responseLimitPercent)
+      ? e.result.responseLimitPercent.toFixed(e.result.responseLimitPercent < 10 ? 1 : 0) + "%"
+      : "";
+    if (e.result.complete === true) return { text: `complete${percent ? ` ${percent}` : ""}`, className: "ok" };
+    if (e.result.complete === false) return { text: `incomplete${percent ? ` ${percent}` : ""}`, className: "warn" };
+    return { text: percent || "-", className: "dim" };
+  }
+
   function matches(e) {
     if (!pollingToggle.checked && e.origin === "engine") return false;
     if (nodeSel.value && e.node !== nodeSel.value) return false;
@@ -48,7 +58,7 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
     if (statusSel.value && statusOf(e) !== statusSel.value) return false;
     const needle = qEl.value.trim().toLowerCase();
     if (!needle) return true;
-    const hay = [e.node, e.module || "core", e.tool || "", e.parameters || "", e.command || "", e.error || "", e.preview || ""]
+    const hay = [e.node, e.module || "core", e.tool || "", e.parameters || "", e.command || "", e.error || "", e.preview || "", JSON.stringify(e.result || {})]
       .join(" ")
       .toLowerCase();
     return hay.includes(needle);
@@ -65,9 +75,18 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
     const row = document.createElement("div");
     row.className = "row";
     const timestamp = formatUtcTimestamp(e.ts);
+    const result = resultOf(e);
+    const resultDetail = e.result
+      ? `\nresult: ${e.result.complete === true ? "complete" : e.result.complete === false ? "incomplete" : "not reported"}` +
+        (e.result.truncationReasons?.length ? ` (${e.result.truncationReasons.join(", ")})` : "") +
+        (Number.isFinite(e.result.responseBytes) && Number.isFinite(e.result.responseLimitBytes)
+          ? `; ${num.format(e.result.responseBytes)} / ${num.format(e.result.responseLimitBytes)} bytes (${e.result.responseLimitPercent}%)`
+          : "")
+      : "";
     row.title =
       `${timestamp}  ·  ${e.node}  ·  ${e.tool || e.kind}` +
       (e.parameters ? `\nparameters: ${e.parameters}` : "") +
+      resultDetail +
       `\n${e.command || ""}` +
       (e.error ? `\n\nerror: ${e.error}` : "") +
       (e.preview ? `\n\noutput: ${e.preview}` : "");
@@ -77,6 +96,7 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
     row.appendChild(cell(e.tool || e.kind, "dim"));
     row.appendChild(cell(e.origin || "agent", "dim"));
     row.appendChild(cell(statusOf(e), e.ok ? "ok" : "bad"));
+    row.appendChild(cell(result.text, result.className));
     row.appendChild(cell(e.durationMs + "ms" + (e.sudo ? " sudo" : ""), e.sudo ? "warn" : "dim"));
     row.appendChild(cell(e.parameters || "-", "params"));
     row.appendChild(e.error ? cell(e.error, "err") : cell((e.command || "").replace(/\s+/g, " ").trim(), "cmd"));

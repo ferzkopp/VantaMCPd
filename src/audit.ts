@@ -5,6 +5,14 @@ import path from "node:path";
 export type AuditKind = "exec" | "sftp" | "connect";
 export type AuditOrigin = "agent" | "engine";
 
+export interface AuditResultMetadata {
+  complete?: boolean;
+  truncationReasons?: string[];
+  responseBytes?: number;
+  responseLimitBytes?: number;
+  responseLimitPercent?: number;
+}
+
 export interface AuditEvent {
   seq: number;
   ts: string;
@@ -26,6 +34,7 @@ export interface AuditEvent {
   timedOut?: boolean;
   error?: string;
   preview?: string;
+  result?: AuditResultMetadata;
 }
 
 export interface AuditOptions {
@@ -41,6 +50,7 @@ const toolContext = new AsyncLocalStorage<{
   module: string;
   origin: AuditOrigin;
   parameters?: string;
+  result: AuditResultMetadata;
 }>();
 export const CORE_MODULE = "core";
 
@@ -51,7 +61,7 @@ function moduleFromParameters(parameters: unknown): string {
 }
 
 export function withTool<T>(tool: string, fn: () => T): T {
-  return toolContext.run({ tool, module: CORE_MODULE, origin: "engine" }, fn);
+  return toolContext.run({ tool, module: CORE_MODULE, origin: "engine", result: {} }, fn);
 }
 
 export function withToolParameters<T>(tool: string, parameters: unknown, fn: () => T): T {
@@ -60,6 +70,7 @@ export function withToolParameters<T>(tool: string, parameters: unknown, fn: () 
     module: moduleFromParameters(parameters),
     origin: "agent",
     parameters: formatParameters(parameters),
+    result: {},
   }, fn);
 }
 
@@ -67,14 +78,20 @@ export function currentTool(): string | undefined {
   return toolContext.getStore()?.tool;
 }
 
-export function currentAuditAttribution(): Pick<AuditEvent, "module" | "tool" | "origin" | "parameters"> {
+export function currentAuditAttribution(): Pick<AuditEvent, "module" | "tool" | "origin" | "parameters" | "result"> {
   const context = toolContext.getStore();
   return {
     module: context?.module ?? CORE_MODULE,
     tool: context?.tool,
     origin: context?.origin ?? "engine",
     parameters: context?.parameters,
+    result: context?.result,
   };
+}
+
+export function setCurrentAuditResult(result: AuditResultMetadata): void {
+  const current = toolContext.getStore()?.result;
+  if (current) Object.assign(current, result);
 }
 
 const COMMAND_MAX = 2000;
@@ -229,6 +246,18 @@ export class AuditLog {
   ): AuditEvent {
     const now = new Date();
     const context = toolContext.getStore();
+    const inputResult = input.result ?? context?.result;
+    const result = inputResult && Object.keys(inputResult).length > 0
+      ? {
+          ...inputResult,
+          ...(inputResult.responseLimitBytes === undefined
+            ? {}
+            : {
+                responseBytes: input.bytesOut,
+                responseLimitPercent: Math.round(input.bytesOut * 10_000 / inputResult.responseLimitBytes) / 100,
+              }),
+        }
+      : undefined;
     const event: AuditEvent = {
       ...input,
       module: input.module ?? context?.module ?? CORE_MODULE,
@@ -241,6 +270,7 @@ export class AuditLog {
       command: input.command === undefined ? undefined : clip(input.command, COMMAND_MAX),
       preview: this.opts.logOutput && input.preview ? clip(input.preview, PREVIEW_MAX) : undefined,
       error: input.error === undefined ? undefined : clip(input.error, PREVIEW_MAX),
+      result,
     };
 
     this.events.push(event);
@@ -279,7 +309,7 @@ export class AuditLog {
       if (filter.status && statusKey(e) !== filter.status) return false;
       if (filter.includeEngine === false && e.origin === "engine") return false;
       if (needle) {
-        const hay = `${e.node} ${e.origin} ${e.module} ${e.tool ?? ""} ${e.parameters ?? ""} ${e.command ?? ""} ${e.error ?? ""} ${e.preview ?? ""}`.toLowerCase();
+        const hay = `${e.node} ${e.origin} ${e.module} ${e.tool ?? ""} ${e.parameters ?? ""} ${e.command ?? ""} ${e.error ?? ""} ${e.preview ?? ""} ${e.result?.complete ?? ""} ${e.result?.truncationReasons?.join(" ") ?? ""}`.toLowerCase();
         if (!hay.includes(needle)) return false;
       }
       return true;

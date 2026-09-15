@@ -124,11 +124,11 @@ th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: upper
 /* One grid definition shared by the header and the rows, so the columns stay aligned. */
 .row {
   display: grid;
-  grid-template-columns: 190px 90px 110px 190px 64px 62px 80px 220px minmax(240px, 1fr);
+  grid-template-columns: 190px 90px 110px 190px 64px 62px 116px 80px 220px minmax(240px, 1fr);
   gap: 8px;
   padding: 3px 10px;
   align-items: baseline;
-  min-width: 1254px;
+  min-width: 1378px;
 }
 #log .row { border-bottom: 1px solid #1d232c }
 #log .row:hover { background: #1b2230 }

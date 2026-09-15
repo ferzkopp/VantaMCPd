@@ -77,7 +77,7 @@ class BrowserRequestHandler(socketserver.BaseRequestHandler):
                 raise ValueError("browser broker request must be an object")
             action = request.get("action")
             arguments = request.get("arguments", {})
-            if action not in {"ping", "web_retrieve", "web_query", "web_tables"}:
+            if action not in {"ping", "web_retrieve", "web_discover_links", "web_query", "web_tables"}:
                 raise ValueError("unknown browser broker action")
             if not isinstance(arguments, dict):
                 raise ValueError("browser arguments must be an object")

@@ -92,10 +92,10 @@
     <text x="1118" y="142" text-anchor="end" fill="#8b949e" font-family="Consolas, monospace" font-size="12">2 cores · 1 GB</text>
     <rect x="780" y="159" width="80" height="22" rx="4" fill="#172a3a" stroke="#1f6feb"/>
     <text x="820" y="174" text-anchor="middle" fill="#79c0ff" font-family="Consolas, monospace" font-size="10.5">text-tools</text>
-    <rect x="868" y="159" width="124" height="22" rx="4" fill="#163322" stroke="#238636"/>
-    <text x="930" y="174" text-anchor="middle" fill="#7ee787" font-family="Consolas, monospace" font-size="10.5">artifact-storage</text>
-    <rect x="1000" y="159" width="94" height="22" rx="4" fill="#2d2412" stroke="#9e6a03"/>
-    <text x="1047" y="174" text-anchor="middle" fill="#e3b341" font-family="Consolas, monospace" font-size="10.5">job-runner</text>
+    <rect x="880" y="159" width="102" height="22" rx="4" fill="#163322" stroke="#238636"/>
+    <text x="931" y="174" text-anchor="middle" fill="#7ee787" font-family="Consolas, monospace" font-size="10.5">corpus-search</text>
+    <rect x="1002" y="159" width="94" height="22" rx="4" fill="#2d2412" stroke="#9e6a03"/>
+    <text x="1049" y="174" text-anchor="middle" fill="#e3b341" font-family="Consolas, monospace" font-size="10.5">job-runner</text>
 
     <rect x="758" y="202" width="394" height="82" rx="7" fill="url(#panel)" stroke="#30363d"/>
     <circle cx="786" cy="231" r="7" fill="#3fb950"/>
@@ -105,8 +105,8 @@
     <text x="832" y="265" text-anchor="middle" fill="#79c0ff" font-family="Consolas, monospace" font-size="10.5">python-kernel</text>
     <rect x="892" y="250" width="105" height="22" rx="4" fill="#163322" stroke="#238636"/>
     <text x="944.5" y="265" text-anchor="middle" fill="#7ee787" font-family="Consolas, monospace" font-size="10.5">numpy-scipy</text>
-    <rect x="1005" y="250" width="112" height="22" rx="4" fill="#2d2412" stroke="#9e6a03"/>
-    <text x="1061" y="265" text-anchor="middle" fill="#e3b341" font-family="Consolas, monospace" font-size="10.5">browserless</text>
+    <rect x="1005" y="250" width="124" height="22" rx="4" fill="#2d2412" stroke="#9e6a03"/>
+    <text x="1067" y="265" text-anchor="middle" fill="#e3b341" font-family="Consolas, monospace" font-size="10.5">browser-retrieval</text>
 
     <rect x="758" y="293" width="394" height="82" rx="7" fill="url(#panel)" stroke="#30363d"/>
     <circle cx="786" cy="321" r="7" fill="#d29922"/>

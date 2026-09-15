@@ -2,11 +2,12 @@
   "schemaVersion": 1,
   "id": "browser-retrieval",
   "name": "Browser Retrieval",
-  "version": "0.2.2",
+  "version": "0.5.1",
   "description": "Retrieve node-reachable JavaScript-rendered webpages as bounded, untrusted text and structured data.",
   "capabilities": [
     "read JavaScript-rendered webpages as Markdown or plain text",
     "inspect headings and links on rendered webpages",
+    "discover repeated link patterns and candidate CSS selectors",
     "extract selected fields from rendered webpage elements",
     "extract structured tables from rendered webpages"
   ],
