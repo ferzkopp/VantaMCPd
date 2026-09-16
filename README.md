@@ -42,14 +42,14 @@ routes its tools according to the module's deployment policy.
 | Module | Purpose | Deployment | Requirements | Guide |
 | --- | --- | --- | --- | --- |
 | **Core** (`core`, built in) | Cluster inventory, health, packages, services, files, storage, jobs, and module lifecycle | Runs on the Vanta host; fans out over SSH | Node.js 20.11+, OpenSSH client, and configured Debian/Armbian nodes | [Built-in tools](#tools) |
-| **Artifact Storage** (`artifact-storage`, v0.1.1) | Immutable shared files with chunked transfer, SHA-256 integrity, quotas, and expiration | Singleton service on the storage node; NFS data plane | Debian/Ubuntu; configured storage and NFS | [Artifact Storage](modules/artifact-storage/ArtifactStorage.md) |
-| **Text Tools** (`text-tools`, v0.5.0) | 113 bounded text, data, date/time, document, security, and developer operations across twelve category tools | Replicated; on demand; round-robin routing | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 40 MB disk | [Text Tools](modules/text-tools/TextTools.md) |
-| **Scientific Corpus Search** (`corpus-search`, v0.4.1) | Provenance-aware arXiv metadata search using SQLite FTS5/BM25, with phrase, exclusion, and field query syntax | Singleton; on demand; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 10 GiB free node storage | [Scientific Corpus Search](modules/corpus-search/CorpusSearch.md) |
-| **Browser Retrieval** (`browser-retrieval`, v0.2.2) | JavaScript-rendered page retrieval, selector queries, and table extraction across node-reachable HTTP(S) sites | Replicated; isolated service broker; stateless calls | Debian/Ubuntu `amd64`; 2 cores; 3 GiB RAM; 2 GiB root disk; Chromium | [Browser Retrieval](modules/browser-retrieval/BrowserRetrieval.md) |
-| **Python Compute** (`python-compute`, v0.2.2) | Sandboxed Python execution with values, charts, and optional shared artifact inputs and outputs | Replicated; isolated service broker; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 2 cores; 900 MB RAM; 2.5 GB root disk; bubblewrap | [Python Compute](modules/python-compute/PythonCompute.md) |
+| **Artifact Storage** (`artifact-storage`) | Immutable shared files with chunked transfer, SHA-256 integrity, quotas, and expiration | Singleton service on the storage node; NFS data plane | Debian/Ubuntu; configured storage and NFS | [Artifact Storage](modules/artifact-storage/ArtifactStorage.md) |
+| **Text Tools** (`text-tools`) | 113 bounded text, data, date/time, document, security, and developer operations across twelve category tools | Replicated; on demand; round-robin routing | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 40 MB disk | [Text Tools](modules/text-tools/TextTools.md) |
+| **Scientific Corpus Search** (`corpus-search`) | Provenance-aware arXiv metadata search using SQLite FTS5/BM25, with phrase, exclusion, and field query syntax | Singleton; on demand; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 10 GiB free node storage | [Scientific Corpus Search](modules/corpus-search/CorpusSearch.md) |
+| **Browser Retrieval** (`browser-retrieval`) | JavaScript-rendered page retrieval, selector queries, and table extraction across node-reachable HTTP(S) sites | Replicated; isolated service broker; stateless calls | Debian/Ubuntu `amd64`; 2 cores; 3 GiB RAM; 2 GiB root disk; Chromium | [Browser Retrieval](modules/browser-retrieval/BrowserRetrieval.md) |
+| **Python Compute** (`python-compute`) | Sandboxed Python execution with values, charts, and optional shared artifact inputs and outputs | Replicated; isolated service broker; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 2 cores; 900 MB RAM; 2.5 GB root disk; bubblewrap | [Python Compute](modules/python-compute/PythonCompute.md) |
 
-Use `cluster_list_modules` to see install options, compatibility, deployment policies, and live
-installation state. See [Node modules](docs/Modules.md) for architecture and lifecycle details.
+Use `cluster_list_modules` to see packaged versions, install options, compatibility, deployment
+policies, and live installation state. See [Node modules](docs/Modules.md) for architecture and lifecycle details.
 
 ## Quickstart
 

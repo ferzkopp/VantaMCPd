@@ -528,7 +528,8 @@ Nothing secret belongs in the inventory either — it only holds hosts, users an
     "maxConcurrency": 4,
     "strictHostKeyChecking": true,
     "autoDiscoverHardware": true, // probe + record CPU/memory/disk/OS for unknown nodes on startup
-    "nfsNetwork": "10.0.0.0/24"   // default CIDR for NFS exports when not set per-node
+    "autoUpdateModules": true,    // upgrade outdated installed modules on startup
+    "nfsNetwork": "10.0.0.0/24"   // CIDR for NFS exports when not set per-node (built-in: 192.168.0.0/16)
   },
   "security": {
     "allowArbitraryCommands": true,

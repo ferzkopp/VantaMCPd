@@ -6,9 +6,9 @@ Python Compute lets an MCP agent run real Python on a cluster node. It provides 
 package set and a sandboxed interpreter, so an agent can inspect what the node can do, submit code, and
 receive values, printed output, tables, and rendered charts.
 
-![Python Compute running a NumPy and matplotlib workload on an ARMv7 node](python-compute-sample.png)
+![Python Compute graph and clustering analysis alongside the VantaMCPd monitor](python-compute-sample.png)
 
-*A submitted NumPy and matplotlib workload returning a value and a rendered PNG from a cluster node.*
+*A graph and clustering analysis automatically routed to `python-compute`, with the cluster interaction visible in the live monitor.*
 
 Each call starts a fresh interpreter with no network access, an empty working directory, and no state
 from earlier calls. The module is designed for trusted agent-authored code with defense in depth; it is

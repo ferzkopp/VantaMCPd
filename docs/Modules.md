@@ -39,13 +39,13 @@ reloads the local catalog.
 
 ### Implemented Modules
 
-| Module | Package version | Requirements | Included tools | Guide |
-| --- | --- | --- | --- | --- |
-| Artifact Storage (`artifact-storage`) | `0.1.1` | Debian/Ubuntu, configured storage node and NFS, Python 3, systemd | Chunked upload, ranged fetch, list, retention update, and confirmed deletion | [Artifact Storage](../modules/artifact-storage/ArtifactStorage.md) |
-| Text Tools (`text-tools`) | `0.5.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | 113 bounded operations across twelve category tools | [Text Tools](../modules/text-tools/TextTools.md) |
-| Scientific Corpus Search (`corpus-search`) | `0.4.1` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 10 GiB free, Python 3, SQLite 3 | Phrase/exclusion/field search, exact record lookup, category resolution, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
-| Browser Retrieval (`browser-retrieval`) | `0.2.2` | Debian/Ubuntu `amd64`, 2 CPU cores, 3 GiB RAM, 2 GiB root disk, Chromium, systemd | Rendered page retrieval, selector queries, and table extraction | [Browser Retrieval](../modules/browser-retrieval/BrowserRetrieval.md) |
-| Python Compute (`python-compute`) | `0.2.2` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, 2 CPU cores, 900 MB RAM, 2.5 GB root disk, Python 3, bubblewrap, systemd | Environment discovery and sandboxed Python execution with inline or shared artifacts | [Python Compute](../modules/python-compute/PythonCompute.md) |
+| Module | Requirements | Included tools | Guide |
+| --- | --- | --- | --- |
+| Artifact Storage (`artifact-storage`) | Debian/Ubuntu, configured storage node and NFS, Python 3, systemd | Chunked upload, ranged fetch, list, retention update, and confirmed deletion | [Artifact Storage](../modules/artifact-storage/ArtifactStorage.md) |
+| Text Tools (`text-tools`) | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | 113 bounded operations across twelve category tools | [Text Tools](../modules/text-tools/TextTools.md) |
+| Scientific Corpus Search (`corpus-search`) | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 10 GiB free, Python 3, SQLite 3 | Phrase/exclusion/field search, exact record lookup, category resolution, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
+| Browser Retrieval (`browser-retrieval`) | Debian/Ubuntu `amd64`, 2 CPU cores, 3 GiB RAM, 2 GiB root disk, Chromium, systemd | Rendered page retrieval, selector queries, and table extraction | [Browser Retrieval](../modules/browser-retrieval/BrowserRetrieval.md) |
+| Python Compute (`python-compute`) | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, 2 CPU cores, 900 MB RAM, 2.5 GB root disk, Python 3, bubblewrap, systemd | Environment discovery and sandboxed Python execution with inline or shared artifacts | [Python Compute](../modules/python-compute/PythonCompute.md) |
 
 ### Activate a Module
 
