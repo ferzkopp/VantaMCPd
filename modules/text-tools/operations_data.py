@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import string
+import tempfile
 import tomllib
 import urllib.parse
 import uuid as uuid_module
@@ -21,6 +22,8 @@ import xml.etree.ElementTree as element_tree
 import zlib
 from collections import Counter
 from typing import Any
+
+import artifact_io
 
 from operation_common import (
     MAX_RESULTS,
@@ -164,6 +167,83 @@ def csv_normalize(arguments: dict[str, Any]) -> dict[str, Any]:
     # Short rows are padded so every record has the same width as the widest one.
     writer.writerows(row + [""] * (width - len(row)) for row in rows)
     return {"text": output.getvalue(), "inputDelimiter": delimiter, "rows": len(rows), "columns": width}
+
+
+MAX_CSV_ARTIFACT_BYTES = 32 * 1024 * 1024
+MAX_CSV_ARTIFACT_ROWS = 1_000_000
+
+
+def _artifact_csv_settings(arguments: dict[str, Any]) -> tuple[str, str | None, int, int, int]:
+    artifact_id = optional_string(arguments, "artifactId", "", 32)
+    delimiter = arguments.get("delimiter")
+    if delimiter is not None and (not isinstance(delimiter, str) or len(delimiter) != 1):
+        raise ValueError("delimiter must be one character")
+    max_rows = bounded_int(arguments, "maxRows", 100_000, 1, MAX_CSV_ARTIFACT_ROWS)
+    output_budget = bounded_int(arguments, "outputBudgetBytes", MAX_CSV_ARTIFACT_BYTES, 1, MAX_CSV_ARTIFACT_BYTES)
+    retention_days = bounded_int(arguments, "retentionDays", 7, 1, 90)
+    return artifact_id, delimiter, max_rows, output_budget, retention_days
+
+
+def csv_normalize_artifact(arguments: dict[str, Any]) -> dict[str, Any]:
+    artifact_id, delimiter, max_rows, output_budget, retention_days = _artifact_csv_settings(arguments)
+    store_root = artifact_io.root()
+    source, _metadata = artifact_io.verified_source(store_root, artifact_id, MAX_CSV_ARTIFACT_BYTES)
+    with open(source, "r", encoding="utf-8", errors="strict", newline="") as handle:
+        sample = handle.read(8192)
+        delimiter = delimiter or sniff_delimiter(sample)
+        handle.seek(0)
+        reader = csv.reader(handle, delimiter=delimiter)
+        rows = 0
+        width = 0
+        for row in reader:
+            rows += 1
+            if rows > max_rows:
+                raise ValueError(f"CSV exceeds maxRows={max_rows}")
+            width = max(width, len(row))
+            if width > MAX_TABLE_COLUMNS:
+                raise ValueError(f"table exceeds {MAX_TABLE_COLUMNS} columns")
+    with tempfile.TemporaryDirectory() as directory:
+        output_path = os.path.join(directory, "normalized.csv")
+        with open(source, "r", encoding="utf-8", errors="strict", newline="") as reader_handle, open(output_path, "w", encoding="utf-8", newline="") as writer_handle:
+            reader = csv.reader(reader_handle, delimiter=delimiter)
+            writer = csv.writer(writer_handle, lineterminator="\n")
+            for row in reader:
+                writer.writerow(row + [""] * (width - len(row)))
+                if writer_handle.tell() > output_budget:
+                    raise ValueError("normalized CSV exceeds outputBudgetBytes")
+        artifact = artifact_io.publish_file(store_root, output_path, "normalized.csv", "text/csv", output_budget, retention_days)
+    return {"artifact": artifact, "sourceArtifactId": artifact_id, "inputDelimiter": delimiter, "rows": rows, "columns": width}
+
+
+def csv_to_json_artifact(arguments: dict[str, Any]) -> dict[str, Any]:
+    artifact_id, delimiter, max_rows, output_budget, retention_days = _artifact_csv_settings(arguments)
+    delimiter = delimiter or ","
+    store_root = artifact_io.root()
+    source, _metadata = artifact_io.verified_source(store_root, artifact_id, MAX_CSV_ARTIFACT_BYTES)
+    with tempfile.TemporaryDirectory() as directory:
+        output_path = os.path.join(directory, "converted.json")
+        rows = 0
+        with open(source, "r", encoding="utf-8", errors="strict", newline="") as reader_handle, open(output_path, "w", encoding="utf-8", newline="") as writer_handle:
+            reader = csv.DictReader(reader_handle, delimiter=delimiter)
+            if not reader.fieldnames:
+                raise ValueError("CSV requires a header row")
+            if len(reader.fieldnames) > MAX_TABLE_COLUMNS:
+                raise ValueError(f"table exceeds {MAX_TABLE_COLUMNS} columns")
+            writer_handle.write("[")
+            for row in reader:
+                rows += 1
+                if rows > max_rows:
+                    raise ValueError(f"CSV exceeds maxRows={max_rows}")
+                if None in row:
+                    raise ValueError("CSV row has more fields than the header")
+                if rows > 1:
+                    writer_handle.write(",")
+                json.dump({key: value or "" for key, value in row.items()}, writer_handle, ensure_ascii=False, separators=(",", ":"))
+                if writer_handle.tell() > output_budget:
+                    raise ValueError("converted JSON exceeds outputBudgetBytes")
+            writer_handle.write("]\n")
+        artifact = artifact_io.publish_file(store_root, output_path, "converted.json", "application/json", output_budget, retention_days)
+    return {"artifact": artifact, "sourceArtifactId": artifact_id, "rows": rows, "columns": reader.fieldnames}
 
 
 KEY_VALUE_FIELD = re.compile(r"(?:^|\s)([A-Za-z_][A-Za-z0-9_.-]*)\s*[:=]\s*(\"[^\"]*\"|'[^']*'|\S+)")
@@ -916,6 +996,8 @@ DATA_OPERATIONS = {
     "json_format": Operation("Parse and format or compact JSON.", text_properties(indent=typed("integer", minimum=0, maximum=8), compact=typed("boolean"), sortKeys=typed("boolean")), ("text",), json_format),
     "csv_normalize": Operation("Normalize delimiter-separated text to RFC-style comma-separated CSV.", text_properties(delimiter=typed("string", minLength=1, maxLength=1)), ("text",), csv_normalize),
     "csv_to_json": Operation("Convert headered CSV to an array of objects.", text_properties(delimiter=typed("string", minLength=1, maxLength=1)), ("text",), csv_to_json),
+    "csv_normalize_artifact": Operation("Normalize a shared CSV artifact and publish the result as a new artifact.", {"artifactId": typed("string", pattern="^[0-9a-f]{32}$"), "delimiter": typed("string", minLength=1, maxLength=1), "maxRows": typed("integer", minimum=1, maximum=MAX_CSV_ARTIFACT_ROWS), "outputBudgetBytes": typed("integer", minimum=1, maximum=MAX_CSV_ARTIFACT_BYTES), "retentionDays": typed("integer", minimum=1, maximum=90)}, ("artifactId",), csv_normalize_artifact),
+    "csv_to_json_artifact": Operation("Convert a shared CSV artifact to a new streamed JSON artifact.", {"artifactId": typed("string", pattern="^[0-9a-f]{32}$"), "delimiter": typed("string", minLength=1, maxLength=1), "maxRows": typed("integer", minimum=1, maximum=MAX_CSV_ARTIFACT_ROWS), "outputBudgetBytes": typed("integer", minimum=1, maximum=MAX_CSV_ARTIFACT_BYTES), "retentionDays": typed("integer", minimum=1, maximum=90)}, ("artifactId",), csv_to_json_artifact),
     "json_to_csv": Operation("Convert an array of flat objects to CSV.", text_properties(delimiter=typed("string", minLength=1, maxLength=1)), ("text",), json_to_csv),
     "kv_to_json": Operation("Parse key=value and key:value fields from bounded log lines.", text_properties(maxResults=typed("integer", minimum=1, maximum=MAX_RESULTS)), ("text",), kv_to_json),
     "html_to_json": Operation("Extract visible text, headings, and links from caller-provided HTML.", text_properties(maxResults=typed("integer", minimum=1, maximum=MAX_RESULTS)), ("text",), html_to_json),

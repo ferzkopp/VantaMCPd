@@ -25,6 +25,11 @@ const StorageSchema = z.object({
   nfs: NfsSchema.default({}),
 });
 
+const ArtifactsSchema = z.object({
+  enabled: z.boolean().default(false),
+  storageNode: z.string().min(1).optional(),
+}).strict();
+
 // Everything below is discovered on the node and written back into the inventory; every field is
 // optional so a hand-written or half-populated block still loads.
 const DiskRoleSchema = z.enum(["system", "swap", "storage", "data", "unassigned"]);
@@ -202,6 +207,7 @@ const ConfigSchema = z.object({
   security: SecuritySchema.default({}),
   monitoring: MonitoringSchema.default({}),
   jobs: JobsSchema.default({}),
+  artifacts: ArtifactsSchema.default({}),
   modules: ModuleDefaultsSchema,
   nodes: z.array(NodeSchema).min(1),
 });
@@ -211,6 +217,7 @@ export type StorageConfig = z.infer<typeof StorageSchema>;
 export type SecurityConfig = z.infer<typeof SecuritySchema>;
 export type MonitoringConfig = z.infer<typeof MonitoringSchema>;
 export type JobsConfig = z.infer<typeof JobsSchema>;
+export type ArtifactsConfig = z.infer<typeof ArtifactsSchema>;
 export type ModuleDefaultsConfig = z.infer<typeof ModuleDefaultsSchema>;
 export type NodeHardware = z.infer<typeof HardwareSchema>;
 export type AcceleratorInfo = z.infer<typeof AcceleratorSchema>;
@@ -242,6 +249,7 @@ export interface ClusterConfig {
   security: SecurityConfig;
   monitoring: MonitoringConfig;
   jobs: JobsConfig;
+  artifacts: ArtifactsConfig;
   modules: ModuleDefaultsConfig;
   maxConcurrency: number;
   autoDiscoverHardware: boolean;
@@ -377,6 +385,21 @@ export function loadConfig(explicitPath?: string): ClusterConfig {
     }
   }
 
+  if (raw.artifacts.enabled) {
+    const storageNodes = nodes.filter((node) => node.storage);
+    if (raw.artifacts.storageNode) {
+      const selected = nodes.find((node) => node.name === raw.artifacts.storageNode);
+      if (!selected) throw new Error(`Artifact storage node ${raw.artifacts.storageNode} is not configured.`);
+      if (!selected.storage) throw new Error(`Artifact storage node ${selected.name} has no storage block.`);
+      if (!selected.storage.nfs.enabled) throw new Error(`Artifact storage node ${selected.name} must enable NFS.`);
+    } else if (storageNodes.length !== 1) {
+      throw new Error("Artifact storage requires artifacts.storageNode when the cluster does not have exactly one storage node.");
+    } else {
+      const selected = storageNodes[0]!;
+      if (!selected.storage?.nfs.enabled) throw new Error(`Artifact storage node ${selected.name} must enable NFS.`);
+    }
+  }
+
   const knownHostsPath = path.resolve(
     expandHome(process.env.VANTA_KNOWN_HOSTS ?? path.join(homedir(), ".vanta", "known_hosts.json")),
   );
@@ -386,6 +409,7 @@ export function loadConfig(explicitPath?: string): ClusterConfig {
     security: raw.security,
     monitoring: { ...raw.monitoring, logDir: path.resolve(expandHome(raw.monitoring.logDir)) },
     jobs: raw.jobs,
+    artifacts: raw.artifacts,
     modules: raw.modules,
     maxConcurrency: d.maxConcurrency,
     autoDiscoverHardware: d.autoDiscoverHardware,

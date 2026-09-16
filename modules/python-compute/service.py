@@ -56,7 +56,8 @@ HELPERS = [
 
 logging.basicConfig(level=logging.INFO, format="python-compute %(levelname)s %(message)s")
 LOGGER = logging.getLogger("python-compute")
-SANDBOX = Sandbox(INSTALL_DIR, STATE_DIR, LIMITS["defaultMemoryMb"])
+ARTIFACT_ROOT = os.environ.get("VANTA_ARTIFACT_ROOT")
+SANDBOX = Sandbox(INSTALL_DIR, STATE_DIR, LIMITS["defaultMemoryMb"], ARTIFACT_ROOT)
 
 
 def _receive_exact(connection: socket.socket, size: int) -> bytes:
@@ -107,6 +108,7 @@ def _limits() -> dict[str, Any]:
         "files": {"maximum": schemas.MAX_FILES, "totalCharacters": schemas.MAX_FILE_TOTAL_CHARACTERS},
         "stdoutBytes": {"default": schemas.DEFAULT_STDOUT_BYTES, "maximum": schemas.MAX_STDOUT_BYTES},
         "artifacts": {"maximum": schemas.MAX_ARTIFACTS, "bytesEach": schemas.MAX_ARTIFACT_BYTES, "bytesTotal": schemas.MAX_ARTIFACT_TOTAL_BYTES},
+        "sharedArtifacts": {"available": bool(ARTIFACT_ROOT), "inputsBytes": schemas.MAX_ARTIFACT_INPUT_BYTES, "storedBytesEach": schemas.MAX_STORED_ARTIFACT_BYTES, "storedBytesTotal": schemas.MAX_STORED_ARTIFACT_TOTAL_BYTES},
         "responseBytes": MAX_RESPONSE_BYTES,
         "callsPerMinute": LIMITS["callsPerMinute"],
         "concurrentCalls": LIMITS["concurrentCalls"],

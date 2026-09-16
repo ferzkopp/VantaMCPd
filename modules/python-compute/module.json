@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "python-compute",
   "name": "Python Compute",
-  "version": "0.1.5",
+  "version": "0.2.2",
   "description": "Run bounded Python 3 code in a sandboxed process with a curated scientific package set.",
   "capabilities": [
     "calculate, solve equations and simulate instead of estimating an answer",
@@ -10,6 +10,7 @@
     "do exact, symbolic or arbitrary-precision math with SymPy",
     "analyze CSV or JSON datasets: aggregate, pivot, join and summarize",
     "plot data as PNG chart images and return tables as CSV",
+    "read shared artifacts and publish large compute outputs without base64",
     "analyze graphs and networks: paths, centrality and connectivity",
     "resize, convert and inspect images",
     "run supplied Python code and return values, output and errors",
@@ -31,6 +32,7 @@
     "uninstall": "uninstall.sh",
     "execution": { "mode": "job", "timeoutMs": 5400000 }
   },
+  "artifactAccess": { "read": true, "write": true },
   "installOptions": {
     "bundle": {
       "type": "string",

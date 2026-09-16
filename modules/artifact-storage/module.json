@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 2,
+  "id": "artifact-storage",
+  "name": "Artifact Storage",
+  "version": "0.1.1",
+  "description": "Store immutable, integrity-checked artifacts on shared cluster storage with quotas and retention.",
+  "capabilities": [
+    "upload files in bounded chunks for later cluster processing",
+    "inspect, list, download and delete shared compute artifacts",
+    "extend artifact retention within configured limits"
+  ],
+  "entrypoint": ["python3", "server.py"],
+  "compatibility": {
+    "os": ["debian", "ubuntu"],
+    "architectures": ["armhf", "arm64", "amd64"],
+    "minCores": 1,
+    "minRamMb": 256,
+    "minDiskMb": 40,
+    "requiredCommands": ["bash", "python3", "systemctl"],
+    "accelerators": []
+  },
+  "packages": { "apt": ["python3"] },
+  "lifecycle": {
+    "install": "install.sh",
+    "uninstall": "uninstall.sh",
+    "execution": { "mode": "job", "timeoutMs": 600000 }
+  },
+  "persistentData": {
+    "storage": "node",
+    "relativePath": "vantamcpd/artifacts",
+    "minFreeMb": 1024,
+    "retainOnUninstall": true
+  },
+  "installOptions": {
+    "totalQuotaMb": {
+      "type": "integer",
+      "description": "Maximum bytes reserved by committed and active uploads, in MiB.",
+      "minimum": 256,
+      "maximum": 1048576,
+      "default": 10240
+    },
+    "producerQuotaMb": {
+      "type": "integer",
+      "description": "Maximum bytes reserved by one artifact producer, in MiB.",
+      "minimum": 64,
+      "maximum": 1048576,
+      "default": 2048
+    },
+    "maxArtifactMb": {
+      "type": "integer",
+      "description": "Maximum declared size of one uploaded artifact, in MiB.",
+      "minimum": 1,
+      "maximum": 10240,
+      "default": 512
+    },
+    "retentionDays": {
+      "type": "integer",
+      "description": "Default lifetime of a committed artifact.",
+      "minimum": 1,
+      "maximum": 3650,
+      "default": 7
+    },
+    "maxRetentionDays": {
+      "type": "integer",
+      "description": "Longest lifetime a caller may request.",
+      "minimum": 1,
+      "maximum": 3650,
+      "default": 90
+    },
+    "gcIntervalMinutes": {
+      "type": "integer",
+      "description": "Interval between expired artifact and abandoned upload cleanup passes.",
+      "minimum": 1,
+      "maximum": 1440,
+      "default": 15
+    },
+    "freeReserveMb": {
+      "type": "integer",
+      "description": "Filesystem free space kept unavailable to artifact reservations, in MiB.",
+      "minimum": 64,
+      "maximum": 1048576,
+      "default": 512
+    }
+  },
+  "deployment": { "mode": "singleton" },
+  "runtime": {
+    "mode": "service",
+    "systemdUnit": "artifact-storage.service"
+  },
+  "limits": {
+    "startupMs": 10000,
+    "callMs": 120000,
+    "maxInputBytes": 800000,
+    "maxOutputBytes": 800000
+  }
+}

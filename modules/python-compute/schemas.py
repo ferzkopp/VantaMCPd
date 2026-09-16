@@ -25,6 +25,10 @@ DEFAULT_STDOUT_BYTES = 65_536
 MAX_ARTIFACTS = 8
 MAX_ARTIFACT_BYTES = 1_000_000
 MAX_ARTIFACT_TOTAL_BYTES = 1_500_000
+MAX_STORED_ARTIFACT_BYTES = 32 * 1024 * 1024
+MAX_STORED_ARTIFACT_TOTAL_BYTES = 64 * 1024 * 1024
+MAX_ARTIFACT_INPUTS = 8
+MAX_ARTIFACT_INPUT_BYTES = 64 * 1024 * 1024
 MAX_IMPORTS = 20
 
 
@@ -61,7 +65,7 @@ IMPORT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*){0
 
 RUN_RESULT_NOTE = (
     "Returns exitReason (completed, error, timeout, memory or killed), stdout, stderr, the JSON-safe "
-    "result value, a bounded traceback, and base64 artifacts."
+    "result value, a bounded traceback, and either base64 or stored artifacts."
 )
 
 TOOLS: dict[str, dict[str, Any]] = {
@@ -123,6 +127,23 @@ TOOLS: dict[str, dict[str, Any]] = {
                         "additionalProperties": False,
                     },
                 },
+                "artifactInputs": {
+                    "type": "array",
+                    "maxItems": MAX_ARTIFACT_INPUTS,
+                    "description": "Shared artifacts verified and mounted read-only under /inputs before execution.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "artifactId": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+                            "name": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": FILE_NAME.pattern},
+                        },
+                        "required": ["artifactId", "name"],
+                        "additionalProperties": False,
+                    },
+                },
+                "artifactMode": {"type": "string", "enum": ["inline", "store"], "default": "inline", "description": "Return emitted files inline as base64 or commit them to shared artifact storage."},
+                "artifactBudgetBytes": {"type": "integer", "minimum": 1, "maximum": MAX_STORED_ARTIFACT_TOTAL_BYTES, "description": "Maximum total bytes reserved before a stored-artifact run."},
+                "artifactRetentionDays": {"type": "integer", "minimum": 1, "maximum": 90, "default": 7},
                 "timeoutMs": {"type": "integer", "minimum": MIN_TIMEOUT_MS, "maximum": MAX_TIMEOUT_MS, "description": "Wall-clock limit for the submitted code. The node may cap this lower; python_env describe reports the value in force."},
                 "memoryMb": {"type": "integer", "minimum": MIN_MEMORY_MB, "maximum": MAX_MEMORY_MB, "description": "Address-space limit for the sandboxed process. Defaults and ceilings are sized from the node's memory; python_env describe reports them."},
                 "artifacts": {"type": "boolean", "default": True, "description": "Return emitted files and captured figures. Set false to keep responses small."},
@@ -189,7 +210,7 @@ def validate_env(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_run(arguments: dict[str, Any], limits: dict[str, int]) -> dict[str, Any]:
-    _reject_unknown(arguments, {"code", "inputs", "files", "timeoutMs", "memoryMb", "artifacts", "maxStdoutBytes"})
+    _reject_unknown(arguments, {"code", "inputs", "files", "artifactInputs", "artifactMode", "artifactBudgetBytes", "artifactRetentionDays", "timeoutMs", "memoryMb", "artifacts", "maxStdoutBytes"})
     code = arguments.get("code")
     if not isinstance(code, str) or not code.strip():
         raise ValueError("code must be a non-empty string")
@@ -233,18 +254,44 @@ def validate_run(arguments: dict[str, Any], limits: dict[str, int]) -> dict[str,
         seen.add(name)
         validated_files.append({"name": name, "text": text})
 
+    artifact_inputs = arguments.get("artifactInputs", [])
+    if not isinstance(artifact_inputs, list) or len(artifact_inputs) > MAX_ARTIFACT_INPUTS:
+        raise ValueError(f"artifactInputs accepts at most {MAX_ARTIFACT_INPUTS} entries")
+    validated_artifact_inputs = []
+    for entry in artifact_inputs:
+        if not isinstance(entry, dict):
+            raise ValueError("each artifact input must be an object")
+        _reject_unknown(entry, {"artifactId", "name"})
+        artifact_id, name = entry.get("artifactId"), entry.get("name")
+        if not isinstance(artifact_id, str) or not re.fullmatch(r"[0-9a-f]{32}", artifact_id):
+            raise ValueError("artifactId is invalid")
+        if not isinstance(name, str) or not FILE_NAME.match(name) or name in seen:
+            raise ValueError(f"invalid or duplicate artifact input name: {name!r}")
+        seen.add(name)
+        validated_artifact_inputs.append({"artifactId": artifact_id, "name": name})
+
+    artifact_mode = arguments.get("artifactMode", "inline")
+    if artifact_mode not in ("inline", "store"):
+        raise ValueError("artifactMode must be inline or store")
+    artifact_budget = _integer(arguments, "artifactBudgetBytes", 1, MAX_STORED_ARTIFACT_TOTAL_BYTES, MAX_STORED_ARTIFACT_BYTES)
+    artifact_retention = _integer(arguments, "artifactRetentionDays", 1, 90, 7)
+
     memory_mb = _integer(arguments, "memoryMb", MIN_MEMORY_MB, limits["maxMemoryMb"], limits["defaultMemoryMb"])
     return {
         "code": code,
         "inputs": inputs,
         "files": validated_files,
+        "artifactInputs": validated_artifact_inputs,
+        "artifactMode": artifact_mode,
+        "artifactBudgetBytes": artifact_budget,
+        "artifactRetentionDays": artifact_retention,
         "timeoutMs": _integer(arguments, "timeoutMs", MIN_TIMEOUT_MS, limits["maxTimeoutMs"], limits["defaultTimeoutMs"]),
         "memoryMb": memory_mb,
         "artifacts": _boolean(arguments, "artifacts", True),
         "maxStdoutBytes": _integer(arguments, "maxStdoutBytes", MIN_STDOUT_BYTES, MAX_STDOUT_BYTES, DEFAULT_STDOUT_BYTES),
         "maxArtifacts": MAX_ARTIFACTS,
-        "maxArtifactBytes": MAX_ARTIFACT_BYTES,
-        "maxArtifactTotalBytes": MAX_ARTIFACT_TOTAL_BYTES,
+        "maxArtifactBytes": MAX_STORED_ARTIFACT_BYTES if artifact_mode == "store" else MAX_ARTIFACT_BYTES,
+        "maxArtifactTotalBytes": artifact_budget if artifact_mode == "store" else MAX_ARTIFACT_TOTAL_BYTES,
     }
 
 

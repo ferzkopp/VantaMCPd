@@ -17,7 +17,7 @@ There is exactly one way to reach each capability.
 | `text_extract` | `emails`, `urls`, `numbers`, `ip_addresses`, `datetimes`, `code_blocks`, `quoted_text`, `uuids`, `hashes`, `semvers` |
 | `text_analyze` | `statistics`, `readability`, `keyword_frequency`, `similarity`, `ngrams`, `sentence_split`, `token_estimate`, `text_inspect`, `duplicate_lines`, `chunk`, `tfidf` |
 | `text_codec` | `base64`, `url`, `html`, `unicode`, `hex`, `binary`, `jwt_decode` |
-| `data_convert` | `json_format`, `csv_normalize`, `csv_to_json`, `json_to_csv`, `kv_to_json`, `html_to_json`, `jsonl_to_json`, `json_to_jsonl`, `json_flatten`, `json_unflatten`, `json_diff`, `json_merge`, `json_schema_infer`, `env_to_json`, `yaml_to_json`, `json_to_yaml`, `toml_to_json`, `json_to_toml`, `ini_to_json`, `json_to_ini`, `xml_to_json`, `query_to_json`, `json_to_query` |
+| `data_convert` | `json_format`, `csv_normalize`, `csv_to_json`, `csv_normalize_artifact`, `csv_to_json_artifact`, `json_to_csv`, `kv_to_json`, `html_to_json`, `jsonl_to_json`, `json_to_jsonl`, `json_flatten`, `json_unflatten`, `json_diff`, `json_merge`, `json_schema_infer`, `env_to_json`, `yaml_to_json`, `json_to_yaml`, `toml_to_json`, `json_to_toml`, `ini_to_json`, `xml_to_json`, `query_to_json`, `json_to_query` |
 | `text_security` | `digest`, `hmac`, `checksum`, `uuid_validate`, `secret_scan`, `redact`, `password_strength` |
 | `text_generate` | `uuid`, `password`, `lorem`, `passphrase` |
 | `developer_text` | `regex_extract`, `regex_replace`, `diff`, `semver`, `regex_test`, `strip_comments` |
@@ -209,6 +209,8 @@ jwt_decode(text)
 json_format(text, indent?=2[0..8], compact?=false, sortKeys?=false)
 csv_normalize(text, delimiter?=sniffed from ",;\t|")
 csv_to_json(text, delimiter?=",")
+csv_normalize_artifact(artifactId, delimiter?=sniffed, maxRows?=100000, outputBudgetBytes?=33554432, retentionDays?=7)
+csv_to_json_artifact(artifactId, delimiter?=",", maxRows?=100000, outputBudgetBytes?=33554432, retentionDays?=7)
 json_to_csv(text, delimiter?=",")
 kv_to_json(text, maxResults?=100[1..1000])
 html_to_json(text, maxResults?=1000[1..1000])
@@ -241,6 +243,10 @@ returned as an explicit `{tag, attributes, text, children}` tree.
 is its inverse. `json_diff` returns `{path, change, before?, after?}` entries where `change` is `added`,
 `removed`, or `changed`. `json_to_ini` requires a `{section: {key: scalar}}` shape; `json_to_toml` needs
 `python3-tomli-w`; the YAML operations need `python3-yaml`.
+
+The two artifact operations require configured shared artifact storage. They accept only an opaque
+artifact ID, verify the source size and SHA-256, stream up to 32 MiB and 1,000,000 rows, and return a
+new artifact reference rather than embedding the transformed data in the MCP response.
 
 ### `text_security` And `text_generate`
 

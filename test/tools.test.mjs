@@ -3,6 +3,7 @@ import path from "node:path";
 import test from "node:test";
 import { z } from "zod";
 
+import { serverInstructions } from "../dist/instructions.js";
 import { capabilitySummary, loadModuleCatalog } from "../dist/modules/catalog.js";
 import { registerExecTools } from "../dist/tools/exec.js";
 import { registerFileTools } from "../dist/tools/files.js";
@@ -186,6 +187,23 @@ test("module capabilities are advertised on the proxy tools so the agent can rou
   const proxy = tools.get("cluster_call_module_tool").config.description;
   assert.match(proxy, /redact emails, IPs and secrets/);
   assert.match(proxy, /search scientific paper metadata/);
+});
+
+test("agent instructions prefer artifact uploads over SFTP staging", () => {
+  const instructions = serverInstructions("- artifact-storage: upload files");
+  assert.match(instructions, /prefer it for transferring local attachments or files/);
+  assert.match(instructions, /artifact_upload through cluster_call_module_tool/);
+  assert.match(instructions, /issue artifact_upload begin, every append, and commit as direct MCP cluster_call_module_tool calls/);
+  assert.match(instructions, /Do not invoke the module transport through a terminal command, local script, SDK or client, subprocess, wrapper, or proxy/);
+  assert.match(instructions, /Payload size, base64 expansion, or the number of chunks does not justify an alternate transfer path/);
+  assert.match(instructions, /Upload the file's existing bytes as-is using sequential bounded chunks/);
+  assert.match(instructions, /Do not locally compress, convert, summarize, inspect, or otherwise preprocess it/);
+  assert.match(instructions, /Do not use cluster_upload\/SFTP, cluster_run, direct node filesystem paths, or the artifact broker socket/);
+
+  const { tools } = buildContext();
+  const uploadDescription = tools.get("cluster_upload").config.description;
+  assert.match(uploadDescription, /only for intentional node filesystem deployment/);
+  assert.match(uploadDescription, /do not use this tool to stage local files for artifact-aware modules/);
 });
 
 test("registers exactly the advertised tool surface, each with a title, description and schema", () => {

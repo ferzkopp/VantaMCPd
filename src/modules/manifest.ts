@@ -50,6 +50,14 @@ const PersistentDataSchema = z
   })
   .strict();
 
+const ArtifactAccessSchema = z
+  .object({
+    read: z.boolean().default(false),
+    write: z.boolean().default(false),
+  })
+  .strict()
+  .refine((access) => access.read || access.write, "must enable read or write access");
+
 const IntegerInstallOptionSchema = z
   .object({
     type: z.literal("integer"),
@@ -148,6 +156,7 @@ export const ModuleManifestSchema = z
       })
       .strict(),
     persistentData: PersistentDataSchema.optional(),
+    artifactAccess: ArtifactAccessSchema.optional(),
     installOptions: z.record(z.string().regex(INSTALL_OPTION), InstallOptionSchema).default({}),
     deployment: ModuleDeploymentSchema,
     runtime: ModuleRuntimeSchema.default({ mode: "on-demand" }),

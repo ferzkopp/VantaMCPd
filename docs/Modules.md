@@ -41,10 +41,11 @@ reloads the local catalog.
 
 | Module | Package version | Requirements | Included tools | Guide |
 | --- | --- | --- | --- | --- |
-| Text Tools (`text-tools`) | `0.4.1` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | 111 bounded operations across twelve category tools | [Text Tools](../modules/text-tools/TextTools.md) |
+| Artifact Storage (`artifact-storage`) | `0.1.1` | Debian/Ubuntu, configured storage node and NFS, Python 3, systemd | Chunked upload, ranged fetch, list, retention update, and confirmed deletion | [Artifact Storage](../modules/artifact-storage/ArtifactStorage.md) |
+| Text Tools (`text-tools`) | `0.5.0` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, Python 3, 256 MB RAM, 40 MB disk; `ripgrep`, `jq`, `mawk`, `sed` | 113 bounded operations across twelve category tools | [Text Tools](../modules/text-tools/TextTools.md) |
 | Scientific Corpus Search (`corpus-search`) | `0.4.1` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, configured node storage with 10 GiB free, Python 3, SQLite 3 | Phrase/exclusion/field search, exact record lookup, category resolution, and corpus metadata | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
 | Browser Retrieval (`browser-retrieval`) | `0.2.2` | Debian/Ubuntu `amd64`, 2 CPU cores, 3 GiB RAM, 2 GiB root disk, Chromium, systemd | Rendered page retrieval, selector queries, and table extraction | [Browser Retrieval](../modules/browser-retrieval/BrowserRetrieval.md) |
-| Python Compute (`python-compute`) | `0.1.5` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, 2 CPU cores, 900 MB RAM, 2.5 GB root disk, Python 3, bubblewrap, systemd | Environment discovery and sandboxed Python execution with values, tables, and charts | [Python Compute](../modules/python-compute/PythonCompute.md) |
+| Python Compute (`python-compute`) | `0.2.2` | Debian/Ubuntu, `armhf`/`arm64`/`amd64`, 2 CPU cores, 900 MB RAM, 2.5 GB root disk, Python 3, bubblewrap, systemd | Environment discovery and sandboxed Python execution with inline or shared artifacts | [Python Compute](../modules/python-compute/PythonCompute.md) |
 
 ### Activate a Module
 
@@ -278,7 +279,6 @@ Missing or stale required facts produce an `unknown` result and a request to ref
 - Explicit rollback commands or dependency sharing between modules.
 - Opening module service ports on cluster nodes.
 - Browser-based install or uninstall actions.
-- Shared artifact upload/download APIs.
 - Vector search or local embedding generation.
 
 These are future capabilities and are listed in the roadmap.
@@ -457,7 +457,7 @@ reporting, and removal without architecture-specific wheels. Its Python implemen
 standard library, while constrained wrappers reuse distribution packages for `rg`, `jq`, `awk`, and
 `sed`. It accepts caller-provided text through MCP/stdin only.
 
-Its MCP surface is twelve category tools holding 111 operations. Each takes an `operation` discriminator
+Its MCP surface is twelve category tools holding 113 operations. Each takes an `operation` discriminator
 and that operation's own fields, so `tools/list` stays compact while every operation keeps a strict
 schema:
 
@@ -470,7 +470,8 @@ schema:
 | `datetime_text` | Timestamp parsing, reformatting, timezone conversion, intervals, and durations |
 | `command_text` | Constrained stdin-only wrappers for `rg`, `jq`, `awk`, and `sed` |
 
-The module does not accept node paths, fetch URLs, run a shell, or write artifacts. Inputs, patterns,
+The module does not accept node paths, fetch URLs, or run a shell. Two CSV operations accept opaque
+artifact IDs and publish immutable results when shared storage is enabled. Inputs, patterns,
 collections, and result bytes are bounded. Python regex matching/replacement runs in a killable worker;
 external commands have fixed argument shapes and a five-second timeout. See the
 [Text Tools quickstart](../modules/text-tools/TextTools.md#quickstart) for installation, routing, first
@@ -528,6 +529,8 @@ isolation, every limit, the helper API, and the installed modules grouped by cap
 submitted code cannot install packages. `python_run` executes code and returns printed output, a
 JSON-converted value, a bounded traceback, and base64 artifacts. An injected `vanta` helper returns
 values, CSV tables, text, JSON, and PNG images, and open matplotlib figures are captured automatically.
+Calls may instead bind selected shared artifacts read-only at `/inputs` and publish emitted files to the
+shared store without returning their bytes through MCP.
 
 Each call runs under bubblewrap with private user, mount, PID, IPC, UTS, and cgroup namespaces, an empty
 network namespace, a read-only system view, and one writable working directory that is deleted
@@ -549,7 +552,7 @@ recorded inventory and live preflight.
 | Module | Feasibility | Practical first scope or blocker |
 | --- | --- | --- |
 | Regex, parsing, and extraction | High | Python standard library; selected MVP |
-| Artifact storage | High | Local filesystem or an NFS share, with quotas and retention |
+| Artifact storage | Implemented on a storage node | Immutable NFS-backed files with quotas, expiration, chunked agent transfer, and compute integration |
 | Documentation/scientific corpus | Implemented with selectable sampling | SQLite FTS5/BM25 over 1%, 25%, or 100% of matching arXiv snapshot metadata; no embeddings |
 | Image processing | High for basic transforms | Pillow or ImageMagick resize/crop/filter; no neural models |
 | Python execution | Implemented on ARMv7 and AMD64 | Sandboxed stateless execution with discovery, bounded results, and rendered artifacts |
@@ -680,11 +683,18 @@ For a small resource-constrained cluster, a SQLite-backed runner managed by syst
 first implementation than a resident Redis deployment. Queue semantics, recovery, cancellation,
 quotas, and artifact ownership must be specified first.
 
-#### Artifact Storage
+#### Artifact Storage (Implemented Baseline)
 
-Compute and job modules need a shared way to return outputs too large for MCP tool results. Future tools should support put, inspect, list, fetch, and delete with content hashes, MIME types, owner/module attribution, quotas, expiration, and path containment.
+The implemented singleton stores immutable files under the configured storage mount and exposes
+chunked upload, ranged fetch, list, retention update, and confirmed deletion. Metadata records SHA-256,
+MIME type, producer, size, and expiry. Reservations enforce total and per-producer hard quotas before
+writes; periodic cleanup removes expired artifacts and abandoned uploads but never evicts live data.
 
-Candidate backends include the local filesystem, an NFS-backed storage node, [MinIO](https://min.io/), and [IPFS](https://ipfs.tech/). Local/NFS storage is the appropriate first backend; MinIO and IPFS add services and operational cost that are not justified for the lifecycle MVP.
+NFS is the data plane between nodes. Opted-in trusted brokers validate IDs, hashes, regular files, and
+the protocol marker before use. Python Compute copies selected inputs into a read-only `/inputs` bind
+and publishes outputs only after sandbox completion; Text Tools streams large CSV normalization and
+CSV-to-JSON results into new artifacts. Submitted Python never sees the NFS root. ACLs, deduplication,
+replication, backup policy, and alternate MinIO/IPFS backends remain deferred.
 
 ## Implemented Lifecycle
 
@@ -719,7 +729,7 @@ The first release is complete when:
 3. Add signed packages and an authenticated remote registry.
 4. Extend the proven service-module isolation policy to any future module that exposes a network listener.
 5. Extend trusted lifecycle jobs with quotas and additional allowlisted job kinds.
-6. Add shared artifact storage and retention controls.
+6. Add artifact ACLs, backup/replication, and optional alternate storage backends.
 7. Add dashboard lifecycle actions only after authentication, authorization, CSRF, and confirmation UX are designed.
 8. Add corpus adapters beyond the implemented sampled arXiv metadata profiles.
 9. Add precomputed embeddings and vector backends only for compatible node profiles.

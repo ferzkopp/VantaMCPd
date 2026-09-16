@@ -15,6 +15,8 @@ import time
 import uuid
 from typing import Any
 
+import artifact_io
+
 BWRAP = "/usr/bin/bwrap"
 PRLIMIT = "/usr/bin/prlimit"
 PYTHON = "/usr/bin/python3"
@@ -50,7 +52,7 @@ def build_limited_argv(memory_mb: int, timeout_seconds: float) -> list[str]:
     ]
 
 
-def build_bwrap_argv(call_dir: str, runner_path: str, system_paths=SYSTEM_PATHS, extra_read_only=EXTRA_READ_ONLY, exists=os.path.exists, islink=os.path.islink, readlink=os.readlink) -> list[str]:
+def build_bwrap_argv(call_dir: str, runner_path: str, system_paths=SYSTEM_PATHS, extra_read_only=EXTRA_READ_ONLY, exists=os.path.exists, islink=os.path.islink, readlink=os.readlink, has_inputs: bool = False) -> list[str]:
     """Argument vector for one sandboxed interpreter. Injectable probes keep this unit-testable."""
     argv = [BWRAP, "--unshare-all", "--unshare-user", "--unshare-net", "--unshare-pid", "--die-with-parent", "--new-session"]
     for path in system_paths:
@@ -85,16 +87,19 @@ def build_bwrap_argv(call_dir: str, runner_path: str, system_paths=SYSTEM_PATHS,
         "--setenv", "MKL_NUM_THREADS", "1",
         "--setenv", "NUMEXPR_NUM_THREADS", "1",
         "--setenv", "MALLOC_ARENA_MAX", "2",
-        PYTHON, "-I", "-B", "/vanta-runner.py",
     ]
+    if has_inputs:
+        argv += ["--ro-bind", posixpath.join(call_dir, "inputs"), "/inputs"]
+    argv += [PYTHON, "-I", "-B", "/vanta-runner.py"]
     return argv
 
 
 class Sandbox:
-    def __init__(self, install_dir: str, state_dir: str, default_memory_mb: int = 384):
+    def __init__(self, install_dir: str, state_dir: str, default_memory_mb: int = 384, artifact_root: str | None = None):
         self.install_dir = os.path.realpath(install_dir)
         self.state_dir = state_dir
         self.default_memory_mb = default_memory_mb
+        self.artifact_root = artifact_root
         self.calls_dir = os.path.join(state_dir, "calls")
         os.makedirs(self.calls_dir, mode=0o700, exist_ok=True)
         self.isolation: dict[str, Any] = {"level": "unverified", "namespaces": [], "network": "none"}
@@ -145,15 +150,30 @@ class Sandbox:
         call_dir = os.path.join(self.calls_dir, uuid.uuid4().hex)
         workspace = os.path.join(call_dir, "workspace")
         os.makedirs(workspace, mode=0o700)
+        reservation_id = None
         try:
             self._prepare_matplotlib(call_dir)
             for entry in request.get("files", []):
                 with open(os.path.join(workspace, entry["name"]), "w", encoding="utf-8") as handle:
                     handle.write(entry["text"])
+            artifact_inputs = request.get("artifactInputs", [])
+            if artifact_inputs:
+                if not artifact_io.available(self.artifact_root):
+                    raise ValueError("shared artifact storage is unavailable on this node")
+                request["artifactPaths"] = artifact_io.stage_inputs(self.artifact_root, artifact_inputs, os.path.join(call_dir, "inputs"), 64 * 1024 * 1024)
+            if request.get("artifactMode") == "store":
+                if not artifact_io.available(self.artifact_root):
+                    raise ValueError("shared artifact storage is unavailable on this node")
+                reservation_id = artifact_io.reserve(self.artifact_root, "python-compute", request["artifactBudgetBytes"])
             with open(os.path.join(call_dir, "request.json"), "w", encoding="utf-8") as handle:
                 json.dump(request, handle, ensure_ascii=False)
-            return self._execute(call_dir, workspace, request)
+            outcome = self._execute(call_dir, workspace, request)
+            if request.get("artifactMode") == "store":
+                outcome["artifacts"] = artifact_io.publish(self.artifact_root, reservation_id, "python-compute", outcome.pop("artifactFiles", []), workspace, request["artifactRetentionDays"])
+                reservation_id = None
+            return outcome
         finally:
+            artifact_io.release(self.artifact_root, reservation_id)
             shutil.rmtree(call_dir, ignore_errors=True)
 
     def _prepare_matplotlib(self, call_dir: str) -> None:
@@ -166,7 +186,7 @@ class Sandbox:
 
     def _execute(self, call_dir: str, workspace: str, request: dict[str, Any]) -> dict[str, Any]:
         timeout_seconds = request["timeoutMs"] / 1000
-        argv = build_limited_argv(request["memoryMb"], timeout_seconds) + build_bwrap_argv(call_dir, self.runner_path)
+        argv = build_limited_argv(request["memoryMb"], timeout_seconds) + build_bwrap_argv(call_dir, self.runner_path, has_inputs=bool(request.get("artifactInputs")))
         started = time.monotonic()
         killed = False
         process = subprocess.Popen(
@@ -239,7 +259,10 @@ class Sandbox:
             outcome["hasResult"] = bool(result.get("hasResult"))
             outcome["result"] = result.get("result")
             outcome["error"] = result.get("error")
-            outcome["artifacts"] = self._encode_artifacts(result.get("artifacts", []), request, workspace)
+            if request.get("artifactMode") == "store":
+                outcome["artifactFiles"] = result.get("artifacts", [])
+            else:
+                outcome["artifacts"] = self._encode_artifacts(result.get("artifacts", []), request, workspace)
         return outcome
 
     @staticmethod

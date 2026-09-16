@@ -12,6 +12,7 @@ test -f "$VANTA_MODULE_STAGE/operations.py"
 test -f "$VANTA_MODULE_STAGE/operations_text.py"
 test -f "$VANTA_MODULE_STAGE/operations_data.py"
 test -f "$VANTA_MODULE_STAGE/operations_developer.py"
+test -f "$VANTA_MODULE_STAGE/artifact_io.py"
 for command in python3 rg jq awk sed; do
 	command -v "$command" >/dev/null 2>&1
 done

@@ -545,6 +545,10 @@ Nothing secret belongs in the inventory either — it only holds hosts, users an
     "maxLogMb": 64,
     "logOutput": false          // stdout/stderr previews - off by default
   },
+  "artifacts": {
+    "enabled": true,
+    "storageNode": "storage-a" // optional only when exactly one storage node exists
+  },
   "modules": {
     "corpus-search": {
       "installOptions": {
@@ -566,6 +570,12 @@ Per-node keys override the defaults. `role` defaults to `worker`. The role and t
 agree: a role containing `storage` without a block, and a block on a node whose role does not include
 `storage`, are both rejected at load time — the storage tools select their node by that block, so a
 mismatch would silently target the wrong machine.
+
+`artifacts.enabled` lets manifests that declare artifact access receive the shared NFS artifact root.
+The selected node must have a storage block with NFS enabled, and clients must mount that export at the
+same mountpoint. Artifact-specific operations report the store as unavailable until `artifact-storage`
+is installed and its protocol marker is visible. Existing inline module operations remain available.
+NFS access assumes the configured SSH user's numeric UID and primary GID are consistent across nodes.
 
 `modules.<module-id>.installOptions` supplies persistent defaults for that module's manual and automatic
 installs. Values are validated against the module manifest before SSH work, and options passed directly

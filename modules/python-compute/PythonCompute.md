@@ -148,6 +148,10 @@ Runs submitted code and returns its output.
 | `code` | Required | Up to 65,536 characters, executed as `__main__` |
 | `inputs` | `{}` | JSON object up to 64 KiB, bound to `inputs` and `vanta.inputs` |
 | `files` | None | Up to 10 UTF-8 text files (131,072 characters total) written into the working directory |
+| `artifactInputs` | None | Up to 8 shared artifacts, verified and mounted read-only under `/inputs` |
+| `artifactMode` | `inline` | `inline` returns base64; `store` commits emitted files to shared storage |
+| `artifactBudgetBytes` | 32 MiB | Reservation for stored outputs, up to 64 MiB total |
+| `artifactRetentionDays` | `7` | Stored output lifetime, from 1 to 90 days |
 | `timeoutMs` | node-sized | 1000 ms to the node's ceiling, at most 600000 |
 | `memoryMb` | node-sized | 128 MB to the node's ceiling, at most 4096 |
 | `artifacts` | `true` | Return emitted files and captured figures |
@@ -161,7 +165,7 @@ The result contains:
 | `stdout`, `stderr` | Captured output with `stdoutTruncated` and `stderrTruncated` flags |
 | `result`, `hasResult` | The returned value converted to bounded JSON |
 | `error` | `type`, `message`, and a traceback limited to the submitted frames |
-| `artifacts` | Base64 entries with `name`, `kind`, `mimeType`, `bytes`, and `truncated` |
+| `artifacts` | Base64 entries in `inline` mode; immutable IDs, hashes, sizes, MIME types, and expiry in `store` mode |
 | `durationMs`, `totalDurationMs` | Time inside the code, and including sandbox setup |
 | `isolation`, `request`, `responseBytes` | The isolation achieved, the timeout and memory actually applied, and how much of the response budget was used |
 | `limits` | Included only when `exitReason` is not `completed`, so a call rejected by a limit can be resized without a second discovery call |
@@ -300,7 +304,7 @@ call is additionally limited to:
 
 - 10 minutes of wall-clock time at most, and the node's per-call memory ceiling;
 - 32 MB of files written inside the working directory;
-- 8 artifacts, 1 MB each and 1.5 MB in total;
+- 8 inline artifacts, 1 MB each and 1.5 MB total, or stored artifacts up to 32 MiB each and a 64 MiB reserved total;
 - 256 KiB of retained stdout and stderr; and
 - the module's 2 MB MCP response limit.
 

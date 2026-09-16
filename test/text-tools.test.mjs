@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 const moduleDirectory = path.resolve(import.meta.dirname, "..", "modules", "text-tools");
 const pythonCommand = ["python3", "python"].find((command) => spawnSync(command, ["--version"], { encoding: "utf8" }).status === 0);
 
-function runProtocol(calls) {
+function runProtocol(calls, extraEnv = {}) {
   assert.ok(pythonCommand, "Python 3 is required to test text-tools");
   const requests = [
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } } },
@@ -18,7 +20,7 @@ function runProtocol(calls) {
     input: `${requests.map((request) => JSON.stringify(request)).join("\n")}\n`,
     encoding: "utf8",
     timeout: 30_000,
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", ...extraEnv },
   });
   assert.equal(result.status, 0, result.stderr || result.error?.message);
   assert.equal(result.stderr, "");
@@ -30,7 +32,7 @@ const categoryOperations = {
   text_extract: ["emails", "urls", "numbers", "ip_addresses", "datetimes", "code_blocks", "quoted_text", "uuids", "hashes", "semvers"],
   text_analyze: ["statistics", "readability", "keyword_frequency", "similarity", "ngrams", "sentence_split", "token_estimate", "text_inspect", "duplicate_lines", "chunk", "tfidf"],
   text_codec: ["base64", "url", "html", "unicode", "hex", "binary", "jwt_decode"],
-  data_convert: ["json_format", "csv_normalize", "csv_to_json", "json_to_csv", "kv_to_json", "html_to_json", "jsonl_to_json", "json_to_jsonl", "json_flatten", "json_unflatten", "json_diff", "json_merge", "json_schema_infer", "env_to_json", "yaml_to_json", "json_to_yaml", "toml_to_json", "json_to_toml", "ini_to_json", "json_to_ini", "xml_to_json", "query_to_json", "json_to_query"],
+  data_convert: ["json_format", "csv_normalize", "csv_to_json", "csv_normalize_artifact", "csv_to_json_artifact", "json_to_csv", "kv_to_json", "html_to_json", "jsonl_to_json", "json_to_jsonl", "json_flatten", "json_unflatten", "json_diff", "json_merge", "json_schema_infer", "env_to_json", "yaml_to_json", "json_to_yaml", "toml_to_json", "json_to_toml", "ini_to_json", "json_to_ini", "xml_to_json", "query_to_json", "json_to_query"],
   text_security: ["digest", "hmac", "checksum", "uuid_validate", "secret_scan", "redact", "password_strength"],
   text_generate: ["uuid", "password", "lorem", "passphrase"],
   developer_text: ["regex_extract", "regex_replace", "diff", "semver", "regex_test", "strip_comments"],
@@ -158,7 +160,7 @@ const calls = [
 
 test("Text Tools advertises strict category schemas and executes every built-in operation", () => {
   const responses = runProtocol(calls);
-  assert.equal(responses[0].result.serverInfo.version, "0.4.1");
+  assert.equal(responses[0].result.serverInfo.version, "0.5.0");
   const advertised = new Map(responses[1].result.tools.map((tool) => [tool.name, tool]));
   assert.deepEqual([...advertised.keys()], Object.keys(categoryOperations));
   for (const [category, operations] of Object.entries(categoryOperations)) {
@@ -210,4 +212,62 @@ test("category dispatch rejects undeclared fields and jq environment access", ()
   assert.match(responses[2].result.content[0].text, /unknown fields/);
   assert.equal(responses[3].result.isError, true);
   assert.match(responses[3].result.content[0].text, /disabled environment or module feature/);
+});
+
+test("artifact CSV operations stream files larger than the inline MCP limit", () => {
+  assert.ok(pythonCommand, "Python 3 is required to test text-tools");
+  const storeRoot = mkdtempSync(path.join(tmpdir(), "vanta-text-artifacts-"));
+  const artifactModule = path.resolve(moduleDirectory, "..", "artifact-storage");
+  try {
+    const setup = spawnSync(pythonCommand, ["-B", "-c", [
+      "import base64, json, os, sys",
+      "sys.path.insert(0, os.environ['ARTIFACT_MODULE'])",
+      "from store import ArtifactStore",
+      "root = os.environ['TEST_STORE_ROOT']",
+      "store = ArtifactStore(root, 64*1024*1024, 64*1024*1024, 32*1024*1024, 7, 90, 0)",
+      "store.initialize()",
+      "payload = ('name;value\\n' + ''.join(f'row-{i:06d};{i % 10}\\n' for i in range(150000))).encode()",
+      "assert len(payload) > 1024*1024",
+      "upload = store.begin({'name': 'large.csv', 'bytes': len(payload), 'mimeType': 'text/csv', 'producer': 'agent'})",
+      "offset = 0",
+      "while offset < len(payload):",
+      "    chunk = payload[offset:offset + 512*1024]",
+      "    store.append({'uploadId': upload['uploadId'], 'offset': offset, 'data': base64.b64encode(chunk).decode()})",
+      "    offset += len(chunk)",
+      "print(json.dumps(store.commit({'uploadId': upload['uploadId']})))",
+    ].join("\n")], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", TEST_STORE_ROOT: storeRoot, ARTIFACT_MODULE: artifactModule },
+    });
+    assert.equal(setup.status, 0, setup.stderr || setup.error?.message);
+    const source = JSON.parse(setup.stdout);
+    assert.ok(source.bytes > 1024 * 1024);
+
+    const normalizedResponses = runProtocol([{ tool: "data_convert", arguments: {
+      operation: "csv_normalize_artifact",
+      artifactId: source.id,
+      maxRows: 200000,
+      outputBudgetBytes: 8 * 1024 * 1024,
+    } }], { VANTA_ARTIFACT_ROOT: storeRoot });
+    const normalized = normalizedResponses[2];
+    assert.notEqual(normalized.result.isError, true, normalized.result.content?.[0]?.text);
+    assert.equal(normalized.result.structuredContent.rows, 150001);
+    assert.equal(normalized.result.structuredContent.columns, 2);
+    assert.equal(normalized.result.structuredContent.artifact.producer, "text-tools");
+    assert.equal(normalized.result.structuredContent.artifact.mimeType, "text/csv");
+
+    const jsonResponses = runProtocol([{ tool: "data_convert", arguments: {
+      operation: "csv_to_json_artifact",
+      artifactId: normalized.result.structuredContent.artifact.id,
+      maxRows: 200000,
+      outputBudgetBytes: 16 * 1024 * 1024,
+    } }], { VANTA_ARTIFACT_ROOT: storeRoot });
+    const converted = jsonResponses[2];
+    assert.notEqual(converted.result.isError, true, converted.result.content?.[0]?.text);
+    assert.equal(converted.result.structuredContent.rows, 150000);
+    assert.equal(converted.result.structuredContent.artifact.mimeType, "application/json");
+  } finally {
+    rmSync(storeRoot, { recursive: true, force: true });
+  }
 });

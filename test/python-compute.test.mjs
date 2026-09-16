@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
@@ -52,6 +53,62 @@ test("Python Compute confines every submitted call to a network-free sandbox", (
   assert.ok(limits.includes("--as=268435456") && limits.includes("--core=0"));
 });
 
+test("Python Compute mounts only selected artifact inputs read-only", () => {
+  assert.ok(pythonCommand, "Python 3 is required to test python-compute");
+  const generated = spawnSync(pythonCommand, ["-B", "-c", [
+    "import json",
+    "from sandbox import build_bwrap_argv",
+    "present = {'/usr', '/bin', '/lib'}",
+    "argv = build_bwrap_argv('/state/calls/x', '/opt/runner.py', exists=lambda p: p in present, islink=lambda p: False, readlink=lambda p: '', has_inputs=True)",
+    "print(json.dumps(argv))",
+  ].join("\n")], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
+  assert.equal(generated.status, 0, generated.stderr || generated.error?.message);
+  const argv = JSON.parse(generated.stdout);
+  const inputBind = argv.indexOf("/inputs");
+  assert.ok(inputBind > 0);
+  assert.equal(argv[inputBind - 2], "--ro-bind");
+  assert.equal(argv[inputBind - 1], "/state/calls/x/inputs");
+  assert.ok(!argv.includes("/mnt/ssd"), "the shared store root must not enter the sandbox");
+});
+
+test("Python Compute publishes and stages integrity-checked shared artifacts", () => {
+  assert.ok(pythonCommand, "Python 3 is required to test python-compute");
+  const storeRoot = mkdtempSync(path.join(tmpdir(), "vanta-python-artifacts-"));
+  try {
+    const script = [
+      "import json, os, tempfile",
+      "import artifact_io",
+      "root = os.environ['TEST_STORE_ROOT']",
+      "for name in ('objects', '.uploads', '.reservations'): os.makedirs(os.path.join(root, name), exist_ok=True)",
+      "policy = {'totalQuotaBytes': 10_000_000, 'producerQuotaBytes': 10_000_000, 'maxArtifactBytes': 2_000_000, 'defaultRetentionDays': 7, 'maxRetentionDays': 90, 'freeReserveBytes': 0}",
+      "open(os.path.join(root, '.store.lock'), 'a').close()",
+      "with open(os.path.join(root, '.store.json'), 'w', encoding='utf-8') as handle: json.dump({'protocolVersion': 1, 'policy': policy}, handle)",
+      "with tempfile.TemporaryDirectory() as workspace:",
+      "    source = os.path.join(workspace, 'result.csv')",
+      "    with open(source, 'wb') as handle: handle.write(b'a,b\\n1,2\\n')",
+      "    reservation = artifact_io.reserve(root, 'python-compute', 1024)",
+      "    published = artifact_io.publish(root, reservation, 'python-compute', [{'path': '/work/result.csv', 'name': 'result.csv', 'mimeType': 'text/csv'}], workspace, 7)",
+      "    inputs = os.path.join(workspace, 'inputs')",
+      "    paths = artifact_io.stage_inputs(root, [{'artifactId': published[0]['id'], 'name': 'input.csv'}], inputs, 4096)",
+      "    assert open(os.path.join(inputs, 'input.csv'), 'rb').read() == b'a,b\\n1,2\\n'",
+      "    print(json.dumps({'artifact': published[0], 'paths': paths}))",
+    ].join("\n");
+    const result = spawnSync(pythonCommand, ["-B", "-c", script], {
+      cwd: moduleDirectory,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", TEST_STORE_ROOT: storeRoot },
+    });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.artifact.producer, "python-compute");
+    assert.equal(output.artifact.bytes, 8);
+    assert.equal(output.paths["input.csv"], "/inputs/input.csv");
+  } finally {
+    rmSync(storeRoot, { recursive: true, force: true });
+  }
+});
+
 test("Python Compute sizes its limits on the node and applies matching cgroup caps", () => {
   const installer = readFileSync(path.join(moduleDirectory, "install.sh"), "utf8");
   const unit = readFileSync(path.join(moduleDirectory, "python-compute.service"), "utf8");
@@ -68,6 +125,7 @@ test("Python Compute sizes its limits on the node and applies matching cgroup ca
   // A raised per-call limit is useless unless the service cgroup is raised with it.
   assert.match(installer, /vantamcpd-python-compute\.service\.d/);
   assert.match(installer, /MemoryHigh=%sM\\nMemoryMax=%sM\\nCPUQuota=%s%%\\nTasksMax=%s/);
+  assert.match(installer, /Group=%s\\nReadWritePaths=%s/);
   assert.match(uninstaller, /rm -rf -- \/etc\/systemd\/system\/vantamcpd-python-compute\.service\.d/);
   assert.match(unit, /MemoryMax=700M/, "the shipped unit keeps a conservative floor for small nodes");
 
@@ -82,10 +140,12 @@ test("Python Compute sizes its limits on the node and applies matching cgroup ca
 
 test("Python Compute declares a job-backed service manifest with bundle options", () => {
   const manifest = JSON.parse(readFileSync(path.join(moduleDirectory, "module.json"), "utf8"));
+  assert.equal(manifest.version, "0.2.2");
   assert.equal(manifest.schemaVersion, 2);
   assert.equal(manifest.lifecycle.execution.mode, "job");
   assert.equal(manifest.runtime.mode, "service");
   assert.equal(manifest.deployment.mode, "replicated");
+  assert.deepEqual(manifest.artifactAccess, { read: true, write: true });
   assert.equal(manifest.persistentData, undefined, "submitted code must not keep state between calls");
   assert.deepEqual(manifest.installOptions.bundle.values, ["core", "science", "full"]);
   assert.equal(manifest.installOptions.bundle.default, "science");

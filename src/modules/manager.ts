@@ -25,6 +25,10 @@ export interface ModuleNodeCheck {
   storageMounted?: boolean;
   storageWritable?: boolean;
   storageDistinctFromRoot?: boolean;
+  artifactRoot?: string;
+  artifactStoreReady?: boolean;
+  artifactStoreWritable?: boolean;
+  artifactProtocolVersion?: number;
   missingCommands?: string[];
   error?: string;
 }
@@ -92,6 +96,9 @@ export interface ModuleUpdateResult {
 }
 
 type ModuleInventoryChangeListener = () => void;
+
+const ARTIFACT_RELATIVE_PATH = "vantamcpd/artifacts";
+const ARTIFACT_PROTOCOL_VERSION = "1";
 
 const InstallationReceiptSchema = z.object({
   schemaVersion: z.literal(1),
@@ -194,6 +201,23 @@ export class ModuleManager {
     throw new Error(`Unknown module: ${moduleId}. Available modules: ${known}.`);
   }
 
+  private artifactEnvironment(modulePackage: ModulePackage, node: ResolvedNode): Record<string, string> {
+    const access = modulePackage.manifest.artifactAccess;
+    if (!access || !this.config.artifacts?.enabled) return {};
+    const storageNode = this.config.artifacts.storageNode
+      ? this.config.nodes.find((candidate) => candidate.name === this.config.artifacts.storageNode)
+      : this.config.nodes.find((candidate) => candidate.storage);
+    if (!storageNode?.storage) return {};
+    return {
+      VANTA_ARTIFACT_ROOT: path.posix.join(storageNode.storage.mountpoint, ARTIFACT_RELATIVE_PATH),
+      VANTA_ARTIFACT_PROTOCOL_VERSION: ARTIFACT_PROTOCOL_VERSION,
+      VANTA_ARTIFACT_READ: access.read ? "1" : "0",
+      VANTA_ARTIFACT_WRITE: access.write ? "1" : "0",
+      VANTA_ARTIFACT_NODE: storageNode.name,
+      VANTA_ARTIFACT_LOCAL_MOUNT: node.storage?.mountpoint ?? storageNode.storage.mountpoint,
+    };
+  }
+
   onInventoryChanged(listener: ModuleInventoryChangeListener): () => void {
     this.inventoryChangeListeners.add(listener);
     return () => this.inventoryChangeListeners.delete(listener);
@@ -224,6 +248,7 @@ export class ModuleManager {
             .map((state) => [state.node, state.moduleVersions?.[item.manifest.id]]),
         ),
         requirements: item.manifest.compatibility,
+        artifactAccess: item.manifest.artifactAccess,
         installOptions: item.manifest.installOptions,
         nodes: nodes.map((node) => {
           const state = byNode.get(node.name);
@@ -264,10 +289,24 @@ export class ModuleManager {
           "if [ -n \"$root_source\" ] && [ \"$root_source\" != \"$storage_source\" ]; then echo 'storage_distinct|yes'; else echo 'storage_distinct|no'; fi",
         ].join("\n")
       : "";
+    const artifactChecks = (node: ResolvedNode) => {
+      const environment = this.artifactEnvironment(modulePackage, node);
+      if (!environment.VANTA_ARTIFACT_ROOT) return "";
+      return [
+        `artifact_root=${q(environment.VANTA_ARTIFACT_ROOT)}`,
+        "if [ -f \"$artifact_root/.store.json\" ] && [ ! -L \"$artifact_root/.store.json\" ]; then echo 'artifact_ready|yes'; else echo 'artifact_ready|no'; fi",
+        "if [ -w \"$artifact_root\" ]; then echo 'artifact_writable|yes'; else echo 'artifact_writable|no'; fi",
+        "echo \"artifact_protocol|$(sed -n 's/.*\\\"protocolVersion\\\":\\([0-9][0-9]*\\).*/\\1/p' \"$artifact_root/.store.json\" 2>/dev/null | head -n1)\"",
+      ].join("\n");
+    };
     const baseScript = `${commandChecks}\necho "disk_available_mb|$(df -Pm / | awk 'NR==2{print $4}')"`;
-    const results = modulePackage.manifest.persistentData
+    const needsPerNodeScript = Boolean(
+      modulePackage.manifest.persistentData ||
+      (modulePackage.manifest.artifactAccess && this.config.artifacts?.enabled),
+    );
+    const results = needsPerNodeScript
       ? await mapLimit(nodes, this.config.maxConcurrency, (node) =>
-          this.pool.exec(node, `${baseScript}\n${storageChecks(node)}`, { timeoutMs }))
+          this.pool.exec(node, `${baseScript}\n${storageChecks(node)}\n${artifactChecks(node)}`, { timeoutMs }))
       : await this.pool.execMany(nodes, baseScript, { timeoutMs });
 
     return results.map((result, index) => {
@@ -300,6 +339,8 @@ export class ModuleManager {
       const storageMounted = values.storage_mounted === "yes";
       const storageWritable = values.storage_writable === "yes";
       const storageDistinctFromRoot = values.storage_distinct === "yes";
+      const artifactEnvironment = this.artifactEnvironment(modulePackage, node);
+      const artifactProtocolVersion = Number(values.artifact_protocol);
       if (data) {
         if (!node.storage) {
           if (!reasons.includes("requires configured node-local storage")) reasons.push("requires configured node-local storage");
@@ -327,6 +368,10 @@ export class ModuleManager {
         storageMounted: data ? storageMounted : undefined,
         storageWritable: data ? storageWritable : undefined,
         storageDistinctFromRoot: data ? storageDistinctFromRoot : undefined,
+        artifactRoot: artifactEnvironment.VANTA_ARTIFACT_ROOT,
+        artifactStoreReady: modulePackage.manifest.artifactAccess ? values.artifact_ready === "yes" && artifactProtocolVersion === Number(ARTIFACT_PROTOCOL_VERSION) : undefined,
+        artifactStoreWritable: modulePackage.manifest.artifactAccess?.write ? values.artifact_writable === "yes" : undefined,
+        artifactProtocolVersion: Number.isFinite(artifactProtocolVersion) ? artifactProtocolVersion : undefined,
         missingCommands,
       };
     });
@@ -714,15 +759,18 @@ export class ModuleManager {
     if (data && !node.storage) {
       throw new Error(`Module ${modulePackage.manifest.id} requires configured node-local storage on ${node.name}.`);
     }
-    const environment = data && node.storage
-      ? {
-          VANTA_MODULE_DATA_DIR: path.posix.join(node.storage.mountpoint, data.relativePath),
-          VANTA_MODULE_DATA_MOUNT: node.storage.mountpoint,
-          VANTA_MODULE_RUN_AS: node.user,
-        }
-      : undefined;
+    const environment: Record<string, string> = {};
+    if (data && node.storage) {
+      environment.VANTA_MODULE_DATA_DIR = path.posix.join(node.storage.mountpoint, data.relativePath);
+      environment.VANTA_MODULE_DATA_MOUNT = node.storage.mountpoint;
+      environment.VANTA_MODULE_RUN_AS = node.user;
+    }
+    Object.assign(environment, this.artifactEnvironment(modulePackage, node));
     const transport = new SshMcpTransport(
-      () => this.pool.openProcess(node, command, { cwd: receipt.installDirectory, env: environment }),
+      () => this.pool.openProcess(node, command, {
+        cwd: receipt.installDirectory,
+        env: Object.keys(environment).length > 0 ? environment : undefined,
+      }),
       { maxInputBytes: limits.maxInputBytes, maxOutputBytes: limits.maxOutputBytes },
     );
     const client = new Client({ name: "vantamcpd-module-proxy", version: "0.1.0" });
@@ -984,6 +1032,7 @@ export class ModuleManager {
         VANTA_MODULE_CURRENT_LINK: currentLink,
         VANTA_MODULE_RUN_AS: node.user,
         ...optionEnvironment,
+        ...this.artifactEnvironment(modulePackage, node),
         ...(dataDirectory && node.storage
           ? {
               VANTA_MODULE_DATA_DIR: dataDirectory,

@@ -99,7 +99,7 @@ test("startup reconciliation updates only older installations and then removes t
 test("loads the text-tools package deterministically", () => {
   const catalog = loadModuleCatalog(path.join(root, "modules"));
   assert.deepEqual(catalog.errors, []);
-  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["browser-retrieval", "corpus-search", "python-compute", "text-tools"]);
+  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["artifact-storage", "browser-retrieval", "corpus-search", "python-compute", "text-tools"]);
   const textTools = catalog.modules.find((item) => item.manifest.id === "text-tools");
   assert.ok(textTools.files.some((file) => file.relativePath === "server.py"));
   assert.deepEqual(textTools.manifest.deployment, { mode: "replicated", routing: "round-robin" });
@@ -1018,4 +1018,19 @@ test("discovers installed module receipt counts per node", async () => {
   assert.equal(textTools.nodes[0].installedVersion, TEXT_TOOLS_VERSION);
   assert.equal(textTools.nodes[0].updateAvailable, false);
   assert.equal(textTools.nodes[1].installed, undefined);
+});
+
+test("accepts optional artifact access without changing existing manifests", () => {
+  const manifest = textToolsPackage().manifest;
+  const { artifactAccess: _artifactAccess, ...withoutArtifactAccess } = manifest;
+  assert.equal(parseModuleManifest(withoutArtifactAccess).artifactAccess, undefined);
+  const parsed = parseModuleManifest({
+    ...withoutArtifactAccess,
+    artifactAccess: { read: true, write: true },
+  });
+  assert.deepEqual(parsed.artifactAccess, { read: true, write: true });
+  assert.throws(
+    () => parseModuleManifest({ ...withoutArtifactAccess, artifactAccess: { read: false, write: false } }),
+    /must enable read or write access/,
+  );
 });

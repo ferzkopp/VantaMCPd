@@ -9,8 +9,9 @@ matrix, schemas, signatures, and deferrals.
 
 *A release incident investigated with parallel, automatically routed `text-tools` operations.*
 
-The module accepts caller-provided text only. It does not accept paths, fetch URLs, run a shell, execute
-caller-supplied awk/sed programs, or create artifacts.
+The module accepts caller-provided text and, when shared storage is enabled, opaque artifact IDs for
+its two streamed CSV operations. It does not accept node paths, fetch URLs, run a shell, or execute
+caller-supplied awk/sed programs.
 
 It uses replicated deployment, so the cluster may have any number of interchangeable instances and
 targetless calls are routed round-robin. Its on-demand runtime starts a fresh Python MCP process over
@@ -81,7 +82,7 @@ replicated, adding or removing a replica needs no change to the others.
 
 ## Tools
 
-Every capability is reached through twelve category tools holding 111 operations. Each takes an
+Every capability is reached through twelve category tools holding 113 operations. Each takes an
 `operation` discriminator and that operation's own fields; the advertised JSON Schema is a `oneOf` over
 the operations, so the agent sees exactly what each one requires.
 
@@ -91,7 +92,7 @@ the operations, so the agent sees exactly what each one requires.
 | `text_extract` | Emails, URLs, numbers, IPs, date/time strings, code blocks, quotations, UUIDs, hashes, semantic versions |
 | `text_analyze` | Statistics, readability, keywords, similarity, n-grams, sentences, token estimates, invisible-character inspection, duplicate lines, chunking, TF-IDF |
 | `text_codec` | Base64, URL, HTML, Unicode, hex, binary, and unverified JWT decoding |
-| `data_convert` | JSON formatting, CSV, JSONL, flatten/unflatten, structural diff and merge, schema inference, `key=value` logs, dotenv, HTML, YAML, TOML, INI, XML, query strings |
+| `data_convert` | JSON formatting, inline and shared-artifact CSV, JSONL, flatten/unflatten, structural diff and merge, schema inference, `key=value` logs, dotenv, HTML, YAML, TOML, INI, XML, query strings |
 | `text_security` | Digests, HMACs, checksums, UUID validation, secret scanning, redaction, password strength |
 | `text_generate` | UUIDv4, secure passwords, diceware passphrases, placeholder text |
 | `developer_text` | Regex extraction, replacement and testing, unified diffs, semantic versions, Python comment stripping |
@@ -170,7 +171,7 @@ version, then places the tool's structured result in `output`:
 	"ok": true,
 	"node": "worker-a",
 	"moduleId": "text-tools",
-	"moduleVersion": "0.4.1",
+	"moduleVersion": "0.5.0",
 	"toolName": "developer_text",
 	"deployment": { "mode": "replicated", "routing": "round-robin" },
 	"selection": "automatic",

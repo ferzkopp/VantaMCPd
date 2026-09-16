@@ -163,7 +163,10 @@ export function registerFileTools(server: ToolServer, ctx: ToolContext): void {
       title: "Upload a local file to nodes",
       description:
         "Copy a file from this machine to one or more nodes over SFTP. The remote path must be writable by the SSH user; " +
-        "to place a file in a root-owned location, upload to /tmp and then move it with cluster_run (sudo=true).",
+        "to place a file in a root-owned location, upload to /tmp and then move it with cluster_run (sudo=true). " +
+        "Use this only for intentional node filesystem deployment. When artifact-storage is available, do not use this " +
+        "tool to stage local files for artifact-aware modules; upload them with artifact_upload through " +
+        "cluster_call_module_tool instead.",
       inputSchema: {
         localPath: z.string().describe("Path to the local file on this machine."),
         remotePath: z.string().describe("Absolute destination path on the node."),

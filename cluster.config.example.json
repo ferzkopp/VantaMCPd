@@ -46,6 +46,10 @@
     "cancelGraceMs": 5000,
     "maxLogBytes": 1000000
   },
+  "artifacts": {
+    "enabled": false,
+    "storageNode": "cluster2"
+  },
   "modules": {
     "corpus-search": {
       "installOptions": {

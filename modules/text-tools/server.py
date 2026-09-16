@@ -6,7 +6,7 @@ from typing import Any
 from operations import CATEGORIES, category_tools
 
 PROTOCOL_VERSION = "2025-06-18"
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 
 TOOLS = category_tools()
 

@@ -148,6 +148,7 @@ class Vanta:
 
     def __init__(self, inputs: dict, limits: dict):
         self.inputs = inputs
+        self.artifact_paths = limits.get("artifactPaths", {})
         self._limits = limits
         self._result = None
         self._has_result = False
@@ -293,9 +294,10 @@ def _run_code(request: dict) -> dict:
     for attribute in ("result", "emit_text", "emit_json", "emit_table", "emit_image", "emit_file"):
         setattr(module, attribute, getattr(vanta, attribute))
     module.inputs = vanta.inputs
+    module.artifact_paths = vanta.artifact_paths
     sys.modules["vanta"] = module
 
-    namespace: dict = {"__name__": "__main__", "__builtins__": __builtins__, "vanta": module, "inputs": vanta.inputs}
+    namespace: dict = {"__name__": "__main__", "__builtins__": __builtins__, "vanta": module, "inputs": vanta.inputs, "artifact_paths": vanta.artifact_paths}
     status = "completed"
     error_value = None
     started = time.monotonic()
