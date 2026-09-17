@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { z } from "zod";
@@ -58,6 +61,7 @@ const EXPECTED_TOOLS = [
   "cluster_swap",
   "cluster_uninstall_module",
   "cluster_upload",
+  "cluster_upload_artifact",
   "cluster_write_file",
 ];
 
@@ -192,11 +196,13 @@ test("module capabilities are advertised on the proxy tools so the agent can rou
 test("agent instructions prefer artifact uploads over SFTP staging", () => {
   const instructions = serverInstructions("- artifact-storage: upload files");
   assert.match(instructions, /prefer it for transferring local attachments or files/);
-  assert.match(instructions, /artifact_upload through cluster_call_module_tool/);
-  assert.match(instructions, /issue artifact_upload begin, every append, and commit as direct MCP cluster_call_module_tool calls/);
-  assert.match(instructions, /Do not invoke the module transport through a terminal command, local script, SDK or client, subprocess, wrapper, or proxy/);
-  assert.match(instructions, /Payload size, base64 expansion, or the number of chunks does not justify an alternate transfer path/);
-  assert.match(instructions, /Upload the file's existing bytes as-is using sequential bounded chunks/);
+  assert.match(instructions, /call cluster_upload_artifact/);
+  assert.match(instructions, /streams the existing bytes through artifact_upload/);
+  assert.match(instructions, /supplies raw base64 but no path/);
+  assert.match(instructions, /attachment export, download, or materialization capability/);
+  assert.match(instructions, /save the exact bytes to a local temporary file/);
+  assert.match(instructions, /Do not recreate a file from a rendered preview or vision description/);
+  assert.match(instructions, /client exposes neither the original bytes, a local path, nor a way to materialize them/);
   assert.match(instructions, /Do not locally compress, convert, summarize, inspect, or otherwise preprocess it/);
   assert.match(instructions, /Do not use cluster_upload\/SFTP, cluster_run, direct node filesystem paths, or the artifact broker socket/);
 
@@ -204,6 +210,75 @@ test("agent instructions prefer artifact uploads over SFTP staging", () => {
   const uploadDescription = tools.get("cluster_upload").config.description;
   assert.match(uploadDescription, /only for intentional node filesystem deployment/);
   assert.match(uploadDescription, /do not use this tool to stage local files for artifact-aware modules/);
+});
+
+test("uploads a local file through artifact-storage with bounded verified chunks", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "vanta-artifact-upload-"));
+  const localPath = path.join(directory, "sample.bin");
+  const payload = Buffer.alloc(512 * 1024 + 17);
+  for (let index = 0; index < payload.length; index += 1) payload[index] = index % 251;
+  writeFileSync(localPath, payload);
+  try {
+    const { ctx, tools } = buildContext();
+    const calls = [];
+    ctx.modules.callTool = async (moduleId, selectedNode, toolName, args) => {
+      calls.push({ moduleId, selectedNode, toolName, args });
+      if (args.operation === "begin") {
+        return { ok: true, output: { uploadId: "a".repeat(32), nextOffset: 0, chunkLimitBytes: 512 * 1024 } };
+      }
+      if (args.operation === "append") {
+        const bytes = Buffer.from(args.data, "base64");
+        assert.equal(createHash("sha256").update(bytes).digest("hex"), args.sha256);
+        return { ok: true, output: { uploadId: args.uploadId, nextOffset: args.offset + bytes.length } };
+      }
+      assert.equal(args.operation, "commit");
+      return {
+        ok: true,
+        output: { id: "b".repeat(32), name: "sample.bin", bytes: payload.length, sha256: createHash("sha256").update(payload).digest("hex") },
+      };
+    };
+
+    const result = await call(tools, "cluster_upload_artifact", { localPath, retentionDays: 3 });
+    assert.notEqual(result.isError, true);
+    const output = JSON.parse(body(result));
+    assert.equal(output.id, "b".repeat(32));
+    assert.equal(output.artifactId, output.id);
+    assert.equal(output.chunks, 2);
+    assert.deepEqual(calls.map(({ args }) => args.operation), ["begin", "append", "append", "commit"]);
+    assert.equal(calls[0].moduleId, "artifact-storage");
+    assert.equal(calls[0].toolName, "artifact_upload");
+    assert.equal(calls[0].selectedNode, undefined);
+    assert.equal(calls[0].args.bytes, payload.length);
+    assert.equal(calls[0].args.sha256, createHash("sha256").update(payload).digest("hex"));
+    assert.equal(calls[1].args.offset, 0);
+    assert.equal(calls[2].args.offset, 512 * 1024);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("aborts an artifact upload when a chunk fails", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "vanta-artifact-abort-"));
+  const localPath = path.join(directory, "sample.bin");
+  writeFileSync(localPath, "content");
+  try {
+    const { ctx, tools } = buildContext();
+    const operations = [];
+    ctx.modules.callTool = async (_moduleId, _selectedNode, _toolName, args) => {
+      operations.push(args.operation);
+      if (args.operation === "begin") return { ok: true, output: { uploadId: "a".repeat(32), chunkLimitBytes: 512 * 1024 } };
+      if (args.operation === "append") return { ok: false, output: "quota changed" };
+      assert.equal(args.operation, "abort");
+      return { ok: true, output: { removed: true } };
+    };
+
+    const result = await call(tools, "cluster_upload_artifact", { localPath });
+    assert.equal(result.isError, true);
+    assert.match(body(result), /quota changed/);
+    assert.deepEqual(operations, ["begin", "append", "abort"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("registers exactly the advertised tool surface, each with a title, description and schema", () => {
@@ -237,6 +312,8 @@ test("input schemas reject malformed arguments before a handler runs", () => {
 
   assert.equal(parse(tools, "cluster_install_module", { moduleId: "text-tools", targets: [] }).success, false);
   assert.equal(parse(tools, "cluster_upload", { localPath: "a", remotePath: "/tmp/a", timeoutMs: -1 }).success, false);
+  assert.equal(parse(tools, "cluster_upload_artifact", { localPath: "a", name: "image.png" }).success, true);
+  assert.equal(parse(tools, "cluster_upload_artifact", { localPath: "a", name: "bad/name" }).success, false);
 });
 
 test("unknown targets are reported as a tool error naming the known nodes and tags", async () => {

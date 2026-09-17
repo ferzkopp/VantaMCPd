@@ -16,9 +16,10 @@ files, storage, and NFS, or install node-side MCP modules that add new capabilit
 boards can do useful work today, while x86 and accelerator-equipped nodes fit the same model with more 
 advanced capabilities.
 
-The project ships **no real hosts**. The cluster is described by a local inventory file you create from
-a template; everything else, including tools, scripts, and docs, is written against roles, not specific
-machines.
+The project ships **no real hosts**. Bootstrap each machine and its SSH access once; after that, the
+nodes are fully managed from the agent itself through VantaMCPd's MCP interface. The cluster is described
+by a local inventory file you create from a template; everything else, including tools, scripts, and
+docs, is written against roles, not specific machines.
 
 Three parts are deliberately independent:
 
@@ -36,8 +37,8 @@ usually the same machine, but they are different roles in the architecture. See
 ## Modules
 
 Modules extend managed nodes with MCP tools for useful workloads. VantaMCPd checks each module's
-declared hardware and software requirements, installs it only on compatible nodes after approval, and
-routes its tools according to the module's deployment policy.
+declared hardware and software requirements. From the agent, you can use MCP to approve and install a
+module on compatible nodes, then invoke its tools according to the module's deployment policy.
 
 | Module | Purpose | Deployment | Requirements | Guide |
 | --- | --- | --- | --- | --- |
@@ -47,9 +48,26 @@ routes its tools according to the module's deployment policy.
 | **Scientific Corpus Search** (`corpus-search`) | Provenance-aware arXiv metadata search using SQLite FTS5/BM25, with phrase, exclusion, and field query syntax | Singleton; on demand; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 10 GiB free node storage | [Scientific Corpus Search](modules/corpus-search/CorpusSearch.md) |
 | **Browser Retrieval** (`browser-retrieval`) | JavaScript-rendered page retrieval, selector queries, and table extraction across node-reachable HTTP(S) sites | Replicated; isolated service broker; stateless calls | Debian/Ubuntu `amd64`; 2 cores; 3 GiB RAM; 2 GiB root disk; Chromium | [Browser Retrieval](modules/browser-retrieval/BrowserRetrieval.md) |
 | **Python Compute** (`python-compute`) | Sandboxed Python execution with values, charts, and optional shared artifact inputs and outputs | Replicated; isolated service broker; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 2 cores; 900 MB RAM; 2.5 GB root disk; bubblewrap | [Python Compute](modules/python-compute/PythonCompute.md) |
+| **Image Processing** (`image-processing`) | Isolated raster inspection, editing, composition, conversion, and visual comparison with inline or artifact transport | Replicated; isolated service broker; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 768 MB RAM; 512 MB root disk; ImageMagick and/or Pillow | [Image Processing](modules/image-processing/ImageProcessing.md) |
 
 Use `cluster_list_modules` to see packaged versions, install options, compatibility, deployment
 policies, and live installation state. See [Node modules](docs/Modules.md) for architecture and lifecycle details.
+
+## Test coverage
+
+`npm test` builds the project and runs 117 automated tests covering schemas, security boundaries,
+artifact integrity, module packaging and lifecycle, SSH/MCP transport, jobs, routing, and the monitoring
+dashboard. The current end-to-end matrix also calls every installed module through its public MCP API,
+one operation and explicit node at a time; internal module self-tests are not counted as integration coverage.
+
+| Module | Live integration coverage |
+| --- | --- |
+| Artifact Storage | All upload, fetch, list, retention-update, and delete branches on ARM storage |
+| Browser Retrieval | All four tools on `amd64`/Chromium |
+| Scientific Corpus Search | Corpus status, category resolution, filtered search, and exact record retrieval on ARM |
+| Image Processing | All five tools, 23 edits, three composition modes, four encoders, and both comparison modes on ARM/ImageMagick 6 and `amd64`/ImageMagick 7, including Pillow fallbacks |
+| Python Compute | Environment discovery plus successful, artifact-producing, error, and timeout executions on ARM/Python 3.11 and `amd64`/Python 3.13 |
+| Text Tools | All 113 operation variants on both ARM and `amd64`, including artifact-backed CSV workflows and command wrappers |
 
 ## Quickstart
 
@@ -141,6 +159,9 @@ for Claude Code, Hermes Agent, OpenClaw, and generic MCP clients are in [MCP cli
 >
 > Install python-compute on worker-a with the science bundle, then ask it which Python packages the
 > node provides.
+>
+> Install image-processing on the ARM workers, then inspect an uploaded image artifact and create a
+> metadata-free WebP thumbnail.
 
 Module installation requires approval and explicit target nodes or tags. See [Node modules](docs/Modules.md)
 for deployment, routing, durable jobs, and update behavior, the
@@ -150,7 +171,9 @@ installation, and recovery. See the
 [Browser Retrieval quickstart](modules/browser-retrieval/BrowserRetrieval.md#quickstart) for public
 network policy, rendered extraction, and service isolation, and the
 [Python Compute quickstart](modules/python-compute/PythonCompute.md#quickstart) for package bundles,
-sandbox behavior, and returning rendered content.
+sandbox behavior, and returning rendered content. The
+[Image Processing quickstart](modules/image-processing/ImageProcessing.md#quickstart) covers raster
+formats, inline and artifact transport, ordered edit pipelines, and image-specific isolation.
 
 **Re-running the whole block on a working cluster is safe.** Every step is idempotent: an existing SSH
 key is reused, `authorized_keys` and `/etc/sudoers.d/99-vanta` are left alone once correct (so you are
@@ -421,6 +444,7 @@ discover them with `cluster_list_module_tools` and invoke them through `cluster_
 | `cluster_read_file` | Read a remote text file (1MB cap, binary-safe transport) |
 | `cluster_write_file` | Write a file with optional sudo, mode, owner and timestamped backup |
 | `cluster_upload` / `cluster_download` | SFTP transfer to/from the Vanta host |
+| `cluster_upload_artifact` | Stream an existing local file into artifact-storage with bounded chunks and SHA-256 verification |
 | `cluster_storage` | SSD inspect/format/mount/unmount + NFS export and client mounts |
 | `cluster_swap` | Swap status, persist active swap in fstab, mkswap an existing partition, or repartition a whole disk as maximum-size swap |
 | `cluster_power` | Reboot or poweroff (always requires `confirm: true`) |

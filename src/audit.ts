@@ -341,7 +341,7 @@ export class AuditLog {
       row.totalMs += e.durationMs;
       row.bytes += e.bytesOut + e.bytesErr;
       row.lastTs = e.ts;
-      row.lastTool = e.tool;
+      if (e.origin === "agent" && e.tool !== undefined) row.lastTool = e.tool;
     }
     for (const row of byNode.values()) row.avgMs = row.total ? Math.round(row.totalMs / row.total) : 0;
     return [...byNode.values()].sort((a, b) => a.node.localeCompare(b.node));

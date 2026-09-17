@@ -1,0 +1,46 @@
+[Unit]
+Description=VantaMCPd Image Processing broker
+After=local-fs.target
+
+[Service]
+Type=simple
+User=vantamcpd-image
+Group=vantamcpd-image
+EnvironmentFile=/etc/vantamcpd/image-processing.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/vantamcpd/modules/image-processing/current/service.py
+Restart=on-failure
+RestartSec=3s
+RuntimeDirectory=vantamcpd-image
+RuntimeDirectoryMode=0755
+StateDirectory=vantamcpd-image
+StateDirectoryMode=0700
+UMask=0077
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# Bubblewrap needs mount/clone/openat2 and AF_NETLINK to create the per-call namespaces.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+
+MemoryHigh=460M
+MemoryMax=650M
+CPUQuota=100%
+CPUWeight=50
+Nice=5
+TasksMax=72
+TimeoutStopSec=8s
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

@@ -384,7 +384,7 @@ def markdown_to_html(arguments: dict[str, Any]) -> dict[str, Any]:
     text = require_text(arguments)
     extensions = ["tables", "fenced_code", "sane_lists"] if optional_bool(arguments, "extensions", True) else []
     rendered = markdown.markdown(text, extensions=extensions, output_format="html")
-    # Raw HTML in the source passes through; this module does not sanitize (see Operations.md).
+    # Raw HTML in the source passes through; this module does not sanitize (see TextTools.md).
     raw_html = bool(re.search(r"<\s*(script|style|iframe|object|embed|form)\b", text, re.IGNORECASE))
     result = {"text": rendered, "characters": len(rendered), "sanitized": False}
     if raw_html:

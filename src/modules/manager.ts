@@ -414,7 +414,7 @@ export class ModuleManager {
             error: `preflight ${check.compatibility.status}: ${detail}`,
           };
         }
-        if ((check.missingCommands?.length ?? 0) > 0) {
+        if (modulePackage.manifest.packages.apt.length > 0) {
           const dependencyResult = await this.installAptDependencies(modulePackage, node, timeoutMs);
           if (!dependencyResult.ok) {
             return {
@@ -425,6 +425,8 @@ export class ModuleManager {
               error: dependencyResult.error,
             };
           }
+        }
+        if ((check.missingCommands?.length ?? 0) > 0) {
           const recheck = await this.check(moduleId, [node], Math.min(timeoutMs, 30_000));
           check = recheck[0] as ModuleNodeCheck;
         }

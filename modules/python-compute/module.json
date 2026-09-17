@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "python-compute",
   "name": "Python Compute",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "description": "Run bounded Python 3 code in a sandboxed process with a curated scientific package set.",
   "capabilities": [
     "calculate, solve equations and simulate instead of estimating an answer",
@@ -17,6 +17,7 @@
     "report which Python packages and versions a node provides"
   ],
   "entrypoint": ["python3", "server.py"],
+  "sharedFiles": ["artifact_protocol.py"],
   "compatibility": {
     "os": ["debian", "ubuntu"],
     "architectures": ["armhf", "arm64", "amd64"],

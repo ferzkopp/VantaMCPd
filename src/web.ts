@@ -15,6 +15,10 @@ import type { ModuleManager, NodeModuleInventory } from "./modules/manager.js";
 const BIND_HOST = "127.0.0.1";
 const MODULE_REFRESH_MS = 60 * 60 * 1000;
 
+function jobToolName(kind: string): string {
+  return kind === "module-install" ? "cluster_install_module" : `cluster_${kind.replaceAll("-", "_")}`;
+}
+
 /**
  * Static assets live next to the compiled output (scripts/copy-assets.mjs puts them there). Serving
  * the script and stylesheet as their own resources is what lets the CSP below refuse inline code.
@@ -100,7 +104,7 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
     ...modules.catalog.modules.map((modulePackage) => modulePackage.manifest.id).sort(),
   ];
 
-  const activeModules = () =>
+  const catalogModules = () =>
     modules.catalog.modules.flatMap((modulePackage) => {
       const { manifest } = modulePackage;
       const installedNodes = config.nodes.flatMap((node) => {
@@ -110,7 +114,6 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
         if (version === undefined) return [];
         return [{ node: node.name, version, reachable: inventory.reachable, stale: inventory.stale === true, refreshedAt: inventory.refreshedAt }];
       });
-      if (installedNodes.length === 0) return [];
       return [{
         id: manifest.id,
         name: manifest.name,
@@ -228,10 +231,19 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
         // Addresses are deliberately not sent to the page: the dashboard is screenshot-friendly and
         // the host is already in the on-disk log for anyone who needs it.
         const activity = new Map(audit.summary().map((row) => [row.node, row]));
+        const activeJobs = new Map<string, ReturnType<NonNullable<typeof jobs>["snapshot"]>["jobs"][number]>();
+        for (const job of jobs?.snapshot().jobs ?? []) {
+          if (job.status !== "queued" && job.status !== "running") continue;
+          const previous = activeJobs.get(job.targetNode);
+          const jobTs = job.heartbeatAt ?? job.startedAt ?? job.createdAt;
+          const previousTs = previous && (previous.heartbeatAt ?? previous.startedAt ?? previous.createdAt);
+          if (!previousTs || jobTs > previousTs) activeJobs.set(job.targetNode, job);
+        }
         json(res, {
           nodes: config.nodes.map((node) => {
             const row = activity.get(node.name);
             const inventory = moduleInventory.get(node.name);
+            const activeJob = activeJobs.get(node.name);
             return {
               node: node.name,
               role: node.role,
@@ -240,8 +252,14 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
               totalMs: row?.totalMs ?? 0,
               avgMs: row?.avgMs ?? 0,
               bytes: row?.bytes ?? 0,
-              lastTs: row?.lastTs,
-              lastTool: row?.lastTool,
+              lastTs: activeJob ? activeJob.heartbeatAt ?? activeJob.startedAt ?? activeJob.createdAt : row?.lastTs,
+              lastTool: activeJob ? `${jobToolName(activeJob.kind)} · ${activeJob.status}` : row?.lastTool,
+              activeJob: activeJob ? {
+                moduleId: activeJob.moduleId,
+                phase: activeJob.phase,
+                status: activeJob.status,
+                message: activeJob.progress?.message,
+              } : undefined,
               moduleCount: inventory?.count,
               moduleNames: inventory?.modules,
               moduleVersions: inventory?.moduleVersions,
@@ -254,7 +272,7 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
           }),
           configured: config.nodes.map((n) => ({ name: n.name, role: n.role })),
           availableModules: availableModuleIds,
-          modules: activeModules(),
+          modules: catalogModules(),
           moduleInventoryPending: config.nodes.some((node) => !moduleInventory.has(node.name)),
           lastSeq: audit.lastSeq,
         });
@@ -276,7 +294,7 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
           json(res, { error: "module id is required" }, 400);
           return;
         }
-        const moduleState = activeModules().find((item) => item.id === moduleId);
+        const moduleState = catalogModules().find((item) => item.id === moduleId);
         if (!moduleState) {
           json(res, { error: "module is not installed" }, 404);
           return;

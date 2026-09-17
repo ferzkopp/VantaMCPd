@@ -99,11 +99,34 @@ test("startup reconciliation updates only older installations and then removes t
 test("loads the text-tools package deterministically", () => {
   const catalog = loadModuleCatalog(path.join(root, "modules"));
   assert.deepEqual(catalog.errors, []);
-  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["artifact-storage", "browser-retrieval", "corpus-search", "python-compute", "text-tools"]);
+  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["artifact-storage", "browser-retrieval", "corpus-search", "image-processing", "python-compute", "text-tools"]);
   const textTools = catalog.modules.find((item) => item.manifest.id === "text-tools");
   assert.ok(textTools.files.some((file) => file.relativePath === "server.py"));
   assert.deepEqual(textTools.manifest.deployment, { mode: "replicated", routing: "round-robin" });
   assert.deepEqual(textTools.manifest.runtime, { mode: "on-demand" });
+});
+
+test("loads the ARM-first image-processing service contract", () => {
+  const catalog = loadModuleCatalog(path.join(root, "modules"));
+  assert.deepEqual(catalog.errors, []);
+  const imageProcessing = catalog.modules.find((item) => item.manifest.id === "image-processing");
+  assert.ok(imageProcessing.files.some((file) => file.relativePath === "policy.xml"));
+  assert.equal(imageProcessing.manifest.schemaVersion, 2);
+  assert.deepEqual(imageProcessing.manifest.lifecycle.execution, { mode: "job", timeoutMs: 1_800_000 });
+  assert.deepEqual(imageProcessing.manifest.deployment, { mode: "replicated", routing: "round-robin" });
+  assert.deepEqual(imageProcessing.manifest.runtime, { mode: "service", systemdUnit: "image-processing.service" });
+  assert.deepEqual(imageProcessing.manifest.artifactAccess, { read: true, write: true });
+  assert.deepEqual(imageProcessing.manifest.compatibility.architectures, ["armhf", "arm64", "amd64"]);
+});
+
+test("packages manifest-declared shared files into standalone modules", () => {
+  const catalog = loadModuleCatalog(path.join(root, "modules"));
+  assert.deepEqual(catalog.errors, []);
+  for (const moduleId of ["image-processing", "python-compute", "text-tools"]) {
+    const modulePackage = catalog.modules.find((item) => item.manifest.id === moduleId);
+    assert.deepEqual(modulePackage.manifest.sharedFiles, ["artifact_protocol.py"]);
+    assert.equal(modulePackage.files.filter((file) => file.relativePath === "artifact_protocol.py").length, 1);
+  }
 });
 
 test("accepts singleton module deployment declarations", () => {
@@ -467,6 +490,7 @@ test("install stages, verifies, installs, writes a receipt, and cleans up", asyn
   assert.equal(inventoryChanges, 1);
   assert.equal(uploads.length, files.length);
   assert.equal(sftpEnded, true);
+  assert.ok(commands.some((entry) => entry.command.includes("apt-get") && entry.command.includes("'python3-inflect'") && entry.options.sudo === true));
   assert.ok(commands.some((entry) => entry.command.includes("bash 'install.sh'") && entry.options.sudo === true && entry.options.env.VANTA_MODULE_RUN_AS === target.user));
   assert.ok(commands.some((entry) => entry.command.includes(`chown -R root:root '/opt/vantamcpd/modules/text-tools/${TEXT_TOOLS_VERSION}'`) && entry.options.sudo === true));
   assert.ok(commands.some((entry) => entry.command.includes("systemctl enable 'vantamcpd-text-tools.service'") && entry.options.sudo === true));
@@ -904,6 +928,7 @@ test("concurrent singleton installations are serialized per module", async () =>
     reachable: true,
     compatibility: { status: "compatible", reasons: [], unknown: [] },
   }));
+  manager.installAptDependencies = async () => ({ ok: true });
   manager.installOnNode = async (_package, target) => {
     await new Promise((resolve) => setImmediate(resolve));
     installedNode = target.name;

@@ -12,13 +12,15 @@ export function serverInstructions(capabilities: string, dashboardUrl?: string):
         "whenever it matches one of these capabilities, even if the user does not name the module or the node:\n" +
         `${capabilities}\n` +
         "When artifact-storage is installed and available, prefer it for transferring local attachments or files into " +
-        "artifact-aware module workflows. Use cluster_list_module_tools to get the artifact_upload schema, then call " +
-        "artifact_upload through cluster_call_module_tool and pass its immutable artifact ID to the consuming module. " +
-        "For an attached or local file, issue artifact_upload begin, every append, and commit as direct MCP " +
-        "cluster_call_module_tool calls from the agent. Do not invoke the module transport through a terminal command, " +
-        "local script, SDK or client, subprocess, wrapper, or proxy, even if that path ultimately calls the same MCP tool. " +
-        "Payload size, base64 expansion, or the number of chunks does not justify an alternate transfer path. " +
-        "Upload the file's existing bytes as-is using sequential bounded chunks, even when that requires multiple calls. " +
+        "artifact-aware module workflows. For a file exposed through a local path, call cluster_upload_artifact and pass " +
+        "its immutable artifact ID to the consuming module. This streams the existing bytes through artifact_upload with " +
+        "bounded chunks, integrity checks, quotas, and cleanup. If the MCP client supplies raw base64 but no path, use " +
+        "cluster_list_module_tools to get the artifact_upload schema, then call begin, append, and commit through " +
+        "cluster_call_module_tool. For pasted content, first use any client-provided attachment export, download, or " +
+        "materialization capability to save the exact bytes to a local temporary file, then call cluster_upload_artifact " +
+        "with that path. Do not recreate a file from a rendered preview or vision description. If the client exposes " +
+        "neither the original bytes, a local path, nor a way to materialize them, explain that client boundary and ask " +
+        "the user to save or attach the content as a file. " +
         "Do not locally compress, convert, summarize, inspect, or otherwise preprocess it merely to reduce transfer size; " +
         "leave requested processing to the artifact-aware module unless the user explicitly asks for local preprocessing. " +
         "Do not use cluster_upload/SFTP, cluster_run, direct node filesystem paths, or the artifact broker socket to " +

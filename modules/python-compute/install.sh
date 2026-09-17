@@ -19,7 +19,7 @@ progress() {
 	printf 'VANTA_PROGRESS {"phase":"%s","current":%s,"total":%s,"unit":"steps","message":"%s"}\n' "$1" "$2" "$3" "$4"
 }
 
-for file in module.json server.py service.py sandbox.py runner.py schemas.py inventory.py artifact_io.py python-compute.service; do
+for file in module.json server.py service.py sandbox.py runner.py schemas.py inventory.py artifact_io.py artifact_protocol.py python-compute.service; do
 	test -f "$VANTA_MODULE_STAGE/$file"
 done
 for command in bash python3 bwrap prlimit systemctl runuser useradd apt-get; do
@@ -131,6 +131,8 @@ chmod -R a+rX "$tmp"
 step=$((step + 1))
 progress verify "$step" "$total" "Checking the module self-tests"
 python3 "$tmp/schemas.py"
+python3 "$tmp/artifact_protocol.py"
+python3 "$tmp/artifact_io.py"
 python3 "$tmp/inventory.py" --self-test
 python3 "$tmp/runner.py" --self-test
 python3 "$tmp/sandbox.py"

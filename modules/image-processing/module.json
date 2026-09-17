@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 2,
+  "id": "image-processing",
+  "name": "Image Processing",
+  "version": "0.2.5",
+  "description": "Inspect, edit, compose, convert, and compare bounded raster images with isolated Debian image tooling.",
+  "capabilities": [
+    "inspect image dimensions, formats, orientation, metadata and colors",
+    "resize, crop, rotate, flip, trim and pad images",
+    "convert PNG, JPEG, WebP and GIF images with bounded quality settings",
+    "strip sensitive image metadata and normalize orientation",
+    "adjust image levels, colors, opacity, quantization, blur and sharpness",
+    "overlay images and add bounded text watermarks",
+    "create contact sheets and montages from several images",
+    "compare images numerically and produce visual difference images",
+    "process inline base64 images or shared artifacts without network access",
+    "report available ImageMagick and Pillow engines and image limits"
+  ],
+  "entrypoint": ["python3", "server.py"],
+  "sharedFiles": ["artifact_protocol.py"],
+  "compatibility": {
+    "os": ["debian", "ubuntu"],
+    "architectures": ["armhf", "arm64", "amd64"],
+    "minCores": 1,
+    "minRamMb": 768,
+    "minDiskMb": 512,
+    "requiredCommands": ["bash", "python3", "bwrap", "prlimit", "systemctl", "apt-get"],
+    "accelerators": []
+  },
+  "packages": {
+    "apt": ["python3", "bubblewrap", "passwd", "util-linux"]
+  },
+  "lifecycle": {
+    "install": "install.sh",
+    "uninstall": "uninstall.sh",
+    "execution": {"mode": "job", "timeoutMs": 1800000}
+  },
+  "artifactAccess": {"read": true, "write": true},
+  "installOptions": {
+    "backend": {
+      "type": "string",
+      "description": "Preferred engine. auto uses ImageMagick first and Pillow for unsupported capabilities.",
+      "values": ["auto", "imagemagick", "pillow"],
+      "default": "auto"
+    },
+    "maxMemoryMb": {
+      "type": "integer",
+      "description": "Highest address-space limit for one image worker. Omit to size it from node memory.",
+      "minimum": 192,
+      "maximum": 2048
+    },
+    "maxTimeoutMs": {
+      "type": "integer",
+      "description": "Highest wall-clock limit for one image operation.",
+      "minimum": 5000,
+      "maximum": 120000
+    },
+    "concurrentCalls": {
+      "type": "integer",
+      "description": "Image calls this node may execute concurrently. Omit to size it from CPU and memory.",
+      "minimum": 1,
+      "maximum": 4
+    },
+    "callsPerMinute": {
+      "type": "integer",
+      "description": "Calls this installation accepts per minute. Omit to derive it from concurrency.",
+      "minimum": 1,
+      "maximum": 120
+    }
+  },
+  "deployment": {"mode": "replicated", "routing": "round-robin"},
+  "runtime": {"mode": "service", "systemdUnit": "image-processing.service"},
+  "limits": {
+    "startupMs": 15000,
+    "callMs": 150000,
+    "maxInputBytes": 10000000,
+    "maxOutputBytes": 4000000
+  }
+}

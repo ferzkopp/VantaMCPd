@@ -96,6 +96,34 @@ test("attributes non-module operations to core", () => {
   }
 });
 
+test("keeps the latest agent tool when later engine work runs", () => {
+  const logDir = mkdtempSync(path.join(tmpdir(), "vantamcpd-audit-"));
+  try {
+    const audit = new AuditLog({ logDir, maxEvents: 10, maxLogMb: 1, logOutput: false });
+    const input = {
+      node: "cluster1",
+      host: "192.0.2.1",
+      kind: "exec",
+      command: "true",
+      sudo: false,
+      ok: true,
+      code: 0,
+      durationMs: 1,
+      bytesOut: 0,
+      bytesErr: 0,
+    };
+    withToolParameters("cluster_run", { targets: ["cluster1"] }, () => audit.record(input));
+    audit.record(input);
+    withTool("dashboard_module_refresh", () => audit.record(input));
+
+    const summary = audit.summary()[0];
+    assert.equal(summary.total, 3);
+    assert.equal(summary.lastTool, "cluster_run");
+  } finally {
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
+
 test("preserves captured attribution when work completes under another context", () => {
   const logDir = mkdtempSync(path.join(tmpdir(), "vantamcpd-audit-"));
   try {

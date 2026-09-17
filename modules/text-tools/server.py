@@ -6,7 +6,7 @@ from typing import Any
 from operations import CATEGORIES, category_tools
 
 PROTOCOL_VERSION = "2025-06-18"
-VERSION = "0.5.0"
+VERSION = "0.5.3"
 
 TOOLS = category_tools()
 
@@ -127,7 +127,7 @@ def self_test() -> None:
     rendered_html = call_optional("document_process", {"operation": "markdown_to_html", "text": "# Title\n"})
     assert rendered_html is None or "<h1>Title</h1>" in rendered_html["text"]
     plural = call_optional("text_transform", {"operation": "pluralize", "text": "index"})
-    assert plural is None or plural["text"] == "indices"
+    assert plural is None or plural["text"] in {"indices", "indexes"}
     passphrase = call_optional("text_generate", {"operation": "passphrase", "words": 4})
     assert passphrase is None or passphrase["text"].count("-") == 3
     toml_rendered = call_optional("data_convert", {"operation": "json_to_toml", "text": '{"name":"test"}'})

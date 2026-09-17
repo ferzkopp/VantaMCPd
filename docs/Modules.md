@@ -22,10 +22,11 @@ data lifecycle, and troubleshooting instructions.
 | Module | Purpose | Deployment | Guide |
 | --- | --- | --- | --- |
 | `artifact-storage` | Immutable shared artifacts with quotas and expiration | Singleton service | [Artifact Storage](../modules/artifact-storage/ArtifactStorage.md) |
-| `text-tools` | Bounded text, data, document, security, and developer operations | Replicated, on demand | [Text Tools](../modules/text-tools/TextTools.md) and [operation reference](../modules/text-tools/Operations.md) |
+| `text-tools` | Bounded text, data, document, security, and developer operations | Replicated, on demand | [Text Tools](../modules/text-tools/TextTools.md) |
 | `corpus-search` | Provenance-aware arXiv metadata search with SQLite FTS5/BM25 | Singleton, on demand | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
 | `browser-retrieval` | JavaScript-rendered page retrieval and structured extraction | Replicated service | [Browser Retrieval](../modules/browser-retrieval/BrowserRetrieval.md) |
 | `python-compute` | Sandboxed Python calculation, analysis, and rendered artifacts | Replicated service | [Python Compute](../modules/python-compute/PythonCompute.md) |
+| `image-processing` | Isolated raster inspection, editing, composition, conversion, and comparison | Replicated service | [Image Processing](../modules/image-processing/ImageProcessing.md) |
 
 ### Management Tools
 
@@ -99,6 +100,8 @@ Module tools remain behind the two proxy tools rather than appearing in the core
 > List the tools provided by text-tools.
 
 > Use text-tools to extract the numeric IDs from `item=12 item=37` with the pattern `item=(\d+)`.
+
+> Use image-processing to inspect an image artifact, strip its metadata, and store an 800-pixel WebP rendition.
 
 Before every call, VantaMCPd verifies the receipt, active version, entrypoint, and advertised tool name.
 Inputs are MCP data, not shell interpolation. Startup time, call time, stderr, input, and output are
@@ -191,7 +194,9 @@ modules/<module-id>/
 
 The manifest declares identity and version, short capability phrases, entrypoint, compatibility, apt
 dependencies, lifecycle scripts, deployment, runtime, resource limits, and optional shared-artifact
-access. Schema v2 adds typed install options, job-backed installation, and persistent data.
+access. A manifest may list repository-level files in `sharedFiles`; the catalog hashes and stages each
+one beside the module's own files so independently deployed packages can share canonical source code.
+Schema v2 adds typed install options, job-backed installation, and persistent data.
 
 Packages are rejected for unsupported schemas, duplicate IDs, unknown properties, missing files,
 symbolic links, path traversal, malformed semantic versions, or size-limit violations. IDs, paths,
@@ -254,8 +259,8 @@ Platform work under consideration:
 7. Add corpus adapters for approved documentation, PubMed, Crossref, Semantic Scholar, conferences,
    dataset catalogs, and repository metadata, with provenance and licensing recorded per source.
 8. Add precomputed embeddings and vector or hybrid retrieval only on compatible node profiles.
-9. Evaluate separate modules for OCR and screenshots, PDF extraction, geospatial operations, image
-   processing, and curated Wikipedia data.
+9. Evaluate separate modules for OCR and screenshots, PDF extraction, geospatial operations, and
+  curated Wikipedia data.
 10. Support heavier ML and vision workloads as suitable arm64, x86-64, GPU, or accelerator-equipped
     nodes join the same inventory and compatibility model.
 

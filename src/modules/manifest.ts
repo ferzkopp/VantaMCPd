@@ -129,6 +129,7 @@ export const ModuleManifestSchema = z
       .array(z.string().min(1).max(500).refine((value) => !/[\0\r\n]/.test(value), "must not contain control characters"))
       .min(1)
       .max(32),
+    sharedFiles: z.array(RelativePathSchema).max(32).default([]),
     compatibility: z
       .object({
         os: z.array(z.string().min(1).max(50)).min(1).optional(),

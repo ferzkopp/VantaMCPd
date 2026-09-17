@@ -13,6 +13,7 @@ test -f "$VANTA_MODULE_STAGE/operations_text.py"
 test -f "$VANTA_MODULE_STAGE/operations_data.py"
 test -f "$VANTA_MODULE_STAGE/operations_developer.py"
 test -f "$VANTA_MODULE_STAGE/artifact_io.py"
+test -f "$VANTA_MODULE_STAGE/artifact_protocol.py"
 for command in python3 rg jq awk sed; do
 	command -v "$command" >/dev/null 2>&1
 done
@@ -24,6 +25,7 @@ trap 'rm -rf "$tmp"' EXIT
 rm -rf "$tmp"
 mkdir -p "$tmp"
 cp -a "$VANTA_MODULE_STAGE/." "$tmp/"
+PYTHONDONTWRITEBYTECODE=1 python3 "$tmp/artifact_protocol.py"
 python3 "$tmp/server.py" --self-test
 rm -rf "$VANTA_MODULE_INSTALL_DIR"
 mv "$tmp" "$VANTA_MODULE_INSTALL_DIR"

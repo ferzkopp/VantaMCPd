@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "text-tools",
   "name": "Text Tools",
-  "version": "0.5.0",
+  "version": "0.5.3",
   "description": "Bounded text transformation, extraction, analysis, conversion, date/time, developer, document, table, and command-wrapper tools.",
   "capabilities": [
     "convert between JSON, JSONL, YAML, CSV, TOML, INI, XML, dotenv and query strings",
@@ -18,6 +18,7 @@
     "search and reshape text with ripgrep, jq, awk and sed"
   ],
   "entrypoint": ["python3", "server.py"],
+  "sharedFiles": ["artifact_protocol.py"],
   "compatibility": {
     "os": ["debian", "ubuntu"],
     "architectures": ["armhf", "arm64", "amd64"],

@@ -170,8 +170,10 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
     const filteredModules = modules.filter((module) => !moduleSel.value || module.id === moduleSel.value);
     filteredModules.forEach((module) => {
       const tr = document.createElement("tr");
-      tr.dataset.module = module.id;
-      tr.dataset.name = module.name;
+      if (module.nodeCount > 0) {
+        tr.dataset.module = module.id;
+        tr.dataset.name = module.name;
+      }
       tr.title = module.description;
       const deployment = module.deployment.routing
         ? `${module.deployment.mode} · ${module.deployment.routing}`
@@ -213,8 +215,8 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
       td.colSpan = 7;
       td.className = "empty";
       td.textContent = pending
-        ? "discovering installed modules…"
-        : modules.length ? "no modules match the selected module" : "no active modules";
+        ? "discovering module installations…"
+        : modules.length ? "no modules match the selected module" : "no catalog modules";
       tr.appendChild(td);
       tb.appendChild(tr);
     }
@@ -366,6 +368,10 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
               if (n.moduleReachable === false) td.className = "warn";
             }
             if (i === 4 && n.failed > 0) td.className = "bad";
+            if (i === 8 && n.activeJob) {
+              td.className = "warn";
+              td.title = [n.activeJob.moduleId, n.activeJob.phase, n.activeJob.message].filter(Boolean).join(" · ");
+            }
             if (i === 9 && n.lastTs) {
               td.dataset.lastSeen = n.lastTs;
               td.title = formatUtcTimestamp(n.lastTs);

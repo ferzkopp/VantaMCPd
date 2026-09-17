@@ -99,6 +99,18 @@ the shared directory is group-writable and setgid.
 
 ## Tools
 
+For an existing file on the VantaMCPd host, prefer the built-in `cluster_upload_artifact` tool. It
+performs the complete protocol below with bounded reads, whole-file and chunk SHA-256 checks, and abort
+cleanup, then returns the committed artifact metadata:
+
+```text
+cluster_upload_artifact { localPath: "./report.csv", mimeType: "text/csv", retentionDays: 14 }
+```
+
+Use the lower-level operations directly when a client already supplies raw base64 bytes. Chat-only
+pasted images and documents are not automatically visible to MCP servers: when the client exposes no
+bytes or local path, save the content as a file before importing it.
+
 ### `artifact_upload`
 
 Uploads are sequential transactions with four operations:

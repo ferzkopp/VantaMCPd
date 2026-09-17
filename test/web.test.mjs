@@ -84,7 +84,7 @@ function getJson(server, pathname) {
   });
 }
 
-test("dashboard lists cached active modules and loads their advertised MCP API", async () => {
+test("dashboard lists catalog modules including zero installations and loads installed MCP APIs", async () => {
   const logDir = mkdtempSync(path.join(tmpdir(), "vantamcpd-web-"));
   const logName = `vanta-${new Date().toISOString().slice(0, 10)}.jsonl`;
   const nodes = [
@@ -193,10 +193,24 @@ test("dashboard lists cached active modules and loads their advertised MCP API",
     assert.equal(summary.status, 200);
     assert.equal(summary.body.moduleInventoryPending, false);
     assert.deepEqual(summary.body.availableModules, ["core", "inactive-module", "text-tools"]);
-    assert.equal(summary.body.modules.length, 1);
-    assert.deepEqual(summary.body.modules[0].installedVersions, ["0.1.0", "0.2.0"]);
-    assert.equal(summary.body.modules[0].nodeCount, 2);
-    assert.equal(summary.body.modules[0].packageFiles, 3);
+    assert.equal(summary.body.modules.length, 2);
+    const activeNode = summary.body.nodes.find((node) => node.node === "cluster1");
+    assert.equal(activeNode.lastTool, "cluster_install_module · running");
+    assert.equal(activeNode.lastTs, "2026-09-13T12:00:00.000Z");
+    assert.deepEqual(activeNode.activeJob, {
+      moduleId: "corpus-search",
+      phase: "download",
+      status: "running",
+    });
+    assert.equal(summary.body.nodes.find((node) => node.node === "cluster2").lastTool, undefined);
+    const inactiveModule = summary.body.modules.find((module) => module.id === "inactive-module");
+    assert.deepEqual(inactiveModule.installedVersions, []);
+    assert.deepEqual(inactiveModule.installedNodes, []);
+    assert.equal(inactiveModule.nodeCount, 0);
+    const installedModule = summary.body.modules.find((module) => module.id === "text-tools");
+    assert.deepEqual(installedModule.installedVersions, ["0.1.0", "0.2.0"]);
+    assert.equal(installedModule.nodeCount, 2);
+    assert.equal(installedModule.packageFiles, 3);
 
     const events = await getJson(server, "/api/events?module=text-tools&includeEngine=false");
     assert.equal(events.status, 200);

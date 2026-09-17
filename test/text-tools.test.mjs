@@ -160,7 +160,7 @@ const calls = [
 
 test("Text Tools advertises strict category schemas and executes every built-in operation", () => {
   const responses = runProtocol(calls);
-  assert.equal(responses[0].result.serverInfo.version, "0.5.0");
+  assert.equal(responses[0].result.serverInfo.version, "0.5.3");
   const advertised = new Map(responses[1].result.tools.map((tool) => [tool.name, tool]));
   assert.deepEqual([...advertised.keys()], Object.keys(categoryOperations));
   for (const [category, operations] of Object.entries(categoryOperations)) {

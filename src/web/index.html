@@ -39,12 +39,12 @@
       <th title="Mean round-trip time per interaction, in milliseconds">avg ms</th>
       <th title="Summed round-trip time of every interaction, in milliseconds">total ms</th>
       <th title="Total stdout + stderr returned by this node">bytes</th>
-      <th title="MCP tool behind the most recent interaction">last tool</th>
-      <th title="Elapsed time since the most recent interaction">last seen</th>
+      <th title="Active durable job, or MCP tool behind the most recent completed interaction">last tool</th>
+      <th title="Elapsed time since the active job update or most recent completed interaction">last seen</th>
     </tr></thead><tbody></tbody></table></div>
   </div>
   <div class="card">
-    <h2 title="Modules with active installation receipts">Modules <span class="hint">— click a row for its MCP API</span></h2>
+    <h2 title="Modules available in the local catalog">Modules <span class="hint">— click an installed row for its MCP API</span></h2>
     <div class="table-scroll"><table id="modules"><thead><tr>
       <th title="Short module ID used by MCP management tools">module</th>
       <th title="Human-readable module name from its local manifest">name</th>
@@ -53,7 +53,7 @@
       <th title="Placement and routing policy">deployment</th>
       <th title="How the module process runs">runtime</th>
       <th title="Files and bytes in the local module package">package</th>
-    </tr></thead><tbody><tr><td colspan="7" class="empty">discovering installed modules…</td></tr></tbody></table></div>
+    </tr></thead><tbody><tr><td colspan="7" class="empty">discovering module installations…</td></tr></tbody></table></div>
   </div>
   <div class="card">
     <h2 title="Durable operations that continue independently of this MCP connection">Jobs <span class="hint">— active and recent background work</span><span class="hint" id="job-poll"></span></h2>

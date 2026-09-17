@@ -11,6 +11,7 @@ configuration file. For installation and day-to-day use, start at [README.md](..
 | [Operational tools](#operational-tools) | Parameters and examples for packages, services, logs, files, commands and power |
 | [Monitoring](#monitoring) | The audit log, the dashboard and its HTTP API |
 | [Security model](#security-model) | Auth, injection defences, the destructive-command guard |
+| [Shared artifact protocol](#shared-artifact-protocol) | Python API for trusted module brokers that consume or publish artifacts |
 | [Configuration reference](#configuration-reference) | Every key in the inventory file |
 | [Troubleshooting](#troubleshooting) | Symptom → fix |
 | [MCP clients](Clients.md) | Host/client model and setup for VS Code, Claude Code, Hermes, OpenClaw, and generic clients |
@@ -205,7 +206,7 @@ cluster_logs { source: "file", path: "/var/log/syslog", lines: 200 }
 `since` is restricted to a safe character set and `grep` may not contain newlines, so neither can escape
 into the command line.
 
-### Files — `cluster_list_dir`, `cluster_read_file`, `cluster_write_file`, `cluster_upload`, `cluster_download`
+### Files — `cluster_list_dir`, `cluster_read_file`, `cluster_write_file`, `cluster_upload`, `cluster_download`, `cluster_upload_artifact`
 
 | Tool | Key parameters | Notes |
 | --- | --- | --- |
@@ -214,12 +215,14 @@ into the command line.
 | `cluster_write_file` | `path`, `content`, `sudo`, `mode`, `owner`, `backup`, `createDirs` | Writes via a temporary file, reports the resulting sha256 alongside the expected one |
 | `cluster_upload` | `localPath`, `remotePath`, `mode`, `timeoutMs` | SFTP to every target; the remote path must be writable by the SSH user |
 | `cluster_download` | `node`, `remotePath`, `localPath`, `timeoutMs` | SFTP from one node to the Vanta host |
+| `cluster_upload_artifact` | `localPath`, optional `target`, `name`, `mimeType`, `producer`, `retentionDays` | Streams a local file through artifact-storage and returns its immutable ID |
 
 ```text
 cluster_list_dir { path: "/etc/systemd/system", recursiveDepth: 2 }
 cluster_read_file { node: "storage-a", path: "/etc/exports" }
 cluster_write_file { path: "/etc/sysctl.d/60-vanta.conf", content: "vm.swappiness=10\n", sudo: true, mode: "644" }
 cluster_download { node: "storage-a", remotePath: "/etc/exports", localPath: "~/backup/exports" }
+cluster_upload_artifact { localPath: "./sample.png", mimeType: "image/png", retentionDays: 7 }
 ```
 
 Remote paths must be absolute and free of newlines. Local paths expand `~`. `cluster_write_file` keeps a
@@ -227,6 +230,17 @@ timestamped `.bak-<timestamp>` copy unless `backup: false`, and `mode`/`owner` a
 they reach `chmod`/`chown`. SFTP transfers are bounded by `timeoutMs` (default 10 minutes), so a stalled
 network cannot hang the call. To land a file in a root-owned location, upload to `/tmp` and move it with
 `cluster_run { sudo: true }`.
+
+`cluster_upload_artifact` reads the file twice: once to compute its complete SHA-256 and once to send
+bounded chunks with individual checksums. It commits only when artifact-storage verifies the declared
+size and complete digest, and aborts the upload if any step fails. It does not use SFTP or expose the
+artifact storage filesystem to the caller.
+
+MCP tool arguments are JSON. A local MCP server can read a file path and a client can explicitly pass
+base64 bytes, but the MCP protocol does not automatically forward a chat application's pasted image or
+document to every server. If the client shows content to the model without exposing bytes or a local
+path, save or attach it as a file first; this is a client integration boundary, not an artifact-storage
+decoder limitation.
 
 ### Commands — `cluster_run`, `cluster_check_command`
 
@@ -274,9 +288,9 @@ browser to navigate to a local resource.
 
 ### Module detail
 
-The **Modules** table summarizes active installations using the dashboard's cached inventory. Clicking
-a row connects to one reachable installation and shows the module's live MCP server identity, advertised
-tools, descriptions, and input schemas.
+The **Modules** table lists every local catalog module and uses the dashboard's cached inventory for its
+installation count. Clicking an installed row connects to one reachable installation and shows the
+module's live MCP server identity, advertised tools, descriptions, and input schemas.
 
 ### Durable jobs
 
@@ -508,6 +522,106 @@ Durable jobs have a separate top-level configuration block:
   ```
 
 Nothing secret belongs in the inventory either — it only holds hosts, users and paths.
+
+---
+
+## Shared artifact protocol
+
+[`modules/artifact_protocol.py`](../modules/artifact_protocol.py) is the canonical Python client for
+trusted module brokers that use the filesystem exposed by `artifact-storage`. Modules remain standalone
+deployments: add the canonical file to the manifest and keep module-specific request and response shapes
+in a small local adapter.
+
+```json
+{
+  "artifactAccess": { "read": true, "write": true },
+  "sharedFiles": ["artifact_protocol.py"]
+}
+```
+
+`sharedFiles` paths are relative to the repository's top-level `modules/` directory. The catalog checks,
+hashes, and stages each declared regular file beside the module-local files. The installer should require
+`artifact_protocol.py` before copying the staged package. Restart the MCP server after changing a shared
+file because package manifests, hashes, and bytes are cached at daemon startup.
+
+### Filesystem contract
+
+Protocol version 1 uses this layout under `VANTA_ARTIFACT_ROOT`:
+
+| Path | Purpose |
+| --- | --- |
+| `.store.json` | Protocol marker and quota, retention, artifact-size, and free-space policy |
+| `.store.lock` | Store-wide advisory mutation lock |
+| `objects/<id-prefix>/<artifact-id>/content` | Immutable artifact bytes |
+| `objects/<id-prefix>/<artifact-id>/metadata.json` | Committed artifact metadata and SHA-256 |
+| `.uploads/` | In-progress client uploads and temporary module publications |
+| `.reservations/<reservation-id>` | Quota reserved by long-running module work |
+
+Artifact and reservation IDs are 32 lowercase hexadecimal characters. Producer IDs are 1–64 characters
+from letters, digits, `.`, `_`, and `-`, beginning with a letter or digit. Output names are 1–128 portable
+characters from the same set and must begin and end with a letter or digit. MIME types are 1–200
+non-whitespace characters.
+
+### Python API
+
+All functions raise `ValueError` for protocol or validation failures. Filesystem and JSON exceptions can
+also propagate, allowing the broker to return a bounded operation error instead of treating an unsafe or
+unavailable store as valid.
+
+| API | Contract |
+| --- | --- |
+| `marker(root)` | Read and validate `.store.json`; return its marker and `policy` object |
+| `available(root)` | Return `False` instead of raising when a compatible marker cannot be read |
+| `locked(root)` | Context manager for a store-wide mutation or quota decision; deployed Linux modules use `flock` |
+| `object_dir(root, artifact_id)` | Validate an artifact ID and return its sharded object directory |
+| `verified_source(root, artifact_id, max_bytes)` | Verify expiry, size, regular-file status, and SHA-256; return `(content_path, metadata)` |
+| `copy_verified(root, artifact_id, target, max_bytes)` | Create a verified read-only copy at a new target and return metadata; remove the target on failure |
+| `usage(root)` | Return `(total_reserved_bytes, bytes_by_producer)` for objects, uploads, and reservations; hold `locked()` when making a quota decision |
+| `reserve(root, producer, declared_bytes)` | Atomically reserve quota and free space; return a reservation ID |
+| `release(root, reservation_id)` | Remove an unused reservation; a missing reservation is harmless |
+| `publish_reserved(root, reservation_id, producer, items, retention_days)` | Publish a batch against a matching reservation, consume it on success, and return metadata records |
+| `publish_unreserved(root, producer, items, budget_bytes, retention_days)` | Quota-check and publish outputs produced by a short operation without a durable reservation |
+| `self_test()` | Run dependency-free checks during module installation |
+
+Publication `items` are dictionaries with `source`, `name`, and `mimeType` string fields. Each source must
+be a regular non-symlink file and fit `policy.maxArtifactBytes`; the sum of actual source sizes must fit the
+reservation or supplied budget. Publication copies and hashes the bytes under the store lock, detects a
+source-size change during copying, writes metadata atomically, and removes the whole batch if an item
+fails. A failed reserved publication leaves its reservation available for retry or explicit release.
+
+### Broker patterns
+
+Long-running work reserves its maximum output before entering the sandbox and always releases an unused
+reservation:
+
+```python
+import artifact_protocol
+
+reservation_id = None
+try:
+  reservation_id = artifact_protocol.reserve(root, "example-module", output_budget)
+  run_sandboxed_work()
+  artifacts = artifact_protocol.publish_reserved(
+    root,
+    reservation_id,
+    "example-module",
+    [{"source": output_path, "name": "result.csv", "mimeType": "text/csv"}],
+    retention_days=7,
+  )
+  reservation_id = None
+finally:
+  artifact_protocol.release(root, reservation_id)
+```
+
+For inputs, create a private per-call directory and use `copy_verified`; bind only that directory read-only
+into the sandbox. Never expose `VANTA_ARTIFACT_ROOT` to submitted code. `verified_source` is appropriate
+only when the trusted broker itself streams the returned path. Module adapters remain responsible for
+validating their request schema, choosing budgets, converting sandbox paths to trusted host paths, and
+shaping module-specific responses.
+
+`publish_unreserved` is suitable when a short trusted operation has already produced its output. Use
+`reserve` plus `publish_reserved` when work is expensive or long-running so quota and free space are
+guaranteed before computation begins.
 
 ---
 

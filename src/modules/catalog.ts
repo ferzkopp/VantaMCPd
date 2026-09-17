@@ -88,6 +88,21 @@ function packageFiles(directory: string): ModulePackageFile[] {
   return files;
 }
 
+function sharedPackageFiles(root: string, relativePaths: string[]): ModulePackageFile[] {
+  return relativePaths.map((relativePath) => {
+    const absolutePath = path.join(root, ...relativePath.split("/"));
+    const stat = lstatSync(absolutePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`shared file must be a regular file: ${relativePath}`);
+    const content = readFileSync(absolutePath);
+    return {
+      relativePath,
+      absolutePath,
+      size: stat.size,
+      sha256: createHash("sha256").update(content).digest("hex"),
+    };
+  });
+}
+
 function loadPackage(directory: string): ModulePackage {
   const manifestPath = path.join(directory, "module.json");
   const stat = lstatSync(manifestPath);
@@ -102,7 +117,11 @@ function loadPackage(directory: string): ModulePackage {
   const manifest = parseModuleManifest(raw, manifestPath);
   if (path.basename(directory) !== manifest.id) throw new Error(`directory name must match module ID ${manifest.id}`);
 
-  const files = packageFiles(directory);
+  const files = [...packageFiles(directory), ...sharedPackageFiles(path.dirname(directory), manifest.sharedFiles)];
+  const duplicate = files.find((file, index) => files.findIndex((candidate) => candidate.relativePath === file.relativePath) !== index);
+  if (duplicate) throw new Error(`shared file collides with package path: ${duplicate.relativePath}`);
+  if (files.length > MAX_PACKAGE_FILES) throw new Error(`package contains more than ${MAX_PACKAGE_FILES} files`);
+  if (files.reduce((sum, file) => sum + file.size, 0) > MAX_PACKAGE_BYTES) throw new Error(`package exceeds ${MAX_PACKAGE_BYTES} bytes`);
   const names = new Set(files.map((file) => file.relativePath));
   const requiredFiles = [manifest.lifecycle.install, manifest.lifecycle.uninstall];
   if (manifest.runtime.mode === "service") requiredFiles.push(manifest.runtime.systemdUnit);
