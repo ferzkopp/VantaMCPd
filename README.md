@@ -438,7 +438,7 @@ discover them with `cluster_list_module_tools` and invoke them through `cluster_
 | `cluster_run` | Arbitrary bash (base64-transported), optional sudo/cwd/env, destructive-command guard |
 | `cluster_check_command` | Policy dry-run: is this command considered destructive? |
 | `cluster_logs` | journalctl (unit / priority / since / boot / regex), dmesg, or `tail` of a file |
-| `cluster_packages` | apt update/upgrade/full-upgrade/install/remove/purge/autoremove/clean/search/show/policy/list |
+| `cluster_packages` | apt update/upgrade/full-upgrade/install/remove/purge/autoremove/clean/search/show/policy/list; write actions can run as durable background jobs |
 | `cluster_services` | systemctl status/start/stop/restart/reload/enable/disable/mask/daemon-reload/failed |
 | `cluster_list_dir` | Remote directory listing (`ls -lAh` or depth-limited `find`) |
 | `cluster_read_file` | Read a remote text file (1MB cap, binary-safe transport) |
@@ -454,9 +454,9 @@ discover them with `cluster_list_module_tools` and invoke them through `cluster_
 | `cluster_uninstall_module` | Remove an installed module and receipt from explicit targets (always requires `confirm: true`) |
 | `cluster_purge_module_data` | Permanently remove marked retained module data after uninstall (always requires `confirm: true`) |
 | `cluster_list_module_tools` | List tools from an explicit node or an automatically selected installation |
-| `cluster_call_module_tool` | Call a module tool with normalized output and explicit routing metadata |
+| `cluster_call_module_tool` | Call a module tool with normalized output and explicit routing metadata, immediately or as a durable background job |
 | `cluster_list_jobs` | List durable background jobs, phases, progress, and terminal results |
-| `cluster_get_job` | Refresh one durable job by ID |
+| `cluster_get_job` | Refresh one durable job by ID; `includeResult` returns a background module call's output |
 | `cluster_get_job_log` | Read the bounded tail of a durable job log |
 | `cluster_cancel_job` | Cancel a running durable job (always requires `confirm: true`) |
 

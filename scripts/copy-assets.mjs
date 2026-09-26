@@ -14,8 +14,8 @@ if (!existsSync(from)) {
 }
 
 cpSync(from, to, { recursive: true });
-const jobsFrom = path.join(root, "src", "jobs", "remote-runner.py");
-const jobsTo = path.join(root, "dist", "jobs", "remote-runner.py");
-mkdirSync(path.dirname(jobsTo), { recursive: true });
-cpSync(jobsFrom, jobsTo);
+mkdirSync(path.join(root, "dist", "jobs"), { recursive: true });
+for (const helper of ["remote-runner.py", "module-call.py"]) {
+  cpSync(path.join(root, "src", "jobs", helper), path.join(root, "dist", "jobs", helper));
+}
 console.log(`copied ${readdirSync(to).join(", ")} -> dist/web`);

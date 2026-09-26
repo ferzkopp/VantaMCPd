@@ -39,8 +39,8 @@ data lifecycle, and troubleshooting instructions.
 | `cluster_purge_module_data` | Permanently remove declared retained data after uninstall and confirmation |
 | `cluster_list_module_tools` | Discover tools on an explicit or automatically selected installation |
 | `cluster_call_module_tool` | Call a tool on an explicit installation or use manifest-defined routing |
-| `cluster_list_jobs` | List durable lifecycle jobs and their progress |
-| `cluster_get_job` | Refresh one durable job by ID |
+| `cluster_list_jobs` | List durable jobs and their progress |
+| `cluster_get_job` | Refresh one durable job by ID; `includeResult` returns a background call's output |
 | `cluster_get_job_log` | Read a bounded remote job-log tail |
 | `cluster_cancel_job` | Cancel a running job after confirmation |
 
@@ -107,6 +107,49 @@ Before every call, VantaMCPd verifies the receipt, active version, entrypoint, a
 Inputs are MCP data, not shell interpolation. Startup time, call time, stderr, input, and output are
 bounded by the manifest. The response identifies the selected node, module version, tool, deployment,
 selection method, and normalized output.
+
+### Background Calls
+
+A tool call normally runs over one SSH session and returns its result, bounded by the manifest's
+`limits.callMs`. Work that takes longer can run as a durable background job instead:
+
+> Use python-compute to run this simulation in the background, then show me the result when it is done.
+
+The choice is made in two places:
+
+| Where | How |
+| --- | --- |
+| Manifest | `background.tools` marks each tool `optional` or `required`; unlisted tools are immediate-only |
+| Call | `cluster_call_module_tool` takes `execution: "immediate"` (default) or `"background"` |
+
+A background request for an immediate-only tool, and an immediate request for a `required` tool, are
+rejected with the allowed alternative. `cluster_list_module_tools` reports each tool's `execution`
+policy.
+
+A background call returns a `jobId` at once. The job runs the module entrypoint on the node as the SSH
+user, sends the tool call with `_meta: {"vantamcpd/execution": "background"}` so the module can apply
+its longer background limits, and stores the MCP result (bounded by `limits.maxOutputBytes`) with the
+job. Poll `cluster_get_job`, then call it with `includeResult: true` to receive the normalized output.
+The job survives SSH drops and daemon restarts. If its runner is interrupted midway, the job fails
+instead of running the call a second time.
+
+One durable job runs per module per node: a background call and an install of the same module exclude
+each other. Automatic routing sends a background call to a replica without such a job. Install,
+uninstall, and startup auto-update skip a node while a background call for that module runs there.
+Submissions also respect the per-node job limit and the manifest's `background.minFreeMemoryMb`; a
+node that cannot accept the job rejects it rather than queueing it.
+
+```json
+{
+  "background": {
+    "tools": { "python_run": "optional" },
+    "maxTimeoutMs": 22500000,
+    "minFreeMemoryMb": 256
+  }
+}
+```
+
+`maxTimeoutMs` bounds the job and should exceed the module's own longest background run.
 
 ### Deactivate a Module
 
@@ -196,7 +239,7 @@ The manifest declares identity and version, short capability phrases, entrypoint
 dependencies, lifecycle scripts, deployment, runtime, resource limits, and optional shared-artifact
 access. A manifest may list repository-level files in `sharedFiles`; the catalog hashes and stages each
 one beside the module's own files so independently deployed packages can share canonical source code.
-Schema v2 adds typed install options, job-backed installation, and persistent data.
+Schema v2 adds typed install options, job-backed installation, persistent data, and background calls.
 
 Packages are rejected for unsupported schemas, duplicate IDs, unknown properties, missing files,
 symbolic links, path traversal, malformed semantic versions, or size-limit violations. IDs, paths,
@@ -242,27 +285,23 @@ health and tools, and `/var/lib/vantamcpd/jobs/<job-id>/` for durable job state.
 - Module checks, lifecycle operations, routing decisions, and calls appear in the audit stream and the
   read-only monitoring dashboard.
 - Durable jobs use allowlisted operations, systemd units, resource locks, bounded logs, heartbeat and
-  timeout enforcement, cancellation, and expiration cleanup.
+  timeout enforcement, cancellation, expiration cleanup, a per-node concurrency limit, and a free-memory
+  check at submission. Background module calls run as the SSH user, never as root.
 
 ## Future Work
 
 Platform work under consideration:
 
-1. Promote healthy remote tools to dynamic top-level VantaMCPd tools and emit
-   `tools/list_changed` after lifecycle changes.
-2. Add explicit rollback and old-version garbage-collection policies.
-3. Add package signing and an authenticated remote registry.
-4. Add authenticated dashboard lifecycle actions with authorization, CSRF protection, and confirmation.
-5. Expand durable jobs with quotas and additional allowlisted job types without accepting arbitrary
-   command submission.
-6. Add artifact ACLs, backup, replication, deduplication, and optional alternate storage backends.
-7. Add corpus adapters for approved documentation, PubMed, Crossref, Semantic Scholar, conferences,
+1. Add artifact ACLs, backup, replication, deduplication, and optional alternate storage backends.
+2. Add corpus adapters for approved documentation, PubMed, Crossref, Semantic Scholar, conferences,
    dataset catalogs, and repository metadata, with provenance and licensing recorded per source.
-8. Add precomputed embeddings and vector or hybrid retrieval only on compatible node profiles.
-9. Evaluate separate modules for OCR and screenshots, PDF extraction, geospatial operations, and
-  curated Wikipedia data.
-10. Support heavier ML and vision workloads as suitable arm64, x86-64, GPU, or accelerator-equipped
-    nodes join the same inventory and compatibility model.
+3. Add precomputed embeddings and vector or hybrid retrieval only on compatible node profiles.
+4. Evaluate separate modules for OCR and screenshots, PDF extraction, geospatial operations, and
+   curated Wikipedia data.
+5. Support heavier ML and vision workloads as suitable arm64, x86-64, GPU, or accelerator-equipped
+   nodes join the same inventory and compatibility model.
+6. Declare background calls for `image-processing` batch work and add a corpus refresh tool for
+   `corpus-search`; both can use the existing background-call mechanism.
 
 Persistent Python sessions, caller-installed dependencies, network access from submitted code,
 authenticated browser sessions, scripted browser interaction, and browser-generated binary outputs

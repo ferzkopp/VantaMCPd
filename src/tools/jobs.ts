@@ -2,6 +2,7 @@ import { z } from "zod";
 import { resolveTargets } from "../config.js";
 import { errorText, json } from "../format.js";
 import { JOB_ID } from "../jobs/types.js";
+import { normalizeModuleOutput } from "../modules/manager.js";
 import { targetsSchema, type ToolContext, type ToolServer } from "./context.js";
 
 export function registerJobTools(server: ToolServer, ctx: ToolContext): void {
@@ -25,12 +26,21 @@ export function registerJobTools(server: ToolServer, ctx: ToolContext): void {
     "cluster_get_job",
     {
       title: "Get durable cluster job",
-      description: "Refresh and return one durable job's state, phase, progress, and terminal result.",
-      inputSchema: { jobId: z.string().regex(JOB_ID) },
+      description:
+        "Refresh and return one durable job's state, phase, progress, and terminal result. Set includeResult=true " +
+        "after a background module call settles to receive the tool output.",
+      inputSchema: {
+        jobId: z.string().regex(JOB_ID),
+        includeResult: z.boolean().default(false).describe("Include the published tool result of a settled background call."),
+      },
     },
-    async ({ jobId }) => {
+    async ({ jobId, includeResult }) => {
       try {
-        return json(await ctx.jobs.get(jobId));
+        if (!includeResult) return json(await ctx.jobs.get(jobId));
+        const { job, result } = await ctx.jobs.result(jobId);
+        if (result === undefined) return json(job);
+        const parsed = JSON.parse(result) as { isError?: unknown };
+        return json({ ...job, callResult: { ok: parsed.isError !== true, output: normalizeModuleOutput(parsed) } });
       } catch (error) {
         return errorText(error);
       }

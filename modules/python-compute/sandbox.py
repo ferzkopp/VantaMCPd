@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import time
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 import artifact_io
 
@@ -146,7 +146,7 @@ class Sandbox:
             raise ValueError(outcome.get("error", {}).get("message") or "import check failed")
         return {"imports": outcome.get("imports", []), "durationMs": outcome["durationMs"]}
 
-    def run(self, request: dict[str, Any]) -> dict[str, Any]:
+    def run(self, request: dict[str, Any], abandoned: Callable[[], bool] | None = None) -> dict[str, Any]:
         call_dir = os.path.join(self.calls_dir, uuid.uuid4().hex)
         workspace = os.path.join(call_dir, "workspace")
         os.makedirs(workspace, mode=0o700)
@@ -167,7 +167,7 @@ class Sandbox:
                 reservation_id = artifact_io.reserve(self.artifact_root, "python-compute", request["artifactBudgetBytes"])
             with open(os.path.join(call_dir, "request.json"), "w", encoding="utf-8") as handle:
                 json.dump(request, handle, ensure_ascii=False)
-            outcome = self._execute(call_dir, workspace, request)
+            outcome = self._execute(call_dir, workspace, request, abandoned)
             if request.get("artifactMode") == "store":
                 outcome["artifacts"] = artifact_io.publish(self.artifact_root, reservation_id, "python-compute", outcome.pop("artifactFiles", []), workspace, request["artifactRetentionDays"])
                 reservation_id = None
@@ -184,11 +184,13 @@ class Sandbox:
         else:
             os.makedirs(target, mode=0o700)
 
-    def _execute(self, call_dir: str, workspace: str, request: dict[str, Any]) -> dict[str, Any]:
+    def _execute(self, call_dir: str, workspace: str, request: dict[str, Any], abandoned: Callable[[], bool] | None = None) -> dict[str, Any]:
         timeout_seconds = request["timeoutMs"] / 1000
         argv = build_limited_argv(request["memoryMb"], timeout_seconds) + build_bwrap_argv(call_dir, self.runner_path, has_inputs=bool(request.get("artifactInputs")))
         started = time.monotonic()
+        deadline = started + timeout_seconds + GRACE_SECONDS
         killed = False
+        disconnected = False
         process = subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
@@ -198,18 +200,28 @@ class Sandbox:
             cwd=self.state_dir,
             start_new_session=True,
         )
-        try:
-            process_stdout, process_stderr = process.communicate(timeout=timeout_seconds + GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            killed = True
-            self._terminate(process)
-            process_stdout, process_stderr = process.communicate()
+        # Wake every second so a caller that went away (a canceled background job) stops its sandbox
+        # instead of holding a slot until the timeout. communicate() may be retried without losing output.
+        while True:
+            try:
+                process_stdout, process_stderr = process.communicate(timeout=max(0.01, min(1.0, deadline - time.monotonic())))
+                break
+            except subprocess.TimeoutExpired:
+                disconnected = abandoned is not None and abandoned()
+                if disconnected or time.monotonic() >= deadline:
+                    killed = not disconnected
+                    self._terminate(process)
+                    process_stdout, process_stderr = process.communicate()
+                    break
         duration_ms = round((time.monotonic() - started) * 1000)
 
         outcome = self._collect(workspace, request)
         outcome["durationMs"] = outcome.get("durationMs") or duration_ms
         outcome["totalDurationMs"] = duration_ms
-        if outcome.get("exitReason") is None:
+        if disconnected:
+            outcome["exitReason"] = "killed"
+            outcome["error"] = {"type": "SandboxError", "message": "the caller disconnected, so the sandboxed process was stopped", "traceback": ""}
+        elif outcome.get("exitReason") is None:
             diagnostics = (process_stderr or b"")[:MAX_PROCESS_OUTPUT_BYTES].decode("utf-8", errors="replace").strip()
             outcome["exitReason"] = "timeout" if killed else ("memory" if process.returncode == -9 else "killed")
             outcome["error"] = {

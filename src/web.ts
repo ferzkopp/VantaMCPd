@@ -15,8 +15,14 @@ import type { ModuleManager, NodeModuleInventory } from "./modules/manager.js";
 const BIND_HOST = "127.0.0.1";
 const MODULE_REFRESH_MS = 60 * 60 * 1000;
 
+const JOB_TOOL_NAMES: Record<string, string> = {
+  "module-install": "cluster_install_module",
+  "module-call": "cluster_call_module_tool",
+  apt: "cluster_packages",
+};
+
 function jobToolName(kind: string): string {
-  return kind === "module-install" ? "cluster_install_module" : `cluster_${kind.replaceAll("-", "_")}`;
+  return Object.hasOwn(JOB_TOOL_NAMES, kind) ? JOB_TOOL_NAMES[kind]! : `cluster_${kind.replaceAll("-", "_")}`;
 }
 
 /**

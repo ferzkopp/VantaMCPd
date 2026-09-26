@@ -198,21 +198,28 @@ export function registerModuleTools(server: ToolServer, ctx: ToolContext): void 
         offered +
         "Use cluster_list_module_tools for the exact operation names and argument schemas. Call it before " +
         "retrying whenever a module tool rejects an argument or returns an empty result, because module tools " +
-        "accept options and query syntax that this description does not repeat.",
+        "accept options and query syntax that this description does not repeat. " +
+        "Tools listed with execution \"optional\" or \"required\" can run as a durable background job with " +
+        "execution=\"background\": use it for long computations, then poll cluster_get_job and read the output with includeResult.",
       inputSchema: {
         moduleId: z.string().describe("Installed module ID."),
         target: z.string().optional().describe("Optional explicit node name; omit to use module routing."),
         toolName: z.string().describe("Tool name advertised by cluster_list_module_tools."),
         arguments: z.record(z.unknown()).default({}).describe("Arguments passed to the remote module tool."),
+        execution: z
+          .enum(["immediate", "background"])
+          .default("immediate")
+          .describe("immediate returns the result; background submits a durable job and returns its jobId."),
       },
     },
-    async ({ moduleId, target, toolName, arguments: args }) => {
+    async ({ moduleId, target, toolName, arguments: args, execution }) => {
       try {
         const result = await ctx.modules.callTool(
           moduleId,
           target === undefined ? undefined : resolveSingleTarget(ctx, target),
           toolName,
           args,
+          execution,
         );
         return json(result, !result.ok);
       } catch (err) {

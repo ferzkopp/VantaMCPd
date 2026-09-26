@@ -13,15 +13,17 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
-from schemas import TOOLS, self_test as schemas_self_test
+from schemas import MAX_BACKGROUND_TIMEOUT_MS, TOOLS, self_test as schemas_self_test
 
 PROTOCOL_VERSION = "2025-06-18"
-VERSION = "0.2.4"
+VERSION = "0.3.1"
 SOCKET_PATH = "/run/vantamcpd-python/python.sock"
 MAX_BROKER_MESSAGE = 2_000_000
 MAX_RESPONSE_BYTES = 2_000_000
 # Headroom for the JSON-RPC envelope written around the tool content on stdout.
 RESPONSE_ENVELOPE_RESERVE = 256
+# The broker enforces the node's own background ceiling; this only has to outlast the longest allowed run.
+BACKGROUND_SOCKET_TIMEOUT = MAX_BACKGROUND_TIMEOUT_MS / 1000 + 120
 
 INSTRUCTIONS = (
     "Call python_env before writing code to learn which modules the node provides. Submitted code runs in a "
@@ -41,8 +43,11 @@ def _receive_exact(connection: socket.socket, size: int) -> bytes:
     return b"".join(chunks)
 
 
-def broker_call(action: str, arguments: dict[str, Any], timeout: float = 650.0) -> dict[str, Any]:
-    payload = json.dumps({"action": action, "arguments": arguments}, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+def broker_call(action: str, arguments: dict[str, Any], timeout: float = 650.0, execution: str = "immediate") -> dict[str, Any]:
+    request = {"action": action, "arguments": arguments}
+    if execution != "immediate":
+        request["execution"] = execution
+    payload = json.dumps(request, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     if len(payload) > 524_288:
         raise ValueError("request is too large")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -122,7 +127,12 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
             arguments = parameters.get("arguments", {})
             if not isinstance(arguments, dict):
                 raise ValueError("arguments must be an object")
-            result = tool_result(broker_call(name, arguments))
+            meta = parameters.get("_meta")
+            background = isinstance(meta, dict) and meta.get("vantamcpd/execution") == "background"
+            if background:
+                result = tool_result(broker_call(name, arguments, timeout=BACKGROUND_SOCKET_TIMEOUT, execution="background"))
+            else:
+                result = tool_result(broker_call(name, arguments))
         else:
             return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": f"method not found: {method}"}}
         return {"jsonrpc": "2.0", "id": request_id, "result": result}

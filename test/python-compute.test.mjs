@@ -53,6 +53,54 @@ test("Python Compute confines every submitted call to a network-free sandbox", (
   assert.ok(limits.includes("--as=268435456") && limits.includes("--core=0"));
 });
 
+test("Python Compute forwards background execution to the broker only when the daemon marks it", () => {
+  assert.ok(pythonCommand, "Python 3 is required to test python-compute");
+  const generated = spawnSync(pythonCommand, ["-B", "-c", [
+    "import json, server",
+    "seen = []",
+    "server.broker_call = lambda action, arguments, timeout=650.0, execution='immediate': seen.append({'execution': execution, 'timeout': timeout}) or {'ok': True}",
+    "call = lambda meta: server.handle_request({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'python_run', 'arguments': {'code': 'x'}, **meta}})",
+    "call({})",
+    "call({'_meta': {'vantamcpd/execution': 'background'}})",
+    "call({'_meta': {'vantamcpd/execution': 'something-else'}})",
+    "print(json.dumps(seen))",
+  ].join("\n")], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
+  assert.equal(generated.status, 0, generated.stderr || generated.error?.message);
+  const seen = JSON.parse(generated.stdout);
+  assert.deepEqual(seen.map((call) => call.execution), ["immediate", "background", "immediate"]);
+  assert.equal(seen[0].timeout, 650);
+  assert.ok(seen[1].timeout > 21_600, "a background call must be allowed to outlast the 6 h ceiling");
+});
+
+test("Python Compute stops a sandbox as soon as its caller disconnects", () => {
+  assert.ok(pythonCommand, "Python 3 is required to test python-compute");
+  const generated = spawnSync(pythonCommand, ["-B", "-c", [
+    "import json, sys, time",
+    "import sandbox",
+    // A plain sleeping child stands in for bwrap so the wait loop can be exercised on any host.
+    "sandbox.build_limited_argv = lambda memory, timeout: []",
+    "sandbox.build_bwrap_argv = lambda *args, **kwargs: [sys.executable, '-c', 'import time; time.sleep(60)']",
+    "box = sandbox.Sandbox.__new__(sandbox.Sandbox)",
+    "box.state_dir, box.install_dir, box.isolation = '.', '.', {}",
+    "box._terminate = lambda process: process.kill()",
+    "box._collect = lambda workspace, request: {'exitReason': None}",
+    "polls = []",
+    "started = time.monotonic()",
+    "outcome = box._execute('.', '.', {'timeoutMs': 60000, 'memoryMb': 128}, lambda: polls.append(1) or len(polls) >= 2)",
+    "print(json.dumps({'seconds': time.monotonic() - started, 'exitReason': outcome['exitReason'], 'message': outcome['error']['message']}))",
+  ].join("\n")], {
+    cwd: moduleDirectory,
+    encoding: "utf8",
+    timeout: 30_000,
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", PYTHONPATH: path.dirname(moduleDirectory) },
+  });
+  assert.equal(generated.status, 0, generated.stderr || generated.error?.message);
+  const outcome = JSON.parse(generated.stdout);
+  assert.ok(outcome.seconds < 10, `the sandbox must stop within seconds, not at its 60 s timeout (${outcome.seconds}s)`);
+  assert.equal(outcome.exitReason, "killed");
+  assert.match(outcome.message, /caller disconnected/);
+});
+
 test("Python Compute mounts only selected artifact inputs read-only", () => {
   assert.ok(pythonCommand, "Python 3 is required to test python-compute");
   const generated = spawnSync(pythonCommand, ["-B", "-c", [
@@ -140,11 +188,15 @@ test("Python Compute sizes its limits on the node and applies matching cgroup ca
 
 test("Python Compute declares a job-backed service manifest with bundle options", () => {
   const manifest = JSON.parse(readFileSync(path.join(moduleDirectory, "module.json"), "utf8"));
-  assert.equal(manifest.version, "0.2.4");
+  assert.equal(manifest.version, "0.3.1");
   assert.equal(manifest.schemaVersion, 2);
   assert.equal(manifest.lifecycle.execution.mode, "job");
   assert.equal(manifest.runtime.mode, "service");
   assert.equal(manifest.deployment.mode, "replicated");
+  assert.deepEqual(manifest.background.tools, { python_run: "optional" }, "only python_run may run as a background job");
+  assert.ok(manifest.background.maxTimeoutMs > manifest.installOptions.maxBackgroundTimeoutMs.maximum, "the job must outlast the longest run");
+  assert.equal(manifest.installOptions.maxBackgroundTimeoutMs.default, 3_600_000);
+  assert.equal(manifest.installOptions.maxBackgroundTimeoutMs.maximum, 21_600_000);
   assert.deepEqual(manifest.artifactAccess, { read: true, write: true });
   assert.equal(manifest.persistentData, undefined, "submitted code must not keep state between calls");
   assert.deepEqual(manifest.installOptions.bundle.values, ["core", "science", "full"]);

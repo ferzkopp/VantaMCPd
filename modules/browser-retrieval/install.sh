@@ -41,11 +41,18 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$tmp/server.py" --self-test
 PYTHONDONTWRITEBYTECODE=1 python3 "$tmp/browser.py"
 
 chown -R "$service_user:$service_user" "$smoke_dir"
+smoke_status=0
 runuser -u "$service_user" -- env HOME="$smoke_dir" timeout 25s chromium \
 	--headless=new --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check \
 	--user-data-dir="$smoke_dir/profile" --dump-dom 'data:text/html,<title>VantaBrowserSmoke</title><p>ready</p>' \
-	> "$smoke_dir/output" 2> "$smoke_dir/error"
-grep -q 'VantaBrowserSmoke' "$smoke_dir/output"
+	> "$smoke_dir/output" 2> "$smoke_dir/error" || smoke_status=$?
+if ! grep -q 'VantaBrowserSmoke' "$smoke_dir/output"; then
+	# The EXIT trap deletes this directory, so echo Chromium's own error before it is lost.
+	echo "browser-retrieval: Chromium smoke test failed (exit $smoke_status)." >&2
+	echo "browser-retrieval: confirm the node permits unprivileged user namespaces." >&2
+	tail -c 2000 "$smoke_dir/error" >&2
+	exit 1
+fi
 
 rm -rf "$VANTA_MODULE_INSTALL_DIR"
 mv "$tmp" "$VANTA_MODULE_INSTALL_DIR"

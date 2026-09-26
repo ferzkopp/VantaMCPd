@@ -114,6 +114,54 @@ assignment with centroids.
 
 Ask for a longer `timeoutMs` explicitly when the work warrants it; the default is 60 seconds.
 
+**Background work** (minutes to hours, as a durable job)
+
+> In the background on compute-worker, estimate π by Monte Carlo for 150 seconds in batches of two
+> million samples, chart the running estimate on a log axis against the true value, and give me the
+> final estimate and its error when the job finishes.
+
+The agent submits `python_run` with `execution: "background"` and a `timeoutMs` above the interactive
+10-minute cap, receives a job ID at once, and collects the output after the job settles:
+
+```text
+cluster_call_module_tool { moduleId: "python-compute", target: "compute-worker", toolName: "python_run",
+                           execution: "background",
+                           arguments: { code: "...", inputs: { seconds: 150 }, timeoutMs: 900000 } }
+  -> { execution: "background", state: "queued", jobId: "1b9cc701-...", node: "compute-worker" }
+cluster_get_job { jobId: "1b9cc701-..." }                       # status: running, phase: calling
+cluster_get_job { jobId: "1b9cc701-...", includeResult: true }  # status: succeeded, callResult: {...}
+```
+
+```python
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(42)
+batch, inside, total, history = 2_000_000, 0, 0, []
+start = time.monotonic()
+while time.monotonic() - start < inputs["seconds"]:
+    x, y = rng.random(batch), rng.random(batch)
+    inside += int(np.count_nonzero(x * x + y * y <= 1.0))
+    total += batch
+    history.append((total, 4 * inside / total))
+
+samples, estimates = zip(*history)
+figure, axes = plt.subplots(figsize=(6, 3))
+axes.semilogx(samples, estimates)
+axes.axhline(np.pi, color="red", linewidth=0.8)
+axes.set_xlabel("samples")
+axes.set_ylabel("estimate of pi")
+estimate = estimates[-1]
+vanta.result({"samples": total, "estimate": estimate, "absError": abs(estimate - np.pi), "batches": len(history)})
+```
+
+On the four-core AMD64 worker the job ran 4,222 batches, 8.44 billion samples, in 150 seconds and
+returned `estimate 3.1415454` (`absError 4.7e-5`) with a 28.6 KB convergence chart. The loop is bounded
+by time rather than by sample count, so the same request finishes in 150 seconds on any node; a slower
+board simply returns a less precise estimate. While the job runs, interactive `python_run` calls on the
+same node keep working. See [Background calls](#background-calls) for the limits.
+
 Naming the module is optional. The manifest advertises what it can do, so an agent connected to
 VantaMCPd routes calculation, data analysis, and charting requests here on its own. Name it explicitly
 when a specific node matters or when a request could plausibly be answered without it:
@@ -152,7 +200,7 @@ Runs submitted code and returns its output.
 | `artifactMode` | `inline` | `inline` returns base64; `store` commits emitted files to shared storage |
 | `artifactBudgetBytes` | 32 MiB | Reservation for stored outputs, up to 64 MiB total |
 | `artifactRetentionDays` | `7` | Stored output lifetime, from 1 to 90 days |
-| `timeoutMs` | node-sized | 1000 ms to the node's ceiling, at most 600000 |
+| `timeoutMs` | node-sized | 1000 ms to the node's ceiling, at most 600000; in the background, up to the background ceiling, which is also the default |
 | `memoryMb` | node-sized | 128 MB to the node's ceiling, at most 4096 |
 | `artifacts` | `true` | Return emitted files and captured figures |
 | `maxStdoutBytes` | `65536` | 1024-262144 bytes retained from stdout and from stderr |
@@ -233,7 +281,7 @@ the service cgroup stops the process first.
 | Per-call ceiling | `MemoryHigh` divided by the concurrency, capped at 4096 MB |
 | Per-call default | Two thirds of that ceiling |
 | Calls per minute | 12 per concurrent call |
-| CPU and tasks | `CPUQuota` of `(cores - 1) x 100%`, minimum 100%; `TasksMax` of `64 x concurrency + 32` |
+| CPU and tasks | `CPUQuota` of `(cores - 1) x 100%`, minimum 100%; `TasksMax` of `64 x (concurrency + 1) + 32`, which leaves room for the background slot |
 
 For example, a 1 GB dual-core board resolves to 400 MB per call with a 600 MB ceiling and one call at a
 time, while a 4 GB quad-core worker resolves to 784 MB per call with a 1176 MB ceiling, two concurrent
@@ -250,6 +298,7 @@ derivation, still clamped to the manifest bounds.
 | `memoryMb` | 128-4096 | Default per-call address-space limit |
 | `maxMemoryMb` | 128-4096 | Highest per-call limit a caller may request |
 | `maxTimeoutMs` | 1000-600000 | Highest per-call wall-clock limit a caller may request |
+| `maxBackgroundTimeoutMs` | 60000-21600000 | Highest wall-clock limit, and the default, for a background `python_run`; 1 hour if omitted |
 | `concurrentCalls` | 1-4 | Calls the node runs at once |
 | `callsPerMinute` | 1-120 | Calls the node accepts per minute |
 
@@ -302,7 +351,8 @@ A broker runs one call at a time on a small node, and two on a node with four or
 arrives when every slot is busy waits about five seconds and is then rejected rather than queued. Each
 call is additionally limited to:
 
-- 10 minutes of wall-clock time at most, and the node's per-call memory ceiling;
+- 10 minutes of wall-clock time at most for an interactive call (background calls use the background
+  ceiling), and the node's per-call memory ceiling;
 - 32 MB of files written inside the working directory;
 - 8 inline artifacts, 1 MB each and 1.5 MB total, or stored artifacts up to 32 MiB each and a 64 MiB reserved total;
 - 256 KiB of retained stdout and stderr; and
@@ -311,7 +361,33 @@ call is additionally limited to:
 Ask `python_env` for `describe` to read the node's actual numbers; a call rejected by a limit also
 returns the full `limits` block. A long call holds a slot for its whole duration, so prefer an explicit
 `timeoutMs` close to the work actually expected. The agent's own client may impose a shorter tool-call
-timeout than 10 minutes.
+timeout than 10 minutes; a background call avoids that limit entirely.
+
+### Background calls
+
+`python_run` may be submitted through `cluster_call_module_tool` with `execution: "background"`. The
+call returns a job ID at once and runs as a durable job on the node, so it survives SSH drops and
+VantaMCPd restarts:
+
+1. Submit the call with `execution: "background"` and, optionally, a `timeoutMs` up to the node's
+   background ceiling. Omitting `timeoutMs` grants the full ceiling (1 hour unless the
+   `maxBackgroundTimeoutMs` install option changes it, at most 6 hours).
+2. Poll `cluster_get_job` with the returned `jobId`.
+3. Once the job has settled, call `cluster_get_job` with `includeResult: true` for the same result an
+   interactive call returns.
+
+Background calls use their own broker slot, so interactive calls keep working while one runs, and they
+do not count toward `callsPerMinute`. Each node runs one background call at a time; automatic routing
+sends another to a replica without one. The node must have at least 256 MB available memory at
+submission, and it rejects the job at its per-node job limit. Both kinds of call share the service's
+`MemoryMax`, so on a 1 GB board keep interactive calls small while a background call runs.
+
+Prefer `artifactMode: "store"` for large background outputs. The stored result is kept for the job
+retention period (7 days by default), and stored artifacts follow their own `artifactRetentionDays`.
+If the node or its job runner restarts mid-run, the job fails rather than running the code twice.
+`cluster_cancel_job` stops the sandbox within about a second and frees the background slot; the broker
+likewise stops any call, interactive or background, whose caller disconnects.
+`python_env` is interactive only.
 
 Node choice dominates everything else. The same worked example runs roughly five to fifteen times faster
 on a four-core AMD64 worker than on a 960 MHz ARMv7 board, and imports account for most of that gap on

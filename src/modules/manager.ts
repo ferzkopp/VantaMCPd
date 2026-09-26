@@ -7,12 +7,13 @@ import { aptGet, aptUpdate } from "../apt.js";
 import { setCurrentAuditResult } from "../audit.js";
 import type { ClusterConfig, ResolvedNode } from "../config.js";
 import { parseKeyValueLines } from "../format.js";
-import { isTerminalJobStatus } from "../jobs/types.js";
-import type { JobManager } from "../jobs/manager.js";
+import { isTerminalJobStatus, type JobState } from "../jobs/types.js";
+import { MODULE_CALL_PATH, type JobManager } from "../jobs/manager.js";
 import { q } from "../security.js";
 import { mapLimit, type ExecResult, type SshPool } from "../ssh.js";
 import { loadModuleCatalog, type ModuleCatalog, type ModulePackage } from "./catalog.js";
 import { evaluateCompatibility, type CompatibilityResult } from "./compatibility.js";
+import { toolExecutionPolicy } from "./manifest.js";
 import { SshMcpTransport } from "./ssh-transport.js";
 
 export interface ModuleNodeCheck {
@@ -73,6 +74,23 @@ export interface ModuleToolCallResult {
   output: unknown;
 }
 
+export interface ModuleBackgroundCallResult {
+  ok: true;
+  execution: "background";
+  state: "queued";
+  jobId: string;
+  node: string;
+  moduleId: string;
+  moduleVersion: string;
+  toolName: string;
+  deployment: ModulePackage["manifest"]["deployment"];
+  selection: "explicit" | "automatic";
+  maxRuntimeMs: number;
+  next: string;
+}
+
+export type ModuleCallExecution = "immediate" | "background";
+
 export interface NodeModuleInventory {
   node: string;
   reachable: boolean;
@@ -99,6 +117,13 @@ type ModuleInventoryChangeListener = () => void;
 
 const ARTIFACT_RELATIVE_PATH = "vantamcpd/artifacts";
 const ARTIFACT_PROTOCOL_VERSION = "1";
+const BACKGROUND_GRACE_MS = 60_000;
+const MAX_JOB_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1_000;
+
+/** One durable job per module per node; install and background calls share this key so they exclude each other. */
+function moduleJobKey(moduleId: string, node: ResolvedNode): string {
+  return `module:${moduleId}:${node.name}`;
+}
 
 const InstallationReceiptSchema = z.object({
   schemaVersion: z.literal(1),
@@ -127,7 +152,7 @@ function fastPut(sftp: SFTPWrapper, localPath: string, remotePath: string): Prom
   });
 }
 
-function normalizeModuleOutput(result: unknown): unknown {
+export function normalizeModuleOutput(result: unknown): unknown {
   if (typeof result !== "object" || result === null) return result;
   const record = result as Record<string, unknown>;
   if (record.structuredContent !== undefined) return record.structuredContent;
@@ -396,8 +421,19 @@ export class ModuleManager {
         }),
       ]));
       await this.assertInstallPlacement(modulePackage, nodes, timeoutMs);
+      const busyJobs = await this.activeModuleJobs(moduleId, nodes);
       const checks = await this.check(moduleId, nodes, Math.min(timeoutMs, 30_000));
       const results = await mapLimit(nodes, this.config.maxConcurrency, async (node, index) => {
+        const busy = busyJobs.get(node.name);
+        if (busy) {
+          return {
+            node: node.name,
+            ok: false,
+            moduleId,
+            version: modulePackage.manifest.version,
+            error: `module is busy with ${busy.kind} job ${busy.jobId} (${busy.status}); retry after it finishes`,
+          };
+        }
         let check = checks[index] as ModuleNodeCheck;
         if (!check.reachable) {
           return { node: node.name, ok: false, moduleId, version: modulePackage.manifest.version, error: check.error };
@@ -493,6 +529,7 @@ export class ModuleManager {
     const selectedNode = node ?? await this.selectInstalledNode(modulePackage, false);
     return this.withClient(modulePackage, selectedNode, async (client, timeout) => {
       const result = await client.listTools({}, { timeout, maxTotalTimeout: timeout });
+      const { background } = modulePackage.manifest;
       return {
         node: selectedNode.name,
         moduleId,
@@ -500,7 +537,8 @@ export class ModuleManager {
         deployment: modulePackage.manifest.deployment,
         selection,
         server: client.getServerVersion(),
-        tools: result.tools,
+        ...(background ? { background: { maxRuntimeMs: background.maxTimeoutMs, minFreeMemoryMb: background.minFreeMemoryMb } } : {}),
+        tools: result.tools.map((tool) => ({ ...tool, execution: toolExecutionPolicy(modulePackage.manifest, tool.name) })),
       };
     });
   }
@@ -617,8 +655,36 @@ export class ModuleManager {
     node: ResolvedNode | undefined,
     toolName: string,
     args: Record<string, unknown>,
-  ): Promise<ModuleToolCallResult> {
+  ): Promise<ModuleToolCallResult>;
+  async callTool(
+    moduleId: string,
+    node: ResolvedNode | undefined,
+    toolName: string,
+    args: Record<string, unknown>,
+    execution: ModuleCallExecution,
+  ): Promise<ModuleToolCallResult | ModuleBackgroundCallResult>;
+  async callTool(
+    moduleId: string,
+    node: ResolvedNode | undefined,
+    toolName: string,
+    args: Record<string, unknown>,
+    execution: ModuleCallExecution = "immediate",
+  ): Promise<ModuleToolCallResult | ModuleBackgroundCallResult> {
     const modulePackage = this.get(moduleId);
+    const policy = toolExecutionPolicy(modulePackage.manifest, toolName);
+    if (execution === "immediate" && policy === "required") {
+      throw new Error(`${moduleId} tool ${toolName} runs only in the background; call it again with execution: "background".`);
+    }
+    if (execution === "background") {
+      if (policy === "immediate") {
+        const allowed = Object.keys(modulePackage.manifest.background?.tools ?? {}).sort();
+        throw new Error(
+          `${moduleId} tool ${toolName} does not support background execution. ` +
+            (allowed.length > 0 ? `Background-capable tools: ${allowed.join(", ")}.` : `${moduleId} declares no background-capable tools.`),
+        );
+      }
+      return this.submitBackgroundCall(modulePackage, node, toolName, args);
+    }
     const selection = node === undefined ? "automatic" : "explicit";
     await this.waitForModuleMutation(moduleId);
     const selectedNode = node ?? await this.selectInstalledNode(modulePackage, true);
@@ -664,6 +730,76 @@ export class ModuleManager {
     };
   }
 
+  private async submitBackgroundCall(
+    modulePackage: ModulePackage,
+    node: ResolvedNode | undefined,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<ModuleBackgroundCallResult> {
+    const { id, limits, background } = modulePackage.manifest;
+    if (!this.jobs) throw new Error("durable job manager is unavailable");
+    if (!background) throw new Error(`${id} declares no background-capable tools.`);
+    const argumentBytes = Buffer.byteLength(JSON.stringify(args), "utf8");
+    if (argumentBytes > limits.maxInputBytes) {
+      throw new Error(`Arguments are ${argumentBytes} bytes and exceed the ${limits.maxInputBytes}-byte input limit of ${id}.`);
+    }
+    await this.waitForModuleMutation(id);
+    let selectedNode = node;
+    if (!selectedNode) {
+      const candidates = this.config.nodes;
+      const busy = new Set((await this.activeModuleJobs(id, candidates)).keys());
+      selectedNode = await this.selectInstalledNode(modulePackage, true, busy);
+    }
+    const receipt = await this.readInstalledReceipt(modulePackage, selectedNode);
+    const job = await this.jobs.submit(selectedNode, {
+      kind: "module-call",
+      moduleId: id,
+      resourceKeys: [moduleJobKey(id, selectedNode)],
+      command: ["/usr/bin/python3", MODULE_CALL_PATH],
+      cwd: receipt.installDirectory,
+      environment: this.moduleEnvironment(modulePackage, selectedNode),
+      timeoutMs: Math.min(background.maxTimeoutMs + limits.startupMs + BACKGROUND_GRACE_MS, MAX_JOB_TIMEOUT_MS),
+      runAsNodeUser: true,
+      rerunOnRestart: false,
+      minFreeMemoryMb: background.minFreeMemoryMb,
+      maxResultBytes: Math.max(limits.maxOutputBytes, 1_024),
+      input: JSON.stringify({
+        moduleId: id,
+        entrypoint: receipt.entrypoint,
+        toolName,
+        arguments: args,
+        startupMs: limits.startupMs,
+        callMs: background.maxTimeoutMs,
+        maxOutputBytes: limits.maxOutputBytes,
+      }),
+    });
+    return {
+      ok: true,
+      execution: "background",
+      state: "queued",
+      jobId: job.jobId,
+      node: selectedNode.name,
+      moduleId: id,
+      moduleVersion: modulePackage.manifest.version,
+      toolName,
+      deployment: modulePackage.manifest.deployment,
+      selection: node === undefined ? "automatic" : "explicit",
+      maxRuntimeMs: background.maxTimeoutMs,
+      next: "Poll cluster_get_job with this jobId; once it has settled, call it with includeResult: true for the tool output.",
+    };
+  }
+
+  /** Non-terminal durable jobs for one module, keyed by node name. */
+  private async activeModuleJobs(moduleId: string, nodes: ResolvedNode[]): Promise<Map<string, JobState>> {
+    const active = new Map<string, JobState>();
+    if (!this.jobs) return active;
+    const listed = await this.jobs.list(nodes);
+    for (const job of listed.jobs) {
+      if (job.moduleId === moduleId && !isTerminalJobStatus(job.status)) active.set(job.targetNode, job);
+    }
+    return active;
+  }
+
   private async assertInstallPlacement(
     modulePackage: ModulePackage,
     nodes: ResolvedNode[],
@@ -702,21 +838,32 @@ export class ModuleManager {
     if (active) throw new Error(`Module ${moduleId} is busy with job ${active.jobId} (${active.status}).`);
   }
 
-  private async selectInstalledNode(modulePackage: ModulePackage, advance: boolean): Promise<ResolvedNode> {
+  private async selectInstalledNode(
+    modulePackage: ModulePackage,
+    advance: boolean,
+    busy: ReadonlySet<string> = new Set(),
+  ): Promise<ResolvedNode> {
     const { id, deployment } = modulePackage.manifest;
     const inventory = await this.installedModules(this.config.nodes);
-    const candidates = inventory
+    const installed = inventory
       .filter((item) => item.reachable && item.modules?.includes(id))
       .map((item) => this.config.nodes.find((node) => node.name === item.node))
       .filter((node): node is ResolvedNode => node !== undefined);
 
-    if (candidates.length === 0) {
+    if (installed.length === 0) {
       const unreachable = inventory.filter((item) => !item.reachable).map((item) => item.node);
       const detail = unreachable.length > 0 ? `; unreachable nodes: ${unreachable.join(", ")}` : "";
       throw new Error(`Module ${id} has no reachable installation${detail}.`);
     }
-    if (deployment.mode === "singleton" && candidates.length > 1) {
-      throw new Error(`Singleton module ${id} has duplicate installations on ${candidates.map((node) => node.name).join(", ")}.`);
+    if (deployment.mode === "singleton" && installed.length > 1) {
+      throw new Error(`Singleton module ${id} has duplicate installations on ${installed.map((node) => node.name).join(", ")}.`);
+    }
+    const candidates = installed.filter((node) => !busy.has(node.name));
+    if (candidates.length === 0) {
+      throw new Error(
+        `Every installation of ${id} is busy with a durable job (${installed.map((node) => node.name).join(", ")}); ` +
+          `retry after one finishes.`,
+      );
     }
     if (!advance || candidates.length === 1) return candidates[0] as ResolvedNode;
 
@@ -749,14 +896,7 @@ export class ModuleManager {
     for (const listener of this.inventoryChangeListeners) listener();
   }
 
-  private async withClient<T>(
-    modulePackage: ModulePackage,
-    node: ResolvedNode,
-    operation: (client: Client, timeoutMs: number) => Promise<T>,
-  ): Promise<T> {
-    const receipt = await this.readInstalledReceipt(modulePackage, node);
-    const { limits } = modulePackage.manifest;
-    const command = receipt.entrypoint.map(q).join(" ");
+  private moduleEnvironment(modulePackage: ModulePackage, node: ResolvedNode): Record<string, string> {
     const data = modulePackage.manifest.persistentData;
     if (data && !node.storage) {
       throw new Error(`Module ${modulePackage.manifest.id} requires configured node-local storage on ${node.name}.`);
@@ -768,6 +908,18 @@ export class ModuleManager {
       environment.VANTA_MODULE_RUN_AS = node.user;
     }
     Object.assign(environment, this.artifactEnvironment(modulePackage, node));
+    return environment;
+  }
+
+  private async withClient<T>(
+    modulePackage: ModulePackage,
+    node: ResolvedNode,
+    operation: (client: Client, timeoutMs: number) => Promise<T>,
+  ): Promise<T> {
+    const receipt = await this.readInstalledReceipt(modulePackage, node);
+    const { limits } = modulePackage.manifest;
+    const command = receipt.entrypoint.map(q).join(" ");
+    const environment = this.moduleEnvironment(modulePackage, node);
     const transport = new SshMcpTransport(
       () => this.pool.openProcess(node, command, {
         cwd: receipt.installDirectory,
@@ -1065,7 +1217,7 @@ export class ModuleManager {
           const job = await this.jobs.submit(node, {
             kind: "module-install",
             moduleId: id,
-            resourceKeys: [`module:${id}:${node.name}`],
+            resourceKeys: [moduleJobKey(id, node)],
             command: ["/bin/bash", scriptPath],
             cwd: durableStage,
             environment: {

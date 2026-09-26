@@ -44,7 +44,9 @@
     "retentionDays": 7,
     "pollIntervalMs": 60000,
     "cancelGraceMs": 5000,
-    "maxLogBytes": 1000000
+    "maxLogBytes": 1000000,
+    "maxConcurrentPerNode": 2,
+    "perNode": {}
   },
   "artifacts": {
     "enabled": false,

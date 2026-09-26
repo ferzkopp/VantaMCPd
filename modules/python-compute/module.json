@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "python-compute",
   "name": "Python Compute",
-  "version": "0.2.4",
+  "version": "0.3.1",
   "description": "Run bounded Python 3 code in a sandboxed process with a curated scientific package set.",
   "capabilities": [
     "calculate, solve equations and simulate instead of estimating an answer",
@@ -59,6 +59,13 @@
       "minimum": 1000,
       "maximum": 600000
     },
+    "maxBackgroundTimeoutMs": {
+      "type": "integer",
+      "description": "Highest wall-clock limit for a python_run submitted as a background job, and its default. Omit for 1 hour.",
+      "minimum": 60000,
+      "maximum": 21600000,
+      "default": 3600000
+    },
     "concurrentCalls": {
       "type": "integer",
       "description": "Calls this node runs at once. Omit to size it from the node's CPU cores.",
@@ -73,6 +80,11 @@
     }
   },
   "deployment": { "mode": "replicated", "routing": "round-robin" },
+  "background": {
+    "tools": { "python_run": "optional" },
+    "maxTimeoutMs": 22500000,
+    "minFreeMemoryMb": 256
+  },
   "runtime": {
     "mode": "service",
     "systemdUnit": "python-compute.service"

@@ -50,6 +50,8 @@ async function main(): Promise<void> {
   const pool = new SshPool(config, audit);
   const jobRegistry = new JobRegistry();
   jobRegistry.register("module-install");
+  jobRegistry.register("module-call");
+  jobRegistry.register("apt");
   const jobs = new JobManager(config, pool, jobRegistry);
   const modules = new ModuleManager(config, pool, undefined, jobs);
   // A job-backed install writes its receipt long after the tool call returns, so cached module state

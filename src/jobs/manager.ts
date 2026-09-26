@@ -9,8 +9,12 @@ import type { JobRegistry } from "./registry.js";
 import { isTerminalJobStatus, parseJobState, TrustedJobSpecSchema, type JobState, type TrustedJobSpec } from "./types.js";
 
 const JOB_ROOT = "/var/lib/vantamcpd/jobs";
-const RUNNER_VERSION = "1";
-const RUNNER_PATH = `/opt/vantamcpd/job-runner/${RUNNER_VERSION}/remote-runner.py`;
+const RUNNER_VERSION = "2";
+const RUNNER_DIR = `/opt/vantamcpd/job-runner/${RUNNER_VERSION}`;
+const RUNNER_PATH = `${RUNNER_DIR}/remote-runner.py`;
+export const MODULE_CALL_PATH = `${RUNNER_DIR}/module-call.py`;
+// Units written before the v2 runner still reference this path; cancel and recovery fall back to it.
+const LEGACY_RUNNER_PATH = "/opt/vantamcpd/job-runner/1/remote-runner.py";
 const QUEUED_START_GRACE_MS = 60_000;
 
 export interface SubmitJobInput {
@@ -21,6 +25,16 @@ export interface SubmitJobInput {
   cwd: string;
   environment?: Record<string, string>;
   timeoutMs: number;
+  /** Run the command as this node's SSH user instead of root. */
+  runAsNodeUser?: boolean;
+  /** Mark false for non-idempotent work: a runner restarted mid-job then fails instead of re-running it. */
+  rerunOnRestart?: boolean;
+  /** Reject submission unless the node reports at least this much MemAvailable. */
+  minFreeMemoryMb?: number;
+  /** Collect `out/result.json` written by the command, bounded to this size. */
+  maxResultBytes?: number;
+  /** JSON text written to `out/input.json`, readable only by the job's user. */
+  input?: string;
 }
 
 export interface ListedJobs {
@@ -37,23 +51,52 @@ function unitName(jobId: string): string {
   return `vantamcpd-job-${jobId}.service`;
 }
 
+function runnerSelection(): string {
+  return `runner=${q(RUNNER_PATH)}; [ -f "$runner" ] || runner=${q(LEGACY_RUNNER_PATH)}`;
+}
+
+function installHelper(target: string, content: string): string {
+  const hash = createHash("sha256").update(content).digest("hex");
+  return `if [ ! -f ${q(target)} ] || [ "$(sha256sum ${q(target)} | awk '{print $1}')" != ${q(hash)} ]; then ` +
+    `printf '%s' ${q(encode(content))} | base64 -d | install -m 0755 /dev/stdin ${q(target)}; fi`;
+}
+
 export class JobManager {
   private readonly cache = new Map<string, JobState>();
   private readonly settledListeners = new Set<(job: JobState) => void>();
+  private readonly submissions = new Map<string, Promise<unknown>>();
   private refreshedAt?: string;
   private timer?: NodeJS.Timeout;
   private readonly runner: string;
+  private readonly moduleCall: string;
 
   constructor(
     private readonly config: ClusterConfig,
     private readonly pool: SshPool,
     private readonly registry: JobRegistry,
     runnerPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "remote-runner.py"),
+    moduleCallPath = path.join(path.dirname(runnerPath), "module-call.py"),
   ) {
     this.runner = readFileSync(runnerPath, "utf8");
+    this.moduleCall = readFileSync(moduleCallPath, "utf8");
   }
 
-  async submit(node: ResolvedNode, input: SubmitJobInput): Promise<JobState> {
+  maxConcurrent(node: ResolvedNode): number {
+    return this.config.jobs.perNode?.[node.name]?.maxConcurrent ?? this.config.jobs.maxConcurrentPerNode ?? 2;
+  }
+
+  /** Submissions to one node are serialized so two concurrent calls cannot both pass the per-node limit. */
+  submit(node: ResolvedNode, input: SubmitJobInput): Promise<JobState> {
+    const previous = this.submissions.get(node.name) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(() => this.submitNow(node, input));
+    this.submissions.set(node.name, next);
+    void next.finally(() => {
+      if (this.submissions.get(node.name) === next) this.submissions.delete(node.name);
+    }).catch(() => undefined);
+    return next;
+  }
+
+  private async submitNow(node: ResolvedNode, input: SubmitJobInput): Promise<JobState> {
     this.registry.assertRegistered(input.kind);
     const now = new Date().toISOString();
     const jobId = randomUUID();
@@ -70,6 +113,9 @@ export class JobManager {
       timeoutMs: input.timeoutMs,
       retentionMs: this.config.jobs.retentionDays * 24 * 60 * 60 * 1_000,
       maxLogBytes: this.config.jobs.maxLogBytes,
+      runAs: input.runAsNodeUser ? node.user : undefined,
+      rerunOnRestart: input.rerunOnRestart,
+      maxResultBytes: input.maxResultBytes,
       createdAt: now,
     });
     const state = parseJobState({
@@ -84,13 +130,28 @@ export class JobManager {
       createdAt: now,
     });
 
-    const active = (await this.list([node])).jobs.find(
-      (job) => !isTerminalJobStatus(job.status) && job.resourceKeys.some((key) => spec.resourceKeys.includes(key)),
-    );
-    if (active) throw new Error(`Resource is busy with job ${active.jobId} (${active.kind}, ${active.status}).`);
+    const active = (await this.list([node])).jobs.filter((job) => !isTerminalJobStatus(job.status));
+    const conflict = active.find((job) => job.resourceKeys.some((key) => spec.resourceKeys.includes(key)));
+    if (conflict) throw new Error(`Resource is busy with job ${conflict.jobId} (${conflict.kind}, ${conflict.status}).`);
+    const limit = this.maxConcurrent(node);
+    if (active.length >= limit) {
+      throw new Error(
+        `${node.name} is already running ${active.length}/${limit} durable job(s); retry after one finishes ` +
+          `or raise jobs.maxConcurrentPerNode.`,
+      );
+    }
+    if (input.minFreeMemoryMb !== undefined) {
+      const available = await this.availableMemoryMb(node);
+      if (available < input.minFreeMemoryMb) {
+        throw new Error(
+          `${node.name} has ${available} MB available memory; this job requires ${input.minFreeMemoryMb} MB. ` +
+            `Retry when the node is less busy or choose another node.`,
+        );
+      }
+    }
 
     const directory = `${JOB_ROOT}/${jobId}`;
-    const runnerHash = createHash("sha256").update(this.runner).digest("hex");
+    const outDirectory = `${directory}/out`;
     const unit = [
       "[Unit]",
       `Description=VantaMCPd durable job ${jobId}`,
@@ -110,12 +171,21 @@ export class JobManager {
       "WantedBy=multi-user.target",
       "",
     ].join("\n");
+    // A job running as the SSH user must traverse its job directory to reach out/.
+    const directoryMode = spec.runAs ? "0711" : "0700";
+    const owner = q(spec.runAs ?? "root");
     const command = [
       "set -e",
-      `install -d -m 0755 ${q(path.posix.dirname(RUNNER_PATH))} ${q(JOB_ROOT)}`,
-      `if [ ! -f ${q(RUNNER_PATH)} ] || [ "$(sha256sum ${q(RUNNER_PATH)} | awk '{print $1}')" != ${q(runnerHash)} ]; then ` +
-        `printf '%s' ${q(encode(this.runner))} | base64 -d | install -m 0755 /dev/stdin ${q(RUNNER_PATH)}; fi`,
-      `install -d -m 0700 ${q(directory)}`,
+      `install -d -m 0755 ${q(RUNNER_DIR)} ${q(JOB_ROOT)}`,
+      installHelper(RUNNER_PATH, this.runner),
+      installHelper(MODULE_CALL_PATH, this.moduleCall),
+      `install -d -m ${directoryMode} ${q(directory)}`,
+      `install -d -m 0700 -o ${owner} ${q(outDirectory)}`,
+      ...(input.input === undefined
+        ? []
+        : [
+            `printf '%s' ${q(encode(input.input))} | base64 -d | install -m 0600 -o ${owner} /dev/stdin ${q(`${outDirectory}/input.json`)}`,
+          ]),
       `spec_tmp=$(mktemp ${q(`${directory}/.spec.XXXXXX`)}); state_tmp=$(mktemp ${q(`${directory}/.state.XXXXXX`)})`,
       `printf '%s' ${q(encode(`${JSON.stringify(spec)}\n`))} | base64 -d > "$spec_tmp"`,
       `printf '%s' ${q(encode(`${JSON.stringify(state)}\n`))} | base64 -d > "$state_tmp"`,
@@ -130,6 +200,32 @@ export class JobManager {
     if (!result.ok) throw new Error(result.error ?? (result.stderr.trim() || `Failed to submit job ${jobId}.`));
     this.cache.set(jobId, state);
     return state;
+  }
+
+  async availableMemoryMb(node: ResolvedNode): Promise<number> {
+    const result = await this.pool.exec(node, "awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo", {
+      timeoutMs: 15_000,
+      maxOutputBytes: 1_024,
+    });
+    const value = Number.parseInt(result.stdout.trim(), 10);
+    if (!result.ok || !Number.isFinite(value)) {
+      throw new Error(`Could not read available memory on ${node.name}: ${result.error ?? (result.stderr.trim() || "no MemAvailable value")}`);
+    }
+    return value;
+  }
+
+  /** Return the bounded result file a job's command published, if the job produced one. */
+  async result(jobId: string): Promise<{ job: JobState; result?: string }> {
+    const job = await this.get(jobId);
+    if (job.resultBytes === undefined) return { job };
+    const node = this.config.nodes.find((candidate) => candidate.name === job.targetNode)!;
+    const result = await this.pool.exec(node, `cat ${q(`${JOB_ROOT}/${job.jobId}/result.json`)}`, {
+      sudo: true,
+      timeoutMs: 30_000,
+      maxOutputBytes: job.resultBytes + 1_024,
+    });
+    if (!result.ok) throw new Error(result.error ?? (result.stderr.trim() || `Failed to read job ${jobId} result.`));
+    return { job, result: result.stdout };
   }
 
   /** Fires once when a job this process has seen running reaches a terminal state. */
@@ -209,7 +305,7 @@ export class JobManager {
     if (isTerminalJobStatus(job.status)) return job;
     const node = this.config.nodes.find((candidate) => candidate.name === job.targetNode)!;
     const specPath = `${JOB_ROOT}/${job.jobId}/spec.json`;
-    const command = `systemctl stop ${q(unitName(job.jobId))} || true\n/usr/bin/python3 ${q(RUNNER_PATH)} ${q(specPath)} --cancel`;
+    const command = `systemctl stop ${q(unitName(job.jobId))} || true\n${runnerSelection()}\n/usr/bin/python3 "$runner" ${q(specPath)} --cancel`;
     const result = await this.pool.exec(node, command, {
       sudo: true,
       timeoutMs: this.config.jobs.cancelGraceMs + 30_000,
@@ -229,9 +325,9 @@ export class JobManager {
         if (job.status === "queued" && now - Date.parse(job.createdAt) < QUEUED_START_GRACE_MS) continue;
         const message = "Job runner is not active; recovered during reconciliation.";
         const activeStates = "active|activating|reloading|deactivating";
-        const command = `state=$(systemctl is-active ${q(unitName(job.jobId))} 2>/dev/null || true); ` +
+        const command = `${runnerSelection()}; state=$(systemctl is-active ${q(unitName(job.jobId))} 2>/dev/null || true); ` +
           `case "$state" in ${activeStates}) printf '%s' '__ACTIVE__';; *) ` +
-          `/usr/bin/python3 ${q(RUNNER_PATH)} ${q(`${JOB_ROOT}/${job.jobId}/spec.json`)} --fail ${q(message)}; ` +
+          `/usr/bin/python3 "$runner" ${q(`${JOB_ROOT}/${job.jobId}/spec.json`)} --fail ${q(message)}; ` +
           `printf '%s' '__FAILED__';; esac`;
         const result = await this.pool.exec(node, command, { sudo: true, timeoutMs: 30_000, maxOutputBytes: 64 * 1024 });
         if (result.ok && result.stdout === "__FAILED__") {

@@ -190,6 +190,9 @@ const JobsSchema = z.object({
   pollIntervalMs: z.number().int().min(1_000).max(300_000).default(10_000),
   cancelGraceMs: z.number().int().min(1_000).max(120_000).default(5_000),
   maxLogBytes: z.number().int().min(1_024).max(100_000_000).default(1_000_000),
+  /** Non-terminal jobs allowed per node; further submissions are rejected, not queued. */
+  maxConcurrentPerNode: z.number().int().min(1).max(16).default(2),
+  perNode: z.record(z.string().min(1), z.object({ maxConcurrent: z.number().int().min(1).max(16) }).strict()).default({}),
 });
 
 const ModuleDefaultsSchema = z.record(
@@ -383,6 +386,10 @@ export function loadConfig(explicitPath?: string): ClusterConfig {
           `Change the role in ${configPath} or remove the block; storage tools select nodes by that block.`,
       );
     }
+  }
+
+  for (const name of Object.keys(raw.jobs.perNode)) {
+    if (!seen.has(name)) throw new Error(`jobs.perNode references unknown node ${name} in ${configPath}.`);
   }
 
   if (raw.artifacts.enabled) {

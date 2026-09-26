@@ -8,6 +8,7 @@ a fresh sandbox. Submitted code never runs in this process.
 import json
 import logging
 import os
+import select
 import socket
 import socketserver
 import struct
@@ -39,8 +40,11 @@ LIMITS = schemas.resolve_limits(
     default_memory_mb=os.environ.get("VANTA_PYTHON_DEFAULT_MEMORY_MB"),
     concurrent_calls=os.environ.get("VANTA_PYTHON_CONCURRENT_CALLS"),
     calls_per_minute=os.environ.get("VANTA_PYTHON_CALLS_PER_MINUTE"),
+    max_background_timeout_ms=os.environ.get("VANTA_PYTHON_MAX_BACKGROUND_TIMEOUT_MS"),
 )
 ACTIVE_CALLS = threading.BoundedSemaphore(LIMITS["concurrentCalls"])
+# Durable background jobs get their own slot so a long run never blocks interactive calls.
+BACKGROUND_CALLS = threading.BoundedSemaphore(1)
 RATE_LOCK = threading.Lock()
 RECENT_CALLS: deque[float] = deque()
 
@@ -80,6 +84,17 @@ def _peer_uid(connection: socket.socket) -> int:
     return uid
 
 
+def _client_gone(connection: socket.socket) -> bool:
+    """The adapter sends nothing after its request, so a readable socket means it closed."""
+    try:
+        readable, _, _ = select.select([connection], [], [], 0)
+        return bool(readable) and connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+    except (BlockingIOError, InterruptedError):
+        return False
+    except OSError:
+        return True
+
+
 def _check_rate_limit(now: float) -> None:
     with RATE_LOCK:
         while RECENT_CALLS and now - RECENT_CALLS[0] >= 60:
@@ -102,6 +117,8 @@ def _environment(refresh: bool) -> dict[str, Any]:
 def _limits() -> dict[str, Any]:
     return {
         "timeoutMs": {"minimum": schemas.MIN_TIMEOUT_MS, "maximum": LIMITS["maxTimeoutMs"], "default": LIMITS["defaultTimeoutMs"]},
+        "backgroundTimeoutMs": {"minimum": schemas.MIN_TIMEOUT_MS, "maximum": LIMITS["maxBackgroundTimeoutMs"], "default": LIMITS["maxBackgroundTimeoutMs"]},
+        "backgroundCalls": 1,
         "memoryMb": {"minimum": schemas.MIN_MEMORY_MB, "maximum": LIMITS["maxMemoryMb"], "default": LIMITS["defaultMemoryMb"]},
         "codeCharacters": schemas.MAX_CODE_CHARACTERS,
         "inputBytes": schemas.MAX_INPUT_BYTES,
@@ -148,7 +165,7 @@ def _packages(query: str | None, group: str | None, refresh: bool) -> dict[str, 
     }
 
 
-def execute(action: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def execute(action: str, arguments: dict[str, Any], background: bool = False, abandoned: Any = None) -> dict[str, Any]:
     if action == "ping":
         return {"ok": True, "isolation": SANDBOX.isolation.get("level")}
     if action == "python_env":
@@ -160,8 +177,8 @@ def execute(action: str, arguments: dict[str, Any]) -> dict[str, Any]:
             return _packages(request.get("query"), request.get("group"), request["refresh"])
         return SANDBOX.check(request["imports"])
     if action == "python_run":
-        request = schemas.validate_run(arguments, LIMITS)
-        result = SANDBOX.run(request)
+        request = schemas.validate_run(arguments, LIMITS, background=background)
+        result = SANDBOX.run(request, abandoned)
         result["request"] = {"timeoutMs": request["timeoutMs"], "memoryMb": request["memoryMb"]}
         # A call that hit a limit needs to see every limit, so the next attempt can be sized correctly.
         if result.get("exitReason") != "completed":
@@ -194,18 +211,28 @@ class RequestHandler(socketserver.BaseRequestHandler):
                 raise ValueError("request must be an object")
             action = message.get("action")
             arguments = message.get("arguments", {})
+            execution = message.get("execution", "immediate")
             if action not in ("ping", "python_env", "python_run"):
                 raise ValueError("unknown broker action")
             if not isinstance(arguments, dict):
                 raise ValueError("arguments must be an object")
+            if execution not in ("immediate", "background") or (execution == "background" and action != "python_run"):
+                raise ValueError("invalid execution mode")
             if action == "ping":
                 result = execute(action, arguments)
+            elif execution == "background":
+                if not BACKGROUND_CALLS.acquire(blocking=False):
+                    raise ValueError("python-compute is already running a background call on this node")
+                try:
+                    result = execute(action, arguments, background=True, abandoned=lambda: _client_gone(self.request))
+                finally:
+                    BACKGROUND_CALLS.release()
             else:
                 _check_rate_limit(time.monotonic())
                 if not ACTIVE_CALLS.acquire(timeout=5):
                     raise ValueError(f"python-compute is already running {LIMITS['concurrentCalls']} call(s); retry shortly")
                 try:
-                    result = execute(action, arguments)
+                    result = execute(action, arguments, abandoned=lambda: _client_gone(self.request))
                 finally:
                     ACTIVE_CALLS.release()
             response = {"ok": True, "result": result}
@@ -216,7 +243,10 @@ class RequestHandler(socketserver.BaseRequestHandler):
         payload = json.dumps(response, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         if len(payload) > MAX_RESPONSE_BYTES:
             payload = json.dumps({"ok": False, "error": "the result exceeded the response size limit; request fewer artifacts or less output"}, separators=(",", ":")).encode("utf-8")
-        self.request.sendall(struct.pack("!I", len(payload)) + payload)
+        try:
+            self.request.sendall(struct.pack("!I", len(payload)) + payload)
+        except OSError:
+            LOGGER.info("action=%s caller disconnected before the response", action)
 
 
 class BrokerServer(socketserver.ThreadingUnixStreamServer):

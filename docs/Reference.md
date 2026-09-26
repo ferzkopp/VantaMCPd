@@ -149,11 +149,13 @@ duration, so a partial failure is visible rather than hidden behind an aggregate
 | `query` | `search`, `list_installed`, `list_upgradable` | Search term, or a case-insensitive filter over the listing |
 | `dryRun` | install/remove/upgrade actions | Simulate with `apt-get -s` and change nothing |
 | `updateFirst` | `install`, `reinstall`, `upgrade`, `full_upgrade` | Refresh the indexes first. Default true |
+| `execution` | writing actions | `immediate` (default) or `background`: one durable job per node, returned as job IDs |
 
 ```text
 cluster_packages { action: "list_upgradable" }                                   # read-only, no sudo
 cluster_packages { action: "upgrade", dryRun: true }                             # preview first
 cluster_packages { action: "install", targets: ["worker"], packages: ["htop","tmux"] }
+cluster_packages { action: "upgrade", targets: ["armv7"], execution: "background" } # survives SSH drops
 cluster_packages { action: "clean" }                                             # frees SD-card space
 ```
 
@@ -163,6 +165,14 @@ sudo. Every writing action goes through one canonical non-interactive invocation
 `-o Dpkg::Use-Pty=0`, `-o DPkg::Lock::Timeout=300`, `--force-confdef`/`--force-confold`, and stdin from
 `/dev/null` so a child cannot consume the transported script. Defaults are generous because these nodes
 are slow: 30 minutes for an upgrade, 15 for an install.
+
+With `execution: "background"`, a writing action runs as a durable `apt` job on each node instead of over
+the SSH session, so a dropped connection cannot interrupt dpkg midway. Each job runs as root under its
+own systemd unit, holds the node's `apt:<node>` lock, and defaults to a 6-hour limit (an explicit
+`timeoutMs` replaces it). A node at its job limit or with less than 100 MB available memory rejects the
+submission and the other nodes proceed. Follow a job with `cluster_get_job` and read apt's output with
+`cluster_get_job_log`. While an `apt` job runs, an immediate writing action skips that node rather than
+waiting out the dpkg lock; dry runs and read-only actions are unaffected. Dry runs cannot be backgrounded.
 
 ### Services — `cluster_services`
 
@@ -477,9 +487,18 @@ Durable jobs have a separate top-level configuration block:
   "retentionDays": 7,       // retain terminal state/logs before cleanup
   "pollIntervalMs": 10000,  // refresh remote state for MCP and dashboard views
   "cancelGraceMs": 5000,    // graceful stop window before process-group termination
-  "maxLogBytes": 1000000    // upper bound accepted by job-log reads
+  "maxLogBytes": 1000000,   // upper bound accepted by job-log reads
+  "maxConcurrentPerNode": 2, // non-terminal jobs per node; further submissions are rejected, not queued
+  "perNode": {              // per-node overrides of the concurrency limit
+    "cluster5": { "maxConcurrent": 4 }
+  }
 }
 ```
+
+The job kinds are `module-install`, `module-call` (a background module tool call), and `apt`. Every kind
+counts toward `maxConcurrentPerNode`. A submission is also rejected when the node's `MemAvailable` is
+below the job's declared requirement, so overlapping work cannot push a 1 GB board into swap. The
+daemon serializes submissions per node, which keeps the limit exact when calls arrive together.
 
 ---
 

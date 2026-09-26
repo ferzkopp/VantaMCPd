@@ -19,6 +19,11 @@ The initial package targets Debian or Ubuntu `amd64` nodes with at least two CPU
 2 GiB free on the root filesystem. It requires Chromium, Python 3, and systemd. It does not require a
 GPU or configured node storage.
 
+The node must also permit unprivileged user namespaces, which Chromium uses for its sandbox. This is the
+default on Debian and Ubuntu; a node hardened with `kernel.unprivileged_userns_clone=0`,
+`user.max_user_namespaces=0`, or an AppArmor `apparmor_restrict_unprivileged_userns` restriction will
+fail the install-time Chromium smoke test.
+
 The manifest expresses hardware requirements rather than a node name. In the examples below,
 `browser-worker` is any inventory node that satisfies those requirements.
 
@@ -180,7 +185,10 @@ destinations selected by the page. Images, media, fonts, WebSockets, redirects, 
 not blocked by the module. LAN segmentation, metadata-service protection, and egress filtering are the
 operator's responsibility outside Browser Retrieval.
 
-Chromium retains its normal Linux sandbox. It runs under the dedicated `vantamcpd-browser` account with
+Chromium retains its normal Linux sandbox, specifically the unprivileged user-namespace sandbox. Because
+the service sets `NoNewPrivileges=yes`, the setuid `chrome-sandbox` helper cannot take effect, so Debian's
+`chromium-sandbox` package is neither used nor required; `apt autoremove` may safely remove it. It runs
+under the dedicated `vantamcpd-browser` account with
 no capabilities, a read-only system and home, private temporary and device namespaces, and systemd CPU,
 memory, task, and address-family limits. Browser control uses DevTools pipes, not a debugging TCP port.
 The MCP adapter reaches the broker through a mode-`0660` Unix socket; the broker verifies the peer UID.

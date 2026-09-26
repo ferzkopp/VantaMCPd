@@ -77,10 +77,12 @@ max_memory_mb=$(clamp "${VANTA_MODULE_OPTION_MAX_MEMORY_MB:-$((cgroup_high_mb / 
 memory_mb=$(clamp "${VANTA_MODULE_OPTION_MEMORY_MB:-$((max_memory_mb * 2 / 3))}" 128 "$max_memory_mb")
 max_timeout_ms=$(clamp "${VANTA_MODULE_OPTION_MAX_TIMEOUT_MS:-600000}" 1000 600000)
 default_timeout_ms=$(clamp 60000 1000 "$max_timeout_ms")
+max_background_timeout_ms=$(clamp "${VANTA_MODULE_OPTION_MAX_BACKGROUND_TIMEOUT_MS:-3600000}" 60000 21600000)
 calls_per_minute=$(clamp "${VANTA_MODULE_OPTION_CALLS_PER_MINUTE:-$((12 * concurrent_calls))}" 1 120)
 cpu_quota=$(( (cores - 1) * 100 ))
 if [ "$cpu_quota" -lt 100 ]; then cpu_quota=100; fi
-tasks_max=$(( 64 * concurrent_calls + 32 ))
+# One extra slot's worth of tasks for the background call that runs beside interactive calls.
+tasks_max=$(( 64 * (concurrent_calls + 1) + 32 ))
 progress environment "$step" "$total" "Sizing limits for ${mem_total_mb} MB RAM and ${cores} cores: ${memory_mb}/${max_memory_mb} MB per call, ${concurrent_calls} concurrent"
 
 {
@@ -91,6 +93,7 @@ progress environment "$step" "$total" "Sizing limits for ${mem_total_mb} MB RAM 
 	printf 'VANTA_PYTHON_MAX_MEMORY_MB=%s\n' "$max_memory_mb"
 	printf 'VANTA_PYTHON_DEFAULT_TIMEOUT_MS=%s\n' "$default_timeout_ms"
 	printf 'VANTA_PYTHON_MAX_TIMEOUT_MS=%s\n' "$max_timeout_ms"
+	printf 'VANTA_PYTHON_MAX_BACKGROUND_TIMEOUT_MS=%s\n' "$max_background_timeout_ms"
 	printf 'VANTA_PYTHON_CONCURRENT_CALLS=%s\n' "$concurrent_calls"
 	printf 'VANTA_PYTHON_CALLS_PER_MINUTE=%s\n' "$calls_per_minute"
 	if [ -n "${VANTA_ARTIFACT_ROOT:-}" ]; then

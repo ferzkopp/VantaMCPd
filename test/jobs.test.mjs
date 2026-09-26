@@ -243,3 +243,122 @@ test("reconciliation gives a newly queued systemd job time to start", async () =
   assert.equal(result.jobs[0].status, "queued");
   assert.equal(execCalls, 0);
 });
+
+function runningJob(target, jobId, resourceKey) {
+  return Buffer.from(JSON.stringify({
+    schemaVersion: 1,
+    jobId,
+    kind: "module-install",
+    status: "running",
+    targetNode: target.name,
+    resourceKeys: [resourceKey],
+    createdAt: "2026-09-13T12:00:00.000Z",
+  })).toString("base64") + "\n";
+}
+
+function managerWith(target, pool, jobs = {}) {
+  const registry = new JobRegistry();
+  registry.register("module-call");
+  const settings = { ...config(target), jobs: { ...config(target).jobs, maxConcurrentPerNode: 2, perNode: {}, ...jobs } };
+  return new JobManager(settings, pool, registry, path.join(root, "src", "jobs", "remote-runner.py"));
+}
+
+const callInput = {
+  kind: "module-call",
+  resourceKeys: ["call:python-compute:storage-node"],
+  command: ["/usr/bin/python3", "/opt/vantamcpd/job-runner/2/module-call.py", "/tmp/out"],
+  cwd: "/tmp",
+  timeoutMs: 60_000,
+};
+
+test("rejects a submission when the node already runs its maximum number of jobs", async () => {
+  const target = node();
+  const listed = runningJob(target, "12345678-1234-4234-8234-123456789abc", "module:a:storage-node")
+    + runningJob(target, "22345678-1234-4234-8234-123456789abc", "module:b:storage-node");
+  let submitted = false;
+  const pool = { execMany: async () => [execResult(target, listed)], exec: async () => { submitted = true; return execResult(target); } };
+  await assert.rejects(managerWith(target, pool).submit(target, callInput), /already running 2\/2 durable job/);
+  assert.equal(submitted, false);
+
+  const raised = managerWith(target, pool, { perNode: { [target.name]: { maxConcurrent: 3 } } });
+  await raised.submit(target, callInput);
+  assert.equal(submitted, true);
+});
+
+test("rejects a submission when the node lacks the declared free memory", async () => {
+  const target = node();
+  const commands = [];
+  const pool = {
+    execMany: async () => [execResult(target)],
+    exec: async (_node, command) => {
+      commands.push(command);
+      return execResult(target, command.includes("MemAvailable") ? "412\n" : "");
+    },
+  };
+  await assert.rejects(
+    managerWith(target, pool).submit(target, { ...callInput, minFreeMemoryMb: 512 }),
+    /412 MB available memory; this job requires 512 MB/,
+  );
+  assert.equal(commands.length, 1, "no job may be written after the memory check fails");
+});
+
+test("serializes submissions per node so concurrent calls cannot both pass the limit", async () => {
+  const target = node();
+  let listed = "";
+  const pool = {
+    execMany: async () => [execResult(target, listed)],
+    exec: async () => {
+      listed = runningJob(target, "12345678-1234-4234-8234-123456789abc", "call:x:storage-node");
+      return execResult(target);
+    },
+  };
+  const manager = managerWith(target, pool, { maxConcurrentPerNode: 1 });
+  const results = await Promise.allSettled([
+    manager.submit(target, callInput),
+    manager.submit(target, { ...callInput, resourceKeys: ["call:other:storage-node"] }),
+  ]);
+  assert.equal(results[0].status, "fulfilled");
+  assert.equal(results[1].status, "rejected");
+  assert.match(results[1].reason.message, /already running 1\/1/);
+});
+
+test("runs a background call as the SSH user with a private input file and bounded result", async () => {
+  const target = node();
+  const commands = [];
+  const pool = { execMany: async () => [execResult(target)], exec: async (_node, command) => { commands.push(command); return execResult(target); } };
+  const state = await managerWith(target, pool).submit(target, {
+    ...callInput,
+    runAsNodeUser: true,
+    rerunOnRestart: false,
+    maxResultBytes: 2_000_000,
+    input: JSON.stringify({ toolName: "python_run" }),
+  });
+  const script = commands[0];
+  const spec = JSON.parse(Buffer.from(script.match(/printf '%s' '([^']+)' \| base64 -d > "\$spec_tmp"/)[1], "base64").toString("utf8"));
+  assert.equal(spec.runAs, "test");
+  assert.equal(spec.rerunOnRestart, false);
+  assert.equal(spec.maxResultBytes, 2_000_000);
+  assert.match(script, /install -d -m 0711 '\/var\/lib\/vantamcpd\/jobs\//);
+  assert.match(script, /install -d -m 0700 -o 'test' '\/var\/lib\/vantamcpd\/jobs\/[^']+\/out'/);
+  assert.match(script, /install -m 0600 -o 'test' \/dev\/stdin '[^']+\/out\/input\.json'/);
+  assert.match(script, /\/opt\/vantamcpd\/job-runner\/2\/module-call\.py/);
+  assert.equal(state.status, "queued");
+});
+
+test("reads a published job result only when the runner recorded one", async () => {
+  const target = node();
+  const jobId = "12345678-1234-4234-8234-123456789abc";
+  const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64") + "\n";
+  const base = { schemaVersion: 1, jobId, kind: "module-call", status: "succeeded", targetNode: target.name, resourceKeys: ["call:x:storage-node"], createdAt: "2026-09-13T12:00:00.000Z" };
+  let listed = encode(base);
+  const commands = [];
+  const pool = { execMany: async () => [execResult(target, listed)], exec: async (_node, command) => { commands.push(command); return execResult(target, "{\"content\":[]}"); } };
+  const manager = managerWith(target, pool);
+  assert.deepEqual(await manager.result(jobId), { job: base });
+  assert.equal(commands.length, 0);
+
+  listed = encode({ ...base, resultBytes: 14 });
+  const read = await manager.result(jobId);
+  assert.equal(read.result, "{\"content\":[]}");
+  assert.match(commands[0], /cat '\/var\/lib\/vantamcpd\/jobs\/12345678-1234-4234-8234-123456789abc\/result\.json'/);
+});

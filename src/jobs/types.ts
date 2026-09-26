@@ -3,6 +3,8 @@ import { z } from "zod";
 export const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export const JOB_KIND = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const JOB_RESOURCE = /^[A-Za-z0-9]+(?::[A-Za-z0-9][A-Za-z0-9._-]*)+$/;
+export const JOB_USER = /^[a-z_][a-z0-9_-]{0,31}$/;
+export const MAX_JOB_RESULT_BYTES = 10_000_000;
 
 export const JobStatusSchema = z.enum(["queued", "running", "succeeded", "failed", "canceled"]);
 
@@ -41,6 +43,7 @@ export const JobStateSchema = z
     result: JobResultSchema.optional(),
     error: z.string().max(4_000).optional(),
     logTruncated: z.boolean().optional(),
+    resultBytes: z.number().int().nonnegative().max(MAX_JOB_RESULT_BYTES).optional(),
   })
   .strict();
 
@@ -58,6 +61,9 @@ export const TrustedJobSpecSchema = z
     timeoutMs: z.number().int().min(1_000).max(7 * 24 * 60 * 60 * 1_000),
     retentionMs: z.number().int().min(60_000).max(365 * 24 * 60 * 60 * 1_000),
     maxLogBytes: z.number().int().min(1_024).max(100_000_000),
+    runAs: z.string().regex(JOB_USER).optional(),
+    rerunOnRestart: z.boolean().optional(),
+    maxResultBytes: z.number().int().min(1_024).max(MAX_JOB_RESULT_BYTES).optional(),
     createdAt: z.string().datetime(),
   })
   .strict();

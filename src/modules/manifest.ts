@@ -6,6 +6,7 @@ const SEMVER = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]
 const COMMAND = /^[A-Za-z0-9][A-Za-z0-9+._-]*$/;
 const APT_PACKAGE = /^[a-z0-9][a-z0-9+._-]*$/;
 const INSTALL_OPTION = /^[a-z][A-Za-z0-9]*$/;
+const TOOL_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$/;
 
 const RelativePathSchema = z.string().min(1).max(200).refine((value) => {
   if (value.includes("\0") || value.includes("\\") || path.posix.isAbsolute(value)) return false;
@@ -57,6 +58,17 @@ const ArtifactAccessSchema = z
   })
   .strict()
   .refine((access) => access.read || access.write, "must enable read or write access");
+
+/** Tools that may run as durable jobs; unlisted tools are immediate-only, `required` tools are background-only. */
+const BackgroundCallsSchema = z
+  .object({
+    tools: z
+      .record(z.string().regex(TOOL_NAME), z.enum(["optional", "required"]))
+      .refine((tools) => Object.keys(tools).length > 0, "must declare at least one tool"),
+    maxTimeoutMs: z.number().int().min(60_000).max(7 * 24 * 60 * 60 * 1_000),
+    minFreeMemoryMb: z.number().int().min(1).max(1_048_576).optional(),
+  })
+  .strict();
 
 const IntegerInstallOptionSchema = z
   .object({
@@ -158,6 +170,7 @@ export const ModuleManifestSchema = z
       .strict(),
     persistentData: PersistentDataSchema.optional(),
     artifactAccess: ArtifactAccessSchema.optional(),
+    background: BackgroundCallsSchema.optional(),
     installOptions: z.record(z.string().regex(INSTALL_OPTION), InstallOptionSchema).default({}),
     deployment: ModuleDeploymentSchema,
     runtime: ModuleRuntimeSchema.default({ mode: "on-demand" }),
@@ -183,6 +196,9 @@ export const ModuleManifestSchema = z
       if (Object.keys(manifest.installOptions).length > 0) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["installOptions"], message: "requires schemaVersion 2" });
       }
+      if (manifest.background !== undefined) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["background"], message: "requires schemaVersion 2" });
+      }
       return;
     }
     if (manifest.lifecycle.execution === undefined) {
@@ -192,6 +208,12 @@ export const ModuleManifestSchema = z
 
 export type ModuleManifest = z.infer<typeof ModuleManifestSchema>;
 export type AcceleratorRequirement = z.infer<typeof AcceleratorRequirementSchema>;
+export type ToolExecutionPolicy = "immediate" | "optional" | "required";
+
+export function toolExecutionPolicy(manifest: ModuleManifest, toolName: string): ToolExecutionPolicy {
+  const tools = manifest.background?.tools;
+  return tools && Object.hasOwn(tools, toolName) ? tools[toolName]! : "immediate";
+}
 
 export function parseModuleManifest(value: unknown, source = "module.json"): ModuleManifest {
   const result = ModuleManifestSchema.safeParse(value);

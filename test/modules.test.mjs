@@ -1059,3 +1059,132 @@ test("accepts optional artifact access without changing existing manifests", () 
     /must enable read or write access/,
   );
 });
+
+function pythonComputePackage() {
+  return loadModuleCatalog(path.join(root, "modules")).modules.find((item) => item.manifest.id === "python-compute");
+}
+
+/** A pool that reports python-compute installed on every node and records nothing else. */
+function pythonComputePool(nodes) {
+  const version = pythonComputePackage().manifest.version;
+  const receipt = {
+    schemaVersion: 1,
+    moduleId: "python-compute",
+    version,
+    installedAt: "2026-09-26T00:00:00.000Z",
+    installDirectory: `/opt/vantamcpd/modules/python-compute/${version}`,
+    currentLink: "/opt/vantamcpd/modules/python-compute/current",
+    entrypoint: ["python3", "server.py"],
+    files: [],
+    runtime: { mode: "service", systemdUnit: "python-compute.service" },
+  };
+  const reply = (target, stdout = "") => ({ node: target.name, host: target.host, ok: true, code: 0, stdout, stderr: "", durationMs: 1, truncated: false, timedOut: false });
+  const line = `python-compute|${Buffer.from(JSON.stringify(receipt)).toString("base64")}\n`;
+  return {
+    exec: async (target, command) => reply(target, command.startsWith("cat ") ? JSON.stringify(receipt) : ""),
+    execMany: async (targets) => targets.map((target) => reply(target, line)),
+    openProcess: async () => { throw new Error("a background call must not open an interactive session"); },
+    nodes,
+  };
+}
+
+function recordingJobs(active = []) {
+  const submitted = [];
+  return {
+    submitted,
+    submit: async (targetNode, input) => {
+      submitted.push({ targetNode, input });
+      return { jobId: "12345678-1234-4234-8234-123456789abc", status: "queued" };
+    },
+    list: async () => ({ jobs: active, unreachableNodes: [], invalidStates: [] }),
+  };
+}
+
+test("background module calls submit a durable job as the SSH user without opening an MCP session", async () => {
+  const target = node({});
+  const jobs = recordingJobs();
+  const manager = new ModuleManager({ maxConcurrency: 1, nodes: [target] }, pythonComputePool([target]), path.join(root, "modules"), jobs);
+  const manifest = pythonComputePackage().manifest;
+
+  const result = await manager.callTool("python-compute", target, "python_run", { code: "sum(range(10))" }, "background");
+  assert.equal(result.execution, "background");
+  assert.equal(result.jobId, "12345678-1234-4234-8234-123456789abc");
+  assert.equal(result.node, target.name);
+  assert.match(result.next, /cluster_get_job/);
+
+  const { input } = jobs.submitted[0];
+  assert.equal(input.kind, "module-call");
+  assert.equal(input.moduleId, "python-compute");
+  assert.deepEqual(input.resourceKeys, ["module:python-compute:test-node"], "background calls and installs share one lock");
+  assert.equal(input.runAsNodeUser, true);
+  assert.equal(input.rerunOnRestart, false, "submitted code must never run twice after a runner restart");
+  assert.equal(input.minFreeMemoryMb, manifest.background.minFreeMemoryMb);
+  assert.equal(input.maxResultBytes, manifest.limits.maxOutputBytes);
+  assert.equal(input.cwd, `/opt/vantamcpd/modules/python-compute/${manifest.version}`);
+  assert.match(input.command.join(" "), /\/opt\/vantamcpd\/job-runner\/2\/module-call\.py$/);
+  assert.ok(input.timeoutMs > manifest.background.maxTimeoutMs);
+  const request = JSON.parse(input.input);
+  assert.deepEqual(request.entrypoint, ["python3", "server.py"]);
+  assert.equal(request.toolName, "python_run");
+  assert.deepEqual(request.arguments, { code: "sum(range(10))" });
+  assert.equal(request.callMs, manifest.background.maxTimeoutMs);
+});
+
+test("execution policy rejects undeclared background calls and immediate calls to background-only tools", async () => {
+  const target = node({});
+  const jobs = recordingJobs();
+  const manager = new ModuleManager({ maxConcurrency: 1, nodes: [target] }, pythonComputePool([target]), path.join(root, "modules"), jobs);
+  await assert.rejects(
+    manager.callTool("python-compute", target, "python_env", {}, "background"),
+    /python_env does not support background execution\. Background-capable tools: python_run\./,
+  );
+  await assert.rejects(
+    manager.callTool("text-tools", target, "regex_extract", {}, "background"),
+    /text-tools declares no background-capable tools/,
+  );
+  manager.get("python-compute").manifest.background.tools.python_run = "required";
+  await assert.rejects(
+    manager.callTool("python-compute", target, "python_run", { code: "1" }),
+    /runs only in the background; call it again with execution: "background"/,
+  );
+  assert.equal(jobs.submitted.length, 0);
+});
+
+test("background routing skips replicas already busy with a durable job for the module", async () => {
+  const busy = node({});
+  const free = { ...node({}), name: "free-node", host: "127.0.0.2" };
+  const activeJob = { jobId: "22345678-1234-4234-8234-123456789abc", kind: "module-call", status: "running", targetNode: busy.name, moduleId: "python-compute", resourceKeys: ["module:python-compute:test-node"] };
+  const jobs = recordingJobs([activeJob]);
+  const manager = new ModuleManager({ maxConcurrency: 1, nodes: [busy, free] }, pythonComputePool([busy, free]), path.join(root, "modules"), jobs);
+  for (let call = 0; call < 3; call += 1) {
+    const result = await manager.callTool("python-compute", undefined, "python_run", { code: "1" }, "background");
+    assert.equal(result.node, "free-node");
+  }
+
+  const saturated = recordingJobs([activeJob, { ...activeJob, jobId: "32345678-1234-4234-8234-123456789abc", targetNode: free.name }]);
+  const blocked = new ModuleManager({ maxConcurrency: 1, nodes: [busy, free] }, pythonComputePool([busy, free]), path.join(root, "modules"), saturated);
+  await assert.rejects(
+    blocked.callTool("python-compute", undefined, "python_run", { code: "1" }, "background"),
+    /Every installation of python-compute is busy with a durable job/,
+  );
+});
+
+test("install refuses a node while a background call for the same module is running there", async () => {
+  const target = node({ cpu: { cores: 4, packageArch: "amd64" }, memory: { totalMb: 4096 }, os: { id: "debian", version: "13" }, accelerators: [] });
+  const activeJob = { jobId: "22345678-1234-4234-8234-123456789abc", kind: "module-call", status: "running", targetNode: target.name, moduleId: "python-compute", resourceKeys: ["module:python-compute:test-node"] };
+  const jobs = recordingJobs([activeJob]);
+  const manager = new ModuleManager({ maxConcurrency: 1, nodes: [target] }, pythonComputePool([target]), path.join(root, "modules"), jobs);
+  const [result] = await manager.install("python-compute", [target]);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /busy with module-call job 22345678-1234-4234-8234-123456789abc \(running\)/);
+  assert.equal(jobs.submitted.length, 0);
+});
+
+test("background call declarations require schema v2 and at least one tool", () => {
+  const manifest = textToolsPackage().manifest;
+  const background = { tools: { regex_extract: "optional" }, maxTimeoutMs: 600_000 };
+  assert.throws(() => parseModuleManifest({ ...manifest, background }), /background: requires schemaVersion 2/);
+  const v2 = pythonComputePackage().manifest;
+  assert.throws(() => parseModuleManifest({ ...v2, background: { ...background, tools: {} } }), /must declare at least one tool/);
+  assert.throws(() => parseModuleManifest({ ...v2, background: { ...background, tools: { x: "always" } } }), /Invalid enum value/);
+});

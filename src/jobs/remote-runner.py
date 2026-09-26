@@ -3,8 +3,10 @@ import fcntl
 import hashlib
 import json
 import os
+import pwd
 import selectors
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -104,12 +106,63 @@ def apply_progress(state, line):
     return True
 
 
+def child_identity(spec, environment):
+    """Popen keyword arguments that drop root for a job declaring runAs."""
+    user = spec.get("runAs")
+    if not user:
+        return {}
+    account = pwd.getpwnam(user)
+    environment.update({"HOME": account.pw_dir, "USER": user, "LOGNAME": user})
+    return {"user": account.pw_uid, "group": account.pw_gid, "extra_groups": os.getgrouplist(user, account.pw_gid)}
+
+
+def collect_result(spec, job_dir):
+    """Copy out/result.json into the root-owned job directory; return its size or None."""
+    limit = spec.get("maxResultBytes")
+    if not limit:
+        return None
+    source = job_dir / "out" / "result.json"
+    # out/ belongs to the job's user, so refuse symlinks and special files before reading as root.
+    try:
+        descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("job result is not a regular file")
+        if info.st_size > limit:
+            raise ValueError(f"job result is {info.st_size} bytes and exceeds the {limit}-byte limit")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
+            data = handle.read(limit + 1)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if len(data) > limit:
+        raise ValueError(f"job result exceeds the {limit}-byte limit")
+    json.loads(data)
+    target = job_dir / "result.json"
+    temporary = job_dir / f".result.{os.getpid()}.tmp"
+    with open(temporary, "wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, target)
+    return len(data)
+
+
 def run(spec_path):
     spec = read_json(spec_path)
     state_path = spec_path.with_name("state.json")
     log_path = spec_path.with_name("job.log")
     state = read_json(state_path)
     if state.get("status") in ("succeeded", "failed", "canceled"):
+        return
+    if state.get("status") == "running" and spec.get("rerunOnRestart") is False:
+        finish(state_path, state, "failed", spec["retentionMs"],
+               error="The job runner restarted after an interruption; the command was not re-executed to avoid running it twice.")
         return
 
     locks = []
@@ -139,9 +192,11 @@ def run(spec_path):
 
         environment = os.environ.copy()
         environment.update(spec.get("environment", {}))
+        environment["VANTA_JOB_OUT"] = str(spec_path.parent / "out")
+        identity = child_identity(spec, environment)
         process = subprocess.Popen(
             spec["command"], cwd=spec["cwd"], env=environment, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, start_new_session=True,
+            stderr=subprocess.STDOUT, start_new_session=True, **identity,
         )
         selector = selectors.DefaultSelector()
         selector.register(process.stdout, selectors.EVENT_READ)
@@ -206,6 +261,9 @@ def run(spec_path):
         except subprocess.TimeoutExpired:
             terminate()
             raise TimeoutError(f"Job exceeded {spec['timeoutMs']}ms runtime limit")
+        result_bytes = collect_result(spec, spec_path.parent)
+        if result_bytes is not None:
+            state["resultBytes"] = result_bytes
         if code == 0:
             finish(state_path, state, "succeeded", spec["retentionMs"], result={"exitCode": 0, "summary": "Job completed."})
         else:

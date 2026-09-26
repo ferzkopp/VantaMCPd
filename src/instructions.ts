@@ -6,6 +6,11 @@ export function serverInstructions(capabilities: string, dashboardUrl?: string):
     "Most tools accept a `targets` array of node names, tags, or omit it to hit every node.\n" +
     "These nodes are resource constrained: check the hardware inventory before installing anything, prefer dry runs " +
     "for apt operations, avoid long-running foreground builds, and check free disk space with cluster_status.\n" +
+    "Long work should run as a durable background job so it survives SSH drops and the tool-call time limit: " +
+    "cluster_packages write actions and module tools whose listed execution is \"optional\" or \"required\" accept " +
+    "execution=\"background\" and return a jobId. Poll cluster_get_job (includeResult=true for module output) instead of " +
+    "resubmitting. A node rejects new jobs when it is at its concurrent-job limit or short of memory; retry later or " +
+    "choose another node rather than forcing the work.\n" +
     "Destructive operations (formatting, reboots, rm -rf, partitioning) require explicit user approval and a confirm flag.\n" +
     (capabilities
       ? "The cluster also runs node modules that do real work for you. Route a request to cluster_call_module_tool " +

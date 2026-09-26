@@ -14,6 +14,10 @@ MIN_TIMEOUT_MS = 1_000
 # which python_env describe reports and the broker enforces.
 MAX_TIMEOUT_MS = 600_000
 DEFAULT_TIMEOUT_MS = 60_000
+# A python_run submitted as a durable background job may run far longer than an interactive call.
+MIN_BACKGROUND_TIMEOUT_MS = 60_000
+MAX_BACKGROUND_TIMEOUT_MS = 21_600_000
+DEFAULT_BACKGROUND_TIMEOUT_MS = 3_600_000
 MIN_MEMORY_MB = 128
 MAX_MEMORY_MB = 4_096
 DEFAULT_MEMORY_MB = 384
@@ -47,6 +51,7 @@ def resolve_limits(
     default_memory_mb: Any = None,
     concurrent_calls: Any = None,
     calls_per_minute: Any = None,
+    max_background_timeout_ms: Any = None,
 ) -> dict[str, int]:
     """Clamp installation-derived limits into the absolute bounds the tool schema advertises."""
     resolved_max_timeout = _clamp(max_timeout_ms, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS, MAX_TIMEOUT_MS)
@@ -58,6 +63,7 @@ def resolve_limits(
         "defaultMemoryMb": min(_clamp(default_memory_mb, MIN_MEMORY_MB, MAX_MEMORY_MB, DEFAULT_MEMORY_MB), resolved_max_memory),
         "concurrentCalls": _clamp(concurrent_calls, 1, MAX_CONCURRENT_CALLS, 1),
         "callsPerMinute": _clamp(calls_per_minute, 1, MAX_CALLS_PER_MINUTE, 12),
+        "maxBackgroundTimeoutMs": _clamp(max_background_timeout_ms, MIN_BACKGROUND_TIMEOUT_MS, MAX_BACKGROUND_TIMEOUT_MS, DEFAULT_BACKGROUND_TIMEOUT_MS),
     }
 
 FILE_NAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$")
@@ -144,7 +150,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "artifactMode": {"type": "string", "enum": ["inline", "store"], "default": "inline", "description": "Return emitted files inline as base64 or commit them to shared artifact storage."},
                 "artifactBudgetBytes": {"type": "integer", "minimum": 1, "maximum": MAX_STORED_ARTIFACT_TOTAL_BYTES, "description": "Maximum total bytes reserved before a stored-artifact run."},
                 "artifactRetentionDays": {"type": "integer", "minimum": 1, "maximum": 90, "default": 7},
-                "timeoutMs": {"type": "integer", "minimum": MIN_TIMEOUT_MS, "maximum": MAX_TIMEOUT_MS, "description": "Wall-clock limit for the submitted code. The node may cap this lower; python_env describe reports the value in force."},
+                "timeoutMs": {"type": "integer", "minimum": MIN_TIMEOUT_MS, "maximum": MAX_BACKGROUND_TIMEOUT_MS, "description": "Wall-clock limit for the submitted code. Interactive calls allow up to 10 minutes; a call submitted with execution background allows longer and defaults to the node's background ceiling. python_env describe reports the values in force."},
                 "memoryMb": {"type": "integer", "minimum": MIN_MEMORY_MB, "maximum": MAX_MEMORY_MB, "description": "Address-space limit for the sandboxed process. Defaults and ceilings are sized from the node's memory; python_env describe reports them."},
                 "artifacts": {"type": "boolean", "default": True, "description": "Return emitted files and captured figures. Set false to keep responses small."},
                 "maxStdoutBytes": {"type": "integer", "minimum": MIN_STDOUT_BYTES, "maximum": MAX_STDOUT_BYTES, "default": DEFAULT_STDOUT_BYTES, "description": "Bytes of stdout and of stderr retained before truncation."},
@@ -209,7 +215,7 @@ def validate_env(arguments: dict[str, Any]) -> dict[str, Any]:
     return request
 
 
-def validate_run(arguments: dict[str, Any], limits: dict[str, int]) -> dict[str, Any]:
+def validate_run(arguments: dict[str, Any], limits: dict[str, int], background: bool = False) -> dict[str, Any]:
     _reject_unknown(arguments, {"code", "inputs", "files", "artifactInputs", "artifactMode", "artifactBudgetBytes", "artifactRetentionDays", "timeoutMs", "memoryMb", "artifacts", "maxStdoutBytes"})
     code = arguments.get("code")
     if not isinstance(code, str) or not code.strip():
@@ -277,6 +283,10 @@ def validate_run(arguments: dict[str, Any], limits: dict[str, int]) -> dict[str,
     artifact_retention = _integer(arguments, "artifactRetentionDays", 1, 90, 7)
 
     memory_mb = _integer(arguments, "memoryMb", MIN_MEMORY_MB, limits["maxMemoryMb"], limits["defaultMemoryMb"])
+    if background:
+        timeout_ms = _integer(arguments, "timeoutMs", MIN_TIMEOUT_MS, limits["maxBackgroundTimeoutMs"], limits["maxBackgroundTimeoutMs"])
+    else:
+        timeout_ms = _integer(arguments, "timeoutMs", MIN_TIMEOUT_MS, limits["maxTimeoutMs"], limits["defaultTimeoutMs"])
     return {
         "code": code,
         "inputs": inputs,
@@ -285,7 +295,7 @@ def validate_run(arguments: dict[str, Any], limits: dict[str, int]) -> dict[str,
         "artifactMode": artifact_mode,
         "artifactBudgetBytes": artifact_budget,
         "artifactRetentionDays": artifact_retention,
-        "timeoutMs": _integer(arguments, "timeoutMs", MIN_TIMEOUT_MS, limits["maxTimeoutMs"], limits["defaultTimeoutMs"]),
+        "timeoutMs": timeout_ms,
         "memoryMb": memory_mb,
         "artifacts": _boolean(arguments, "artifacts", True),
         "maxStdoutBytes": _integer(arguments, "maxStdoutBytes", MIN_STDOUT_BYTES, MAX_STDOUT_BYTES, DEFAULT_STDOUT_BYTES),
@@ -301,7 +311,7 @@ def self_test() -> None:
         assert tool["inputSchema"]["additionalProperties"] is False
 
     node = resolve_limits(max_memory_mb=1176, default_memory_mb=784, concurrent_calls=2, calls_per_minute=24)
-    assert node == {"maxTimeoutMs": MAX_TIMEOUT_MS, "defaultTimeoutMs": DEFAULT_TIMEOUT_MS, "maxMemoryMb": 1176, "defaultMemoryMb": 784, "concurrentCalls": 2, "callsPerMinute": 24}
+    assert node == {"maxTimeoutMs": MAX_TIMEOUT_MS, "defaultTimeoutMs": DEFAULT_TIMEOUT_MS, "maxMemoryMb": 1176, "defaultMemoryMb": 784, "concurrentCalls": 2, "callsPerMinute": 24, "maxBackgroundTimeoutMs": DEFAULT_BACKGROUND_TIMEOUT_MS}
     small = resolve_limits(max_memory_mb=600, default_memory_mb=400)
     assert small["concurrentCalls"] == 1 and small["callsPerMinute"] == 12
     # Out-of-range, missing and malformed installation values must clamp instead of failing open.
@@ -312,6 +322,18 @@ def self_test() -> None:
     assert resolve_limits(concurrent_calls=99)["concurrentCalls"] == MAX_CONCURRENT_CALLS
     assert resolve_limits(max_memory_mb="not-a-number")["maxMemoryMb"] == MAX_MEMORY_MB
     assert resolve_limits() == resolve_limits(None, None, None, None, None, None)
+    assert resolve_limits(max_background_timeout_ms=99_999_999)["maxBackgroundTimeoutMs"] == MAX_BACKGROUND_TIMEOUT_MS
+
+    # Background calls default to, and are capped by, the node's background ceiling rather than the interactive one.
+    assert validate_run({"code": "x"}, node, background=True)["timeoutMs"] == DEFAULT_BACKGROUND_TIMEOUT_MS
+    assert validate_run({"code": "x", "timeoutMs": 1_800_000}, node, background=True)["timeoutMs"] == 1_800_000
+    for timeout, background in ((1_800_000, False), (DEFAULT_BACKGROUND_TIMEOUT_MS + 1, True)):
+        try:
+            validate_run({"code": "x", "timeoutMs": timeout}, node, background=background)
+        except ValueError as error:
+            assert "timeoutMs must be between" in str(error)
+        else:
+            raise AssertionError(f"timeout {timeout} accepted with background={background}")
 
     run = validate_run({"code": "1 + 1"}, node)
     assert run["timeoutMs"] == DEFAULT_TIMEOUT_MS

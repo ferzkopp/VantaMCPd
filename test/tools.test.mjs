@@ -139,11 +139,27 @@ function recordingPool(overrides = {}) {
   };
 }
 
-function buildContext(pool = recordingPool()) {
+/** Records job submissions; `active` is what list() reports as already on the nodes. */
+function recordingJobs(active = [], reject = {}) {
+  const submitted = [];
+  return {
+    submitted,
+    async list() {
+      return { jobs: active, unreachableNodes: [], invalidStates: [] };
+    },
+    async submit(target, input) {
+      if (reject[target.name]) throw new Error(reject[target.name]);
+      submitted.push({ node: target.name, input });
+      return { jobId: `12345678-1234-4234-8234-12345678900${submitted.length}`, status: "queued" };
+    },
+  };
+}
+
+function buildContext(pool = recordingPool(), jobs = recordingJobs()) {
   const ctx = {
     config: testConfig(),
     pool,
-    jobs: { async list() { return []; } },
+    jobs,
     modules: {
       catalog: loadModuleCatalog(path.resolve(import.meta.dirname, "..", "modules")),
       async install() {
@@ -452,6 +468,43 @@ test("apt dry runs simulate and read-only apt actions need no privileges", async
   // A node with nothing to upgrade must not be reported as a failed node.
   await call(tools, "cluster_packages", { action: "list_upgradable", targets: ["cluster1"] });
   assert.match(pool.calls[2].command, /\|\| echo "\(no upgradable packages\)"/);
+});
+
+test("background apt submits one durable root job per node instead of a blocking SSH call", async () => {
+  const jobs = recordingJobs([], { cluster4: "cluster4 is already running 2/2 durable job(s)" });
+  const { tools, pool } = buildContext(recordingPool(), jobs);
+  const result = await call(tools, "cluster_packages", { action: "upgrade", targets: ["cluster1", "cluster4"], execution: "background" });
+  assert.equal(pool.calls.length, 0, "a background write must not run apt over the SSH session");
+  assert.notEqual(result.isError, true, "one accepted node makes the request a success");
+  const payload = JSON.parse(body(result));
+  assert.deepEqual(payload.jobs.map((job) => [job.node, job.ok]), [["cluster1", true], ["cluster4", false]]);
+  assert.match(payload.jobs[1].error, /2\/2 durable job/);
+
+  const { input } = jobs.submitted[0];
+  assert.equal(input.kind, "apt");
+  assert.deepEqual(input.resourceKeys, ["apt:cluster1"]);
+  assert.equal(input.runAsNodeUser, undefined, "apt jobs run as root");
+  assert.equal(input.timeoutMs, 6 * 60 * 60 * 1_000);
+  assert.deepEqual(input.command.slice(0, 2), ["/bin/bash", "-c"]);
+  assert.match(input.command[2], /apt-get .* update .*; .*apt-get .* upgrade <\/dev\/null 2>&1$/s);
+
+  const readOnly = await call(tools, "cluster_packages", { action: "search", query: "htop", targets: ["cluster1"], execution: "background" });
+  assert.match(body(readOnly), /read-only and always runs immediately/);
+  const dry = await call(tools, "cluster_packages", { action: "upgrade", dryRun: true, targets: ["cluster1"], execution: "background" });
+  assert.match(body(dry), /dry run returns at once/);
+  assert.equal(jobs.submitted.length, 1);
+});
+
+test("an immediate apt write skips nodes that are still running a background apt job", async () => {
+  const active = [{ jobId: "22345678-1234-4234-8234-123456789abc", kind: "apt", status: "running", targetNode: "cluster1", resourceKeys: ["apt:cluster1"] }];
+  const { tools, pool } = buildContext(recordingPool(), recordingJobs(active));
+  const result = await call(tools, "cluster_packages", { action: "install", packages: ["htop"], targets: ["cluster1", "cluster4"] });
+  assert.deepEqual(pool.calls[0].nodes, ["cluster4"]);
+  assert.match(body(result), /background apt job 22345678-1234-4234-8234-123456789abc is still running/);
+
+  // Dry runs and read-only actions do not contend for the dpkg lock.
+  await call(tools, "cluster_packages", { action: "install", packages: ["htop"], dryRun: true, targets: ["cluster1"] });
+  assert.deepEqual(pool.calls[1].nodes, ["cluster1"]);
 });
 
 test("shell metacharacters in caller values are quoted, not interpolated", async () => {
