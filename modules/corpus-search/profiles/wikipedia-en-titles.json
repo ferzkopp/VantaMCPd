@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 2,
+  "id": "wikipedia-en-titles",
+  "description": "Every English Wikipedia main-namespace article title, for exact title resolution and existence checks.",
+  "source": "wikipedia-title-index",
+  "wiki": "enwiki",
+  "samplePercent": 100,
+  "sampleSeed": "vantamcpd-wikipedia-titles-v1"
+}

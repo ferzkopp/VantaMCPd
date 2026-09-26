@@ -97,6 +97,7 @@ export interface NodeModuleInventory {
   count?: number;
   modules?: string[];
   moduleVersions?: Record<string, string>;
+  moduleOptions?: Record<string, Record<string, unknown>>;
   invalidReceipts?: string[];
   error?: string;
 }
@@ -138,6 +139,7 @@ const InstallationReceiptSchema = z.object({
     z.object({ mode: z.literal("on-demand") }).strict(),
     z.object({ mode: z.literal("service"), systemdUnit: z.string() }).strict(),
   ]).default({ mode: "on-demand" }),
+  installOptions: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
 type InstallationReceipt = z.infer<typeof InstallationReceiptSchema>;
@@ -167,7 +169,7 @@ export function normalizeModuleOutput(result: unknown): unknown {
   }
 }
 
-function installOptionEnvironment(modulePackage: ModulePackage, provided: Record<string, unknown>): Record<string, string> {
+function installOptionEnvironment(modulePackage: ModulePackage, provided: Record<string, unknown>): { environment: Record<string, string>; options: Record<string, unknown> } {
   const definitions = modulePackage.manifest.installOptions;
   const unknown = Object.keys(provided).filter((name) => definitions[name] === undefined);
   if (unknown.length > 0) {
@@ -175,21 +177,24 @@ function installOptionEnvironment(modulePackage: ModulePackage, provided: Record
   }
 
   const environment: Record<string, string> = {};
+  const options: Record<string, unknown> = {};
+  const variable = (name: string) => `VANTA_MODULE_OPTION_${name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase()}`;
   for (const [name, definition] of Object.entries(definitions)) {
-    const value = provided[name] ?? (definition.type === "string-list" ? undefined : definition.default);
+    const value = provided[name] ?? definition.default;
     if (value === undefined) continue;
+    options[name] = value;
     if (definition.type === "integer") {
       if (typeof value !== "number" || !Number.isInteger(value) || value < definition.minimum || value > definition.maximum) {
         throw new Error(`Install option ${name} must be an integer from ${definition.minimum} to ${definition.maximum}.`);
       }
-      environment[`VANTA_MODULE_OPTION_${name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase()}`] = String(value);
+      environment[variable(name)] = String(value);
       continue;
     }
     if (definition.type === "string") {
       if (typeof value !== "string" || !definition.values.includes(value)) {
         throw new Error(`Install option ${name} must be one of: ${definition.values.join(", ")}.`);
       }
-      environment[`VANTA_MODULE_OPTION_${name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase()}`] = value;
+      environment[variable(name)] = value;
       continue;
     }
     if (!Array.isArray(value) || value.length < definition.minItems || value.length > definition.maxItems) {
@@ -199,9 +204,12 @@ function installOptionEnvironment(modulePackage: ModulePackage, provided: Record
     if (!value.every((item) => typeof item === "string" && pattern.test(item))) {
       throw new Error(`Install option ${name} contains an invalid value.`);
     }
-    environment[`VANTA_MODULE_OPTION_${name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase()}`] = JSON.stringify(value);
+    if (definition.values && !value.every((item) => definition.values?.includes(item as string))) {
+      throw new Error(`Install option ${name} must contain only: ${definition.values.join(", ")}.`);
+    }
+    environment[variable(name)] = JSON.stringify(value);
   }
-  return environment;
+  return { environment, options };
 }
 
 export class ModuleManager {
@@ -476,7 +484,7 @@ export class ModuleManager {
             error: `post-dependency preflight ${check.compatibility.status}: ${detail}`,
           };
         }
-        return this.installOnNode(modulePackage, node, timeoutMs, optionEnvironments.get(node.name) ?? {});
+        return this.installOnNode(modulePackage, node, timeoutMs, optionEnvironments.get(node.name) ?? { environment: {}, options: {} });
       });
       this.routeCursors.delete(moduleId);
       if (results.some((result) => result.ok)) this.notifyInventoryChanged();
@@ -556,6 +564,7 @@ export class ModuleManager {
         return { node: node.name, reachable: false, error: resultError(result) };
       }
       const moduleVersions: Record<string, string> = {};
+      const moduleOptions: Record<string, Record<string, unknown>> = {};
       const invalidReceipts: string[] = [];
       for (const line of result.stdout.split(/\r?\n/).filter(Boolean)) {
         const separator = line.indexOf("|");
@@ -571,6 +580,7 @@ export class ModuleManager {
           );
           if (receipt.moduleId !== id) throw new Error("receipt module ID does not match its filename");
           moduleVersions[id] = receipt.version;
+          if (receipt.installOptions) moduleOptions[id] = receipt.installOptions;
         } catch {
           invalidReceipts.push(id);
         }
@@ -582,6 +592,7 @@ export class ModuleManager {
         count: modules.length,
         modules,
         moduleVersions,
+        ...(Object.keys(moduleOptions).length > 0 ? { moduleOptions } : {}),
         ...(invalidReceipts.length > 0 ? { invalidReceipts: invalidReceipts.sort() } : {}),
       };
     });
@@ -1077,7 +1088,7 @@ export class ModuleManager {
     modulePackage: ModulePackage,
     node: ResolvedNode,
     timeoutMs: number,
-    optionEnvironment: Record<string, string>,
+    resolvedOptions: { environment: Record<string, string>; options: Record<string, unknown> },
   ): Promise<ModuleInstallResult> {
     const { id, version } = modulePackage.manifest;
     const stage = `/tmp/vantamcpd-${id}-${randomUUID()}`;
@@ -1140,6 +1151,7 @@ export class ModuleManager {
           sha256: file.sha256,
         })),
         runtime: modulePackage.manifest.runtime,
+        ...(Object.keys(resolvedOptions.options).length > 0 ? { installOptions: resolvedOptions.options } : {}),
       };
       const encodedReceipt = Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`, "utf8").toString("base64");
       const receiptDirectory = path.posix.dirname(receiptPath);
@@ -1185,7 +1197,7 @@ export class ModuleManager {
         VANTA_MODULE_INSTALL_DIR: installDirectory,
         VANTA_MODULE_CURRENT_LINK: currentLink,
         VANTA_MODULE_RUN_AS: node.user,
-        ...optionEnvironment,
+        ...resolvedOptions.environment,
         ...this.artifactEnvironment(modulePackage, node),
         ...(dataDirectory && node.storage
           ? {

@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""Provision and refresh the corpus database from one or more registered sources.
+
+This module owns the pipeline: profile resolution and hashing, content identity, checkpointed
+recovery, sampling, verification, and the atomic swap of the activated database. Everything specific
+to an upstream dataset lives behind a source adapter in `sources/`, so adding a dataset is a matter of
+registering an adapter and naming it in a profile.
+
+One profile configures exactly one source. An installation names the set of profiles it wants, and the
+corpus is their union, so sources stay independent of each other and are selected additively.
+"""
 import argparse
 import hashlib
 import json
@@ -6,257 +16,92 @@ import os
 import re
 import shutil
 import sqlite3
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
-import xml.etree.ElementTree as ET
-import zipfile
+from collections.abc import Sequence
 from contextlib import closing
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from corpus import SCHEMA_VERSION, connect, count_categories, initialize, put_metadata, rebuild_search, upsert_papers, verify
+import sources
+from corpus import (
+    SCHEMA_VERSION,
+    SUPPORTED_SCHEMA_VERSIONS,
+    connect,
+    count_categories,
+    drop_source,
+    index_papers,
+    initialize,
+    migrate,
+    put_metadata,
+    put_source,
+    rebuild_search,
+    source_rows,
+    upsert_papers,
+    verify,
+)
+from fetching import atomic_json, emit_progress
+from sources.arxiv import ArxivClient, OaiClient, oai_set_spec, parse_feed, parse_oai_feed
 
-API_URL = "https://export.arxiv.org/api/query"
-OAI_URL = "https://oaipmh.arxiv.org/oai"
-SNAPSHOT_URL = "https://www.kaggle.com/api/v1/datasets/download/Cornell-University/arxiv"
-SNAPSHOT_MEMBER = "arxiv-metadata-oai-snapshot.json"
-TERMS_URL = "https://info.arxiv.org/help/api/tou.html"
-MAX_RESPONSE_BYTES = 8 * 1024 * 1024
-MIN_REQUEST_INTERVAL_SECONDS = 3.0
-MAX_REQUEST_ATTEMPTS = 6
-MAX_RETRY_DELAY_SECONDS = 300.0
-ATOM = "{http://www.w3.org/2005/Atom}"
-ARXIV = "{http://arxiv.org/schemas/atom}"
-OAI = "{http://www.openarchives.org/OAI/2.0/}"
-OAI_ARXIV = "{http://arxiv.org/OAI/arXiv/}"
-PHYSICS_ARCHIVES = {
-    "astro-ph", "cond-mat", "gr-qc", "hep-ex", "hep-lat", "hep-ph", "hep-th", "math-ph",
-    "nlin", "nucl-ex", "nucl-th", "physics", "quant-ph",
-}
+CHECKPOINT_VERSION = 3
+DEFAULT_PROFILE_IDS = ["small-arxiv-cs"]
+MAX_PROFILES = 4
+CATEGORY = re.compile(r"[A-Za-z0-9.-]{1,40}")
+PROFILE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
-
-def emit_progress(phase: str, current: int, total: int, message: str, unit: str = "records") -> None:
-    print("VANTA_PROGRESS " + json.dumps({"phase": phase, "current": current, "total": total, "unit": unit, "message": message}), flush=True)
-
-
-def atomic_json(path: Path, value: Any) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
-
-
-def clean_text(value: str | None) -> str:
-    return " ".join((value or "").split())
-
-
-def versionless_id(url: str) -> str:
-    identifier = url.rsplit("/abs/", 1)[-1]
-    return re.sub(r"v\d+$", "", identifier)
-
-
-def parse_feed(payload: bytes, source_query: str, slice_id: str, fetched_at: str) -> list[dict[str, Any]]:
-    root = ET.fromstring(payload)
-    papers = []
-    for entry in root.findall(f"{ATOM}entry"):
-        identifier = versionless_id(clean_text(entry.findtext(f"{ATOM}id")))
-        if not re.fullmatch(r"(?:[a-z-]+(?:\.[A-Z]{2})?/\d{7}|\d{4}\.\d{4,5})", identifier, re.IGNORECASE):
-            continue
-        authors = [clean_text(author.findtext(f"{ATOM}name")) for author in entry.findall(f"{ATOM}author")]
-        authors = [author for author in authors if author]
-        categories = [element.attrib.get("term", "") for element in entry.findall(f"{ATOM}category")]
-        categories = [category for category in categories if category]
-        links = entry.findall(f"{ATOM}link")
-        abstract_url = next((link.attrib.get("href") for link in links if link.attrib.get("rel") == "alternate"), f"https://arxiv.org/abs/{identifier}")
-        pdf_url = next((link.attrib.get("href") for link in links if link.attrib.get("title") == "pdf"), None)
-        primary = entry.find(f"{ARXIV}primary_category")
-        paper = {
-            "id": identifier,
-            "title": clean_text(entry.findtext(f"{ATOM}title")),
-            "abstract": clean_text(entry.findtext(f"{ATOM}summary")),
-            "authors_json": json.dumps(authors, ensure_ascii=False),
-            "authors_search": " ".join(authors),
-            "categories_json": json.dumps(categories),
-            "categories_search": "|" + "|".join(categories) + "|",
-            "primary_category": primary.attrib.get("term") if primary is not None else (categories[0] if categories else None),
-            "published": clean_text(entry.findtext(f"{ATOM}published")),
-            "updated": clean_text(entry.findtext(f"{ATOM}updated")),
-            "doi": clean_text(entry.findtext(f"{ARXIV}doi")) or None,
-            "journal_ref": clean_text(entry.findtext(f"{ARXIV}journal_ref")) or None,
-            "comment": clean_text(entry.findtext(f"{ARXIV}comment")) or None,
-            "abstract_url": abstract_url,
-            "pdf_url": pdf_url,
-            "source_query": source_query,
-            "profile_slice": slice_id,
-            "fetched_at": fetched_at,
-        }
-        papers.append(paper)
-    return papers
-
-
-def parse_oai_feed(payload: bytes, source_query: str, slice_id: str, fetched_at: str) -> tuple[list[dict[str, Any]], str | None]:
-    root = ET.fromstring(payload)
-    papers = []
-    for record in root.findall(f".//{OAI}record"):
-        header = record.find(f"{OAI}header")
-        metadata = record.find(f"{OAI}metadata/{OAI_ARXIV}arXiv")
-        if header is None or metadata is None or header.attrib.get("status") == "deleted":
-            continue
-        identifier = clean_text(metadata.findtext(f"{OAI_ARXIV}id"))
-        if not re.fullmatch(r"(?:[a-z-]+(?:\.[A-Z]{2})?/\d{7}|\d{4}\.\d{4,5})", identifier, re.IGNORECASE):
-            continue
-        authors = []
-        for author in metadata.findall(f"{OAI_ARXIV}authors/{OAI_ARXIV}author"):
-            name = " ".join(filter(None, [
-                clean_text(author.findtext(f"{OAI_ARXIV}forenames")),
-                clean_text(author.findtext(f"{OAI_ARXIV}keyname")),
-                clean_text(author.findtext(f"{OAI_ARXIV}suffix")),
-            ]))
-            if name:
-                authors.append(name)
-        categories = clean_text(metadata.findtext(f"{OAI_ARXIV}categories")).split()
-        created = clean_text(metadata.findtext(f"{OAI_ARXIV}created"))
-        updated = clean_text(metadata.findtext(f"{OAI_ARXIV}updated")) or created
-        papers.append({
-            "id": identifier,
-            "title": clean_text(metadata.findtext(f"{OAI_ARXIV}title")),
-            "abstract": clean_text(metadata.findtext(f"{OAI_ARXIV}abstract")),
-            "authors_json": json.dumps(authors, ensure_ascii=False),
-            "authors_search": " ".join(authors),
-            "categories_json": json.dumps(categories),
-            "categories_search": "|" + "|".join(categories) + "|",
-            "primary_category": categories[0] if categories else None,
-            "published": f"{created}T00:00:00Z" if created else "",
-            "updated": f"{updated}T00:00:00Z" if updated else "",
-            "doi": clean_text(metadata.findtext(f"{OAI_ARXIV}doi")) or None,
-            "journal_ref": clean_text(metadata.findtext(f"{OAI_ARXIV}journal-ref")) or None,
-            "comment": clean_text(metadata.findtext(f"{OAI_ARXIV}comments")) or None,
-            "abstract_url": f"https://arxiv.org/abs/{identifier}",
-            "pdf_url": f"https://arxiv.org/pdf/{identifier}",
-            "source_query": source_query,
-            "profile_slice": slice_id,
-            "fetched_at": fetched_at,
-        })
-    token = clean_text(root.findtext(f".//{OAI}resumptionToken")) or None
-    return papers, token
-
-
-class ArxivClient:
-    def __init__(self, opener: Callable[..., Any] = urllib.request.urlopen, sleeper: Callable[[float], None] = time.sleep):
-        self.opener = opener
-        self.sleeper = sleeper
-        self.last_request = 0.0
-
-    def fetch(self, query: str, start: int, page_size: int) -> bytes:
-        parameters = urllib.parse.urlencode({
-            "search_query": query,
-            "start": start,
-            "max_results": page_size,
-            "sortBy": "submittedDate",
-            "sortOrder": "descending",
-        })
-        request = urllib.request.Request(
-            f"{API_URL}?{parameters}",
-            headers={"User-Agent": os.environ.get("VANTA_ARXIV_USER_AGENT", "VantaMCPd/0.1 corpus-search local metadata index")},
-        )
-        for attempt in range(MAX_REQUEST_ATTEMPTS):
-            wait = MIN_REQUEST_INTERVAL_SECONDS - (time.monotonic() - self.last_request)
-            if wait > 0:
-                self.sleeper(wait)
-            self.last_request = time.monotonic()
-            try:
-                with self.opener(request, timeout=60) as response:
-                    payload = response.read(MAX_RESPONSE_BYTES + 1)
-                if len(payload) > MAX_RESPONSE_BYTES:
-                    raise ValueError("arXiv API response exceeds 8 MiB")
-                return payload
-            except Exception as error:
-                if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code != 429:
-                    raise
-                if attempt == MAX_REQUEST_ATTEMPTS - 1:
-                    raise
-                retry_after = None
-                if isinstance(error, urllib.error.HTTPError):
-                    value = error.headers.get("Retry-After")
-                    try:
-                        retry_after = float(value) if value is not None else None
-                    except ValueError:
-                        retry_after = None
-                if isinstance(error, urllib.error.HTTPError) and (error.code == 429 or error.code >= 500):
-                    delay = retry_after if retry_after is not None else 30.0 * (2 ** attempt)
-                else:
-                    delay = MIN_REQUEST_INTERVAL_SECONDS * (attempt + 1)
-                self.sleeper(min(max(delay, MIN_REQUEST_INTERVAL_SECONDS), MAX_RETRY_DELAY_SECONDS))
-        raise AssertionError("unreachable")
-
-
-def oai_set_spec(category: str) -> str:
-    archive, separator, subject = category.partition(".")
-    group = "physics" if archive in PHYSICS_ARCHIVES else archive
-    return f"{group}:{archive}:{subject}" if separator else f"{group}:{archive}"
-
-
-class OaiClient(ArxivClient):
-    def fetch(self, category: str, from_date: str, until_date: str, token: str | None = None) -> bytes:
-        parameters = {"verb": "ListRecords", "resumptionToken": token} if token else {
-            "verb": "ListRecords",
-            "metadataPrefix": "arXiv",
-            "set": oai_set_spec(category),
-            "from": from_date,
-            "until": until_date,
-        }
-        request = urllib.request.Request(
-            f"{OAI_URL}?{urllib.parse.urlencode(parameters)}",
-            headers={"User-Agent": os.environ.get("VANTA_ARXIV_USER_AGENT", "VantaMCPd/0.1 corpus-search local metadata index")},
-        )
-        for attempt in range(MAX_REQUEST_ATTEMPTS):
-            wait = MIN_REQUEST_INTERVAL_SECONDS - (time.monotonic() - self.last_request)
-            if wait > 0:
-                self.sleeper(wait)
-            self.last_request = time.monotonic()
-            try:
-                with self.opener(request, timeout=90) as response:
-                    payload = response.read(MAX_RESPONSE_BYTES + 1)
-                if len(payload) > MAX_RESPONSE_BYTES:
-                    raise ValueError("arXiv OAI response exceeds 8 MiB")
-                return payload
-            except Exception as error:
-                if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code not in (429, 503):
-                    raise
-                if attempt == MAX_REQUEST_ATTEMPTS - 1:
-                    raise
-                value = error.headers.get("Retry-After") if isinstance(error, urllib.error.HTTPError) else None
-                try:
-                    retry_after = float(value) if value is not None else None
-                except ValueError:
-                    retry_after = None
-                delay = retry_after if retry_after is not None else 30.0 * (2 ** attempt)
-                self.sleeper(min(max(delay, MIN_REQUEST_INTERVAL_SECONDS), MAX_RETRY_DELAY_SECONDS))
-        raise AssertionError("unreachable")
+__all__ = [
+    "ArxivClient",
+    "OaiClient",
+    "configure_profile",
+    "configure_profiles",
+    "load_profile",
+    "load_profiles",
+    "oai_set_spec",
+    "parse_feed",
+    "parse_oai_feed",
+    "provision",
+    "refresh",
+    "resolve_profile",
+    "resolve_profiles",
+    "sampled",
+]
 
 
 def load_profile(path: Path) -> tuple[dict[str, Any], str]:
+    """Read and validate one source's profile, returning it with the hash of its exact bytes.
+
+    The bytes are the profile's identity, which is why validation never rewrites or normalizes them.
+    That hash is also stored on the returned profile as `digest`, so a composed installation can still
+    identify each source independently of the set it was named in.
+    """
     raw = path.read_bytes()
     profile = json.loads(raw)
-    if profile.get("schemaVersion") != 2 or profile.get("source") != "arxiv-bulk-snapshot":
+    if profile.get("schemaVersion") != 2:
         raise ValueError("unsupported corpus profile")
-    sample_percent = profile.get("samplePercent")
-    if sample_percent not in (1, 25, 100):
-        raise ValueError("profile samplePercent must be 1, 25, or 100")
-    if not isinstance(profile.get("sampleSeed"), str) or not profile["sampleSeed"]:
-        raise ValueError("profile sampleSeed must be a non-empty string")
-    topics = profile.get("topics")
-    if not isinstance(topics, list) or not topics or not all(re.fullmatch(r"[A-Za-z0-9.-]+", value or "") for value in topics):
-        raise ValueError("profile topics must contain valid arXiv categories")
-    return profile, hashlib.sha256(raw).hexdigest()
+    sources.by_key(profile.get("source", "")).validate(profile)
+    digest = hashlib.sha256(raw).hexdigest()
+    profile["digest"] = digest
+    return profile, digest
+
+
+def load_profiles(paths: Sequence[Path]) -> tuple[list[dict[str, Any]], str]:
+    """Load the profiles an installation composes, ordered so their identity does not depend on order."""
+    if not 1 <= len(paths) <= MAX_PROFILES:
+        raise ValueError(f"an installation composes from 1 to {MAX_PROFILES} profiles")
+    loaded = sorted((load_profile(path) for path in paths), key=lambda item: item[0]["id"])
+    profiles = [profile for profile, _ in loaded]
+    if len({profile["id"] for profile in profiles}) != len(profiles):
+        raise ValueError("the same profile is named more than once")
+    if len({profile["source"] for profile in profiles}) != len(profiles):
+        raise ValueError("two of the named profiles configure the same source")
+    if len(profiles) == 1:
+        return profiles, loaded[0][1]
+    combined = [{"id": profile["id"], "hash": digest} for profile, digest in loaded]
+    return profiles, hashlib.sha256(json.dumps(combined, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def resolve_profile(profile_dir: Path, profile_id: str) -> Path:
-    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", profile_id):
-        raise ValueError("profileId must be a lowercase kebab-case identifier")
+    if not PROFILE_ID.fullmatch(profile_id):
+        raise ValueError("a profile ID must be a lowercase kebab-case identifier")
     matches = []
     for candidate in profile_dir.glob("*.json"):
         try:
@@ -269,32 +114,74 @@ def resolve_profile(profile_dir: Path, profile_id: str) -> Path:
     return matches[0]
 
 
+def resolve_profiles(profile_dir: Path, profile_ids: Sequence[str]) -> list[Path]:
+    return [resolve_profile(profile_dir, profile_id) for profile_id in profile_ids]
+
+
 def configure_profile(
     profile: dict[str, Any],
     base_profile_hash: str,
     categories: list[str] | None = None,
 ) -> tuple[dict[str, Any], str, str]:
-    configured = dict(profile)
-    if categories is not None:
-        if not isinstance(categories, list) or not 1 <= len(categories) <= 50:
-            raise ValueError("categories must contain from 1 to 50 arXiv categories")
-        if not all(isinstance(category, str) and re.fullmatch(r"[A-Za-z0-9.-]{1,40}", category) for category in categories):
-            raise ValueError("categories contains an invalid arXiv category")
-        configured["topics"] = list(dict.fromkeys(categories))
+    """Apply an optional topic override to one profile and derive its profile and content identities.
 
+    Without an override the profile hash stays the hash of the packaged file, so a corpus already
+    provisioned from that file is still recognized as reusable after the module is upgraded.
+    """
+    configured, = apply_categories([profile], categories)
+    content = {"baseProfileHash": base_profile_hash, **sources.by_key(configured["source"]).identity_fields(configured)}
+    content_hash = hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return configured, base_profile_hash if categories is None else content_hash, content_hash
+
+
+def configure_profiles(
+    profiles: Sequence[dict[str, Any]],
+    base_profile_hash: str,
+    categories: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], str, str]:
+    """Derive the identities of the composed installation.
+
+    A single profile keeps the identity it had before composition existed, which is what lets an
+    already provisioned corpus be reused rather than rebuilt.
+    """
+    if len(profiles) == 1:
+        configured, profile_hash, content_hash = configure_profile(profiles[0], base_profile_hash, categories)
+        return [configured], profile_hash, content_hash
+    configured = apply_categories(profiles, categories)
     content = {
         "baseProfileHash": base_profile_hash,
-        "source": configured["source"],
-        "samplePercent": configured["samplePercent"],
-        "sampleSeed": configured["sampleSeed"],
-        "topics": configured["topics"],
+        "sources": [sources.by_key(profile["source"]).identity_fields(profile) for profile in configured],
     }
     content_hash = hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return configured, base_profile_hash if categories is None else content_hash, content_hash
+
+
+def apply_categories(profiles: Sequence[dict[str, Any]], categories: list[str] | None) -> list[dict[str, Any]]:
+    """Replace the topic list of every profile whose source has a subject scheme."""
+    configured = [dict(profile) for profile in profiles]
     if categories is None:
-        profile_hash = base_profile_hash
-    else:
-        profile_hash = hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    return configured, profile_hash, content_hash
+        return configured
+    if not isinstance(categories, list) or not 1 <= len(categories) <= 50:
+        raise ValueError("categories must contain from 1 to 50 arXiv categories")
+    if not all(isinstance(category, str) and CATEGORY.fullmatch(category) for category in categories):
+        raise ValueError("categories contains an invalid arXiv category")
+    topics = list(dict.fromkeys(categories))
+    targets = [profile for profile in configured if sources.by_key(profile["source"]).supports_topics]
+    if not targets:
+        raise ValueError("none of the named profiles configures a source that accepts a topic list")
+    for profile in targets:
+        profile["topics"] = topics
+    return configured
+
+
+def source_config_hash(profile: dict[str, Any]) -> str:
+    """Identify one source's configuration: its profile bytes plus the fields that select records.
+
+    This is deliberately the same value the single-source content hash has always had, so a corpus
+    provisioned before composition existed is still recognized as holding that source unchanged.
+    """
+    content = {"baseProfileHash": profile["digest"], **sources.by_key(profile["source"]).identity_fields(profile)}
+    return hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def sampled(identifier: str, sample_percent: int, seed: str) -> bool:
@@ -304,249 +191,103 @@ def sampled(identifier: str, sample_percent: int, seed: str) -> bool:
     return value < (1 << 64) * sample_percent // 100
 
 
-def download_snapshot(data_dir: Path, opener: Callable[..., Any] = urllib.request.urlopen) -> Path:
-    source_dir = data_dir / "source"
-    source_dir.mkdir(parents=True, exist_ok=True)
-    destination = source_dir / "arxiv-metadata-oai-snapshot.zip"
-    partial = destination.with_suffix(".zip.part")
-    metadata_path = destination.with_suffix(".zip.http.json")
-    metadata = {}
-    if destination.exists() and metadata_path.exists():
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            metadata = {}
-    headers = {"User-Agent": os.environ.get("VANTA_ARXIV_USER_AGENT", "VantaMCPd/0.1 corpus-search local metadata index")}
-    if destination.exists():
-        if metadata.get("etag"):
-            headers["If-None-Match"] = metadata["etag"]
-        if metadata.get("lastModified"):
-            headers["If-Modified-Since"] = metadata["lastModified"]
-    elif partial.exists() and partial.stat().st_size:
-        headers["Range"] = f"bytes={partial.stat().st_size}-"
-    request = urllib.request.Request(os.environ.get("VANTA_ARXIV_SNAPSHOT_URL", SNAPSHOT_URL), headers=headers)
-    try:
-        response = opener(request, timeout=300)
-    except urllib.error.HTTPError as error:
-        if error.code == 304 and destination.exists():
-            return destination
-        raise
-    with response:
-        status = getattr(response, "status", response.getcode())
-        append = status == 206 and partial.exists()
-        if not append:
-            partial.unlink(missing_ok=True)
-        downloaded = partial.stat().st_size if append else 0
-        content_length = int(response.headers.get("Content-Length", "0") or 0)
-        total = downloaded + content_length
-        with partial.open("ab" if append else "wb") as output:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                output.write(chunk)
-                downloaded += len(chunk)
-                if downloaded % (64 * 1024 * 1024) < len(chunk):
-                    emit_progress("download", downloaded, total, "Downloading the arXiv metadata snapshot ZIP.", "bytes")
-        response_metadata = {
-            "etag": response.headers.get("ETag"),
-            "lastModified": response.headers.get("Last-Modified"),
-            "url": response.geturl(),
-        }
-    os.replace(partial, destination)
-    atomic_json(metadata_path, response_metadata)
-    return destination
-
-
-def extract_snapshot(data_dir: Path, archive: Path) -> tuple[Path, str]:
-    destination = data_dir / "source" / SNAPSHOT_MEMBER
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    state_path = destination.with_suffix(".json.extract.json")
-    with zipfile.ZipFile(archive) as bundle:
-        matches = [item for item in bundle.infolist() if Path(item.filename).name == SNAPSHOT_MEMBER and not item.is_dir()]
-        if len(matches) != 1:
-            raise ValueError(f"snapshot ZIP must contain exactly one {SNAPSHOT_MEMBER}")
-        member = matches[0]
-        identity = f"{member.CRC:08x}:{member.file_size}:{member.compress_size}"
-        if destination.exists() and destination.stat().st_size == member.file_size and state_path.exists():
-            try:
-                if json.loads(state_path.read_text(encoding="utf-8")).get("identity") == identity:
-                    return destination, identity
-            except (OSError, ValueError):
-                pass
-        temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
-        with bundle.open(member) as source, temporary.open("wb") as output:
-            copied = 0
-            while True:
-                chunk = source.read(1024 * 1024)
-                if not chunk:
-                    break
-                output.write(chunk)
-                copied += len(chunk)
-                if copied % (64 * 1024 * 1024) < len(chunk):
-                    emit_progress("extract", copied, member.file_size, "Extracting the arXiv metadata snapshot JSON.", "bytes")
-        os.replace(temporary, destination)
-        atomic_json(state_path, {"identity": identity})
-    return destination, identity
-
-
-def snapshot_date(value: Any) -> str:
-    if not isinstance(value, str) or not value.strip():
-        return ""
-    cleaned = value.strip()
-    try:
-        parsed = parsedate_to_datetime(cleaned) if "," in cleaned else datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-    except (TypeError, ValueError):
-        return ""
-
-
-def parse_snapshot_record(record: dict[str, Any], topics: set[str], profile: dict[str, Any], fetched_at: str) -> dict[str, Any] | None:
-    identifier = versionless_id(clean_text(str(record.get("id", ""))))
-    if not re.fullmatch(r"(?:[a-z-]+(?:\.[A-Z]{2})?/\d{7}|\d{4}\.\d{4,5})", identifier, re.IGNORECASE):
-        return None
-    categories = clean_text(record.get("categories") if isinstance(record.get("categories"), str) else "").split()
-    if not topics.intersection(categories) or not sampled(identifier, profile["samplePercent"], profile["sampleSeed"]):
-        return None
-    authors = []
-    for author in record.get("authors_parsed", []):
-        if isinstance(author, list):
-            parts = [author[index] for index in (1, 0, 2) if index < len(author) and isinstance(author[index], str) and author[index].strip()]
-            if parts:
-                authors.append(clean_text(" ".join(parts)))
-    if not authors and isinstance(record.get("authors"), str):
-        authors = [clean_text(record["authors"])]
-    versions = record.get("versions") if isinstance(record.get("versions"), list) else []
-    version_dates = [snapshot_date(item.get("created")) for item in versions if isinstance(item, dict)]
-    version_dates = [value for value in version_dates if value]
-    published = version_dates[0] if version_dates else snapshot_date(record.get("update_date"))
-    updated = snapshot_date(record.get("update_date")) or (version_dates[-1] if version_dates else published)
-    return {
-        "id": identifier,
-        "title": clean_text(record.get("title") if isinstance(record.get("title"), str) else ""),
-        "abstract": clean_text(record.get("abstract") if isinstance(record.get("abstract"), str) else ""),
-        "authors_json": json.dumps(authors, ensure_ascii=False),
-        "authors_search": " ".join(authors),
-        "categories_json": json.dumps(categories),
-        "categories_search": "|" + "|".join(categories) + "|",
-        "primary_category": categories[0] if categories else None,
-        "published": published,
-        "updated": updated,
-        "doi": clean_text(record.get("doi") if isinstance(record.get("doi"), str) else "") or None,
-        "journal_ref": clean_text(record.get("journal-ref") if isinstance(record.get("journal-ref"), str) else "") or None,
-        "comment": clean_text(record.get("comments") if isinstance(record.get("comments"), str) else "") or None,
-        "abstract_url": f"https://arxiv.org/abs/{identifier}",
-        "pdf_url": f"https://arxiv.org/pdf/{identifier}",
-        "source_query": f"bulk:sample={profile['samplePercent']}%;topics={','.join(profile['topics'])}",
-        "profile_slice": "bulk-snapshot",
-        "fetched_at": fetched_at,
-    }
-
-
-def ingest_snapshot(connection: sqlite3.Connection, snapshot: Path, profile: dict[str, Any], checkpoint: dict[str, Any], checkpoint_path: Path, fetched_at: str) -> tuple[int, str]:
-    topics = set(profile["topics"])
-    offset = int(checkpoint.get("snapshotOffset", 0))
-    records = int(checkpoint.get("snapshotRecords", 0))
-    latest = str(checkpoint.get("snapshotCutoff", ""))
-    batch = []
-    total_bytes = snapshot.stat().st_size
-    with snapshot.open("rb") as source:
-        source.seek(offset)
-        while line := source.readline():
-            try:
-                raw = json.loads(line)
-            except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                raise ValueError(f"invalid JSON record at snapshot byte {offset}") from error
-            update_date = snapshot_date(raw.get("update_date"))
-            if update_date > latest:
-                latest = update_date
-            paper = parse_snapshot_record(raw, topics, profile, fetched_at)
-            if paper is not None:
-                batch.append(paper)
-            offset = source.tell()
-            if len(batch) >= 1000:
-                upsert_papers(connection, batch)
-                records += len(batch)
-                batch.clear()
-                connection.commit()
-                checkpoint.update({"snapshotOffset": offset, "snapshotRecords": records, "snapshotCutoff": latest})
-                atomic_json(checkpoint_path, checkpoint)
-                emit_progress("ingest", offset, total_bytes, f"Sampled {records} matching snapshot records.", "bytes")
-        if batch:
-            upsert_papers(connection, batch)
-            records += len(batch)
-            connection.commit()
-    checkpoint.update({"phase": "catchup", "snapshotOffset": offset, "snapshotRecords": records, "snapshotCutoff": latest})
-    atomic_json(checkpoint_path, checkpoint)
-    return records, latest
-
-
-def catch_up_oai(connection: sqlite3.Connection, profile: dict[str, Any], checkpoint: dict[str, Any], checkpoint_path: Path, client: OaiClient, from_date: str, until_date: str, fetched_at: str) -> None:
-    progress = checkpoint.setdefault("catchup", {"topicIndex": 0, "resumptionToken": None})
-    topics = set(profile["topics"])
-    while progress["topicIndex"] < len(profile["topics"]):
-        topic = profile["topics"][progress["topicIndex"]]
-        token = progress.get("resumptionToken")
-        source_query = f"oai:set={topic};from={from_date};until={until_date}"
-        payload = client.fetch(topic, from_date, until_date, token)
-        papers, next_token = parse_oai_feed(payload, source_query, "oai-catchup", fetched_at)
-        selected = [paper for paper in papers if topics.intersection(json.loads(paper["categories_json"])) and sampled(paper["id"], profile["samplePercent"], profile["sampleSeed"])]
-        upsert_papers(connection, selected)
-        if next_token:
-            progress["resumptionToken"] = next_token
-        else:
-            progress["topicIndex"] += 1
-            progress["resumptionToken"] = None
-        connection.commit()
-        atomic_json(checkpoint_path, checkpoint)
-        count = int(connection.execute("SELECT count(*) FROM papers").fetchone()[0])
-        emit_progress("catchup", progress["topicIndex"], len(profile["topics"]), f"Added newer arXiv metadata; corpus now has {count} records.", "topics")
-
-
 def inspect_database(database: Path) -> tuple[dict[str, str], int, dict[str, int]] | None:
+    """Read the state of a retained database, or None when it cannot serve as a reuse baseline.
+
+    Every schema version this module can migrate counts as reusable. A corpus written by an earlier
+    version is upgraded in place on the working copy rather than being reingested.
+    """
     if not database.exists():
         return None
     try:
         with closing(connect(database, readonly=True)) as connection:
             metadata = dict(connection.execute("SELECT key, value FROM metadata"))
+            if metadata.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
+                return None
             records = int(connection.execute("SELECT count(*) FROM papers").fetchone()[0])
             slice_records = {
                 str(row[0]): int(row[1])
                 for row in connection.execute("SELECT profile_slice, count(*) FROM papers GROUP BY profile_slice")
             }
-        if metadata.get("schema_version") != SCHEMA_VERSION:
-            return None
         return metadata, records, slice_records
     except (sqlite3.Error, OSError, ValueError):
         return None
 
 
-def active_matches(database: Path, profile_hash: str) -> bool:
-    if not database.exists():
-        return False
+def active_sources(database: Path) -> dict[str, Any]:
     try:
-        with connect(database, readonly=True) as connection:
-            values = dict(connection.execute("SELECT key, value FROM metadata"))
-            return values.get("schema_version") == SCHEMA_VERSION and values.get("profile_hash") == profile_hash
+        with closing(connect(database, readonly=True)) as connection:
+            return {row["source"]: row for row in source_rows(connection)}
     except (sqlite3.Error, OSError):
+        return {}
+
+
+def until_date_for(cutoff: str | None) -> str:
+    return datetime.strptime(cutoff[:8], "%Y%m%d").date().isoformat() if cutoff else datetime.now(timezone.utc).date().isoformat()
+
+
+def source_overrides(overrides: dict[str, Any] | None, client: Any = None, snapshot_path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Collect per-source test and recovery injections, keyed by source identifier."""
+    resolved = {key: dict(value) for key, value in (overrides or {}).items()}
+    arxiv = resolved.setdefault("arxiv", {})
+    if client is not None:
+        arxiv["oai_client"] = client
+    if snapshot_path is not None:
+        arxiv["snapshot_path"] = snapshot_path
+    return resolved
+
+
+def previous_state(rows: dict[str, Any], metadata: dict[str, str], source: str) -> dict[str, Any]:
+    """Recover a source's recorded cutoffs, falling back to the pre-multi-source metadata layout."""
+    if source in rows:
+        return dict(rows[source])
+    if source == "arxiv":
+        return {
+            "snapshot_cutoff": metadata.get("snapshot_cutoff", ""),
+            "catchup_cutoff": metadata.get("catchup_cutoff", ""),
+            "identity": metadata.get("snapshot_identity"),
+            "config_hash": metadata.get("content_hash"),
+            "profile_hash": metadata.get("profile_hash"),
+        }
+    return {}
+
+
+def source_is_current(recorded: dict[str, Any], profile: dict[str, Any], identity: str) -> bool:
+    """Decide whether a retained corpus already holds this source exactly as configured.
+
+    Sources are independent, so this is asked per source rather than for the corpus as a whole:
+    adding or dropping one source must not cost a reingestion of the others.
+    """
+    if not recorded or recorded.get("identity") != identity:
         return False
+    if recorded.get("config_hash"):
+        return recorded["config_hash"] == source_config_hash(profile)
+    # A corpus written before content hashing recorded only the profile hash of its single source.
+    return bool(recorded.get("profile_hash")) and recorded["profile_hash"] == profile["digest"]
 
 
 def provision(
     data_dir: Path,
-    profile_path: Path,
+    profile_paths: Path | Sequence[Path],
     client: OaiClient | None = None,
     cutoff: str | None = None,
     categories: list[str] | None = None,
     snapshot_path: Path | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    base_profile, base_profile_hash = load_profile(profile_path)
-    profile, profile_hash, content_hash = configure_profile(base_profile, base_profile_hash, categories)
+    paths = [profile_paths] if isinstance(profile_paths, Path) else list(profile_paths)
+    base_profiles, base_profile_hash = load_profiles(paths)
+    profiles, profile_hash, content_hash = configure_profiles(base_profiles, base_profile_hash, categories)
     data_dir.mkdir(parents=True, exist_ok=True)
-    archive = snapshot_path or download_snapshot(data_dir)
-    snapshot, snapshot_identity = extract_snapshot(data_dir, archive)
+    overrides = source_overrides(overrides, client, snapshot_path)
+
+    specs = [(sources.by_key(profile["source"]), profile) for profile in profiles]
+    handles: dict[str, dict[str, Any]] = {}
+    identities: dict[str, str] = {}
+    for adapter, spec in specs:
+        handles[adapter.id] = adapter.acquire(data_dir, spec, overrides.get(adapter.id, {}))
+        identities[adapter.id] = handles[adapter.id]["identity"]
+
     active = data_dir / "corpus.db"
     working = data_dir / "corpus.next.db"
     checkpoint_path = data_dir / "checkpoint.json"
@@ -555,56 +296,130 @@ def provision(
     if checkpoint_path.exists():
         try:
             candidate = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-            if working.exists() and candidate.get("profileHash") == profile_hash and candidate.get("snapshotIdentity") == snapshot_identity:
+            if (
+                working.exists()
+                and candidate.get("schemaVersion") == CHECKPOINT_VERSION
+                and candidate.get("profileHash") == profile_hash
+                and candidate.get("identities") == identities
+            ):
                 checkpoint = candidate
         except (OSError, ValueError):
             checkpoint = None
+
     active_state = inspect_database(active)
     active_metadata = active_state[0] if active_state else {}
-    reusable = active_metadata.get("profile_hash") == profile_hash and active_metadata.get("snapshot_identity") == snapshot_identity
+    recorded = active_sources(active) if active_state else {}
+    current = {
+        adapter.id: source_is_current(previous_state(recorded, active_metadata, adapter.id), spec, identities[adapter.id])
+        for adapter, spec in specs
+    }
+    # Seeding is worth its copy as soon as one source survives unchanged; the rest are reingested.
+    reusable = bool(active_state) and any(current.values())
     if checkpoint is None:
         working.unlink(missing_ok=True)
         if reusable:
             shutil.copy2(active, working)
         checkpoint = {
-            "schemaVersion": 2,
+            "schemaVersion": CHECKPOINT_VERSION,
             "profileHash": profile_hash,
-            "snapshotIdentity": snapshot_identity,
-            "phase": "catchup" if reusable else "snapshot",
+            "identities": identities,
+            "reused": reusable,
+            "current": current,
+            "sources": {},
         }
         atomic_json(checkpoint_path, checkpoint)
+    reusable = bool(checkpoint.get("reused", reusable))
+    current = checkpoint.get("current", current)
 
-    client = client or OaiClient()
     fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    until_date = until_date_for(cutoff)
+    summaries: list[dict[str, Any]] = []
     with connect(working) as connection:
         initialize(connection)
-        if checkpoint["phase"] == "snapshot":
-            _, snapshot_cutoff = ingest_snapshot(connection, snapshot, profile, checkpoint, checkpoint_path, fetched_at)
-        else:
-            snapshot_cutoff = active_metadata.get("snapshot_cutoff", "")
-        if not snapshot_cutoff:
-            raise ValueError("arXiv snapshot does not contain a usable update date")
-        from_date = active_metadata.get("catchup_cutoff", snapshot_cutoff)[:10] if reusable else snapshot_cutoff[:10]
-        until_date = datetime.strptime(cutoff[:8], "%Y%m%d").date().isoformat() if cutoff else datetime.now(timezone.utc).date().isoformat()
-        catch_up_oai(connection, profile, checkpoint, checkpoint_path, client, from_date, until_date, fetched_at)
+        migrate(connection)
+
+        def save() -> None:
+            atomic_json(checkpoint_path, checkpoint)
+
+        if not checkpoint.get("pruned"):
+            # Runs once per checkpoint, because a resumed ingest would otherwise lose its own records.
+            held = {row["source"] for row in source_rows(connection)}
+            if not held and connection.execute("SELECT 1 FROM papers LIMIT 1").fetchone():
+                held = {"arxiv"}
+            for source in sorted(held):
+                if not current.get(source):
+                    drop_source(connection, source)
+            connection.commit()
+            checkpoint["pruned"] = True
+            save()
+
+        for adapter, spec in specs:
+            state = checkpoint["sources"].setdefault(adapter.id, {})
+            earlier = previous_state(recorded, active_metadata, adapter.id)
+            if current.get(adapter.id):
+                snapshot_cutoff = str(earlier.get("snapshot_cutoff") or "")
+                if not snapshot_cutoff:
+                    raise ValueError(f"the retained corpus records no cutoff for source {adapter.id}")
+                from_date = str(earlier.get("catchup_cutoff") or snapshot_cutoff)[:10]
+            else:
+                _, snapshot_cutoff = adapter.ingest(connection, spec, handles[adapter.id], state, save, fetched_at, upsert_papers, sampled)
+                from_date = snapshot_cutoff[:10]
+            if adapter.supports_catch_up:
+                adapter.catch_up(
+                    connection, spec, state, save, from_date, until_date, fetched_at,
+                    overrides.get(adapter.id, {}), upsert_papers, sampled,
+                )
+            summaries.append({
+                "adapter": adapter,
+                "spec": spec,
+                "snapshotCutoff": snapshot_cutoff,
+                "catchupCutoff": until_date if adapter.supports_catch_up else None,
+            })
 
         rebuild_search(connection)
+        for summary in summaries:
+            adapter, spec = summary["adapter"], summary["spec"]
+            put_source(connection, {
+                "source": adapter.id,
+                "name": adapter.name,
+                "profile_id": spec["id"],
+                "identity": identities[adapter.id],
+                "config_hash": source_config_hash(spec),
+                "source_url": adapter.source_url,
+                "catchup_source_url": adapter.catchup_source_url,
+                "terms_url": adapter.terms_url,
+                "license": adapter.license,
+                "topics_json": json.dumps(spec.get("topics", []), separators=(",", ":")),
+                "sample_percent": spec.get("samplePercent"),
+                "snapshot_cutoff": summary["snapshotCutoff"],
+                "catchup_cutoff": summary["catchupCutoff"],
+                "records": int(connection.execute("SELECT count(*) FROM papers WHERE source = ?", (adapter.id,)).fetchone()[0]),
+                "refreshed_at": fetched_at,
+            })
+
+        # The top-level metadata keeps describing the corpus through one primary source, which keeps
+        # corpus_info answerable for callers written before per-source provenance existed.
+        primary = next((item for item in summaries if item["adapter"].id == "arxiv"), summaries[0])
+        adapter, spec = primary["adapter"], primary["spec"]
         put_metadata(connection, {
             "schema_version": SCHEMA_VERSION,
-            "profile_id": profile["id"],
+            "profile_id": spec["id"],
+            "profile_ids": json.dumps([item["id"] for item in profiles], separators=(",", ":")),
             "profile_hash": profile_hash,
             "base_profile_hash": base_profile_hash,
             "content_hash": content_hash,
-            "sample_percent": str(profile["samplePercent"]),
+            "sample_percent": str(spec["samplePercent"]),
             "content_mode": "topics" if categories is not None else "profile",
-            "configured_categories": json.dumps(profile["topics"], separators=(",", ":")),
+            "configured_categories": json.dumps(spec.get("topics", []), separators=(",", ":")),
             "category_counts": json.dumps(count_categories(connection), separators=(",", ":"), sort_keys=True),
-            "source": "arXiv bulk metadata snapshot with OAI-PMH catch-up",
-            "source_url": os.environ.get("VANTA_ARXIV_SNAPSHOT_URL", SNAPSHOT_URL),
-            "catchup_source_url": OAI_URL,
-            "source_terms_url": TERMS_URL,
-            "snapshot_identity": snapshot_identity,
-            "snapshot_cutoff": snapshot_cutoff,
+            "source": adapter.name,
+            "source_url": adapter.source_url,
+            "catchup_source_url": adapter.catchup_source_url or "",
+            "source_terms_url": adapter.terms_url,
+            "snapshot_identity": identities[adapter.id],
+            "source_identities": json.dumps(identities, sort_keys=True, separators=(",", ":")),
+            "profile_sources": json.dumps([item["adapter"].id for item in summaries], separators=(",", ":")),
+            "snapshot_cutoff": primary["snapshotCutoff"],
             "catchup_cutoff": until_date,
             "cutoff": f"{until_date}T23:59:59Z",
             "refreshed_at": fetched_at,
@@ -613,7 +428,7 @@ def provision(
         connection.commit()
         count = verify(connection)
         if count == 0:
-            raise ValueError("arXiv profile produced an empty corpus")
+            raise ValueError("this corpus profile produced an empty corpus")
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         connection.execute("PRAGMA journal_mode=DELETE")
     connection.close()
@@ -631,23 +446,138 @@ def provision(
     return {"records": count, "reused": reusable}
 
 
+def refresh(
+    data_dir: Path,
+    profile_dir: Path,
+    source: str | None = None,
+    cutoff: str | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Bring the activated corpus up to date in place, without reingesting its baseline.
+
+    Only a source that publishes an incremental feed can be refreshed; the others report why they
+    were skipped. Updates are written to the live database and indexed record by record, so readers
+    keep serving the corpus throughout and no second copy of it is needed on the storage volume.
+    """
+    database = data_dir / "corpus.db"
+    if not database.exists():
+        raise ValueError("no activated corpus database is present")
+    if source is not None and sources.find(source) is None:
+        raise ValueError(f"unknown source '{source}'; known sources are {', '.join(sources.identifiers())}")
+    overrides = source_overrides(overrides)
+    fetched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    until_date = until_date_for(cutoff)
+
+    refreshed: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    added = 0
+    # A rollback journal keeps the activated file self-contained, so read-only callers are unaffected.
+    with connect(database, journal="DELETE") as connection:
+        metadata = dict(connection.execute("SELECT key, value FROM metadata"))
+        if metadata.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
+            raise ValueError("the activated corpus uses an unsupported schema version")
+        migrate(connection)
+        profile_ids = json.loads(metadata.get("profile_ids") or "[]") or ([metadata["profile_id"]] if metadata.get("profile_id") else [])
+        if not profile_ids:
+            raise ValueError("the activated corpus does not record the profiles it was built from")
+        categories = json.loads(metadata.get("configured_categories") or "[]") if metadata.get("content_mode") == "topics" else None
+        base_profiles, base_profile_hash = load_profiles(resolve_profiles(profile_dir, profile_ids))
+        profiles, profile_hash, _ = configure_profiles(base_profiles, base_profile_hash, categories)
+        if profile_hash != metadata.get("profile_hash"):
+            raise ValueError("the installed profiles no longer match the activated corpus; reinstall to change them")
+
+        recorded = {row["source"]: row for row in source_rows(connection)}
+        for spec in profiles:
+            adapter = sources.by_key(spec["source"])
+            if source is not None and adapter.id != source:
+                continue
+            if not adapter.supports_catch_up:
+                skipped.append({"source": adapter.id, "reason": "this source publishes no incremental feed; reinstall to adopt a newer snapshot"})
+                continue
+            earlier = previous_state(recorded, metadata, adapter.id)
+            baseline = str(earlier.get("catchup_cutoff") or earlier.get("snapshot_cutoff") or "")
+            if not baseline:
+                skipped.append({"source": adapter.id, "reason": "no recorded cutoff to resume from; reinstall to rebuild this source"})
+                continue
+            from_date = baseline[:10]
+            before = int(connection.execute("SELECT count(*) FROM papers WHERE source = ?", (adapter.id,)).fetchone()[0])
+            adapter.catch_up(
+                connection, spec, {}, lambda: None, from_date, until_date, fetched_at,
+                overrides.get(adapter.id, {}), upsert_papers, sampled, index_papers,
+            )
+            records = int(connection.execute("SELECT count(*) FROM papers WHERE source = ?", (adapter.id,)).fetchone()[0])
+            added += records - before
+            put_source(connection, {
+                "source": adapter.id,
+                "name": adapter.name,
+                "profile_id": spec["id"],
+                "identity": earlier.get("identity"),
+                "config_hash": earlier.get("config_hash") or source_config_hash(spec),
+                "source_url": adapter.source_url,
+                "catchup_source_url": adapter.catchup_source_url,
+                "terms_url": adapter.terms_url,
+                "license": adapter.license,
+                "topics_json": json.dumps(spec.get("topics", []), separators=(",", ":")),
+                "sample_percent": spec.get("samplePercent"),
+                "snapshot_cutoff": earlier.get("snapshot_cutoff"),
+                "catchup_cutoff": until_date,
+                "records": records,
+                "refreshed_at": fetched_at,
+            })
+            refreshed.append({"source": adapter.id, "from": from_date, "until": until_date, "added": records - before, "records": records})
+
+        if refreshed:
+            put_metadata(connection, {
+                "category_counts": json.dumps(count_categories(connection), separators=(",", ":"), sort_keys=True),
+                "catchup_cutoff": until_date,
+                "cutoff": f"{until_date}T23:59:59Z",
+                "refreshed_at": fetched_at,
+            })
+        connection.commit()
+        integrity = connection.execute("PRAGMA quick_check").fetchone()[0]
+        if integrity != "ok":
+            raise ValueError(f"SQLite check failed after refresh: {integrity}")
+        total = int(connection.execute("SELECT count(*) FROM papers").fetchone()[0])
+    connection.close()
+    emit_progress("complete", total, total, "Corpus refresh complete.")
+    return {
+        "refreshed": refreshed,
+        "skipped": skipped,
+        "added": added,
+        "records": total,
+        "cutoff": f"{until_date}T23:59:59Z",
+        "refreshedAt": fetched_at,
+    }
+
+
+def requested_profile_ids() -> list[str]:
+    packed = os.environ.get("VANTA_MODULE_OPTION_PROFILE_IDS")
+    return json.loads(packed) if packed else list(DEFAULT_PROFILE_IDS)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", required=True, type=Path)
     profile_source = parser.add_mutually_exclusive_group(required=True)
-    profile_source.add_argument("--profile", type=Path)
+    profile_source.add_argument("--profile", action="append", type=Path, dest="profiles")
     profile_source.add_argument("--profile-dir", type=Path)
-    parser.add_argument("--profile-id", default=os.environ.get("VANTA_MODULE_OPTION_PROFILE_ID", "small-arxiv-cs"))
+    parser.add_argument("--profile-id", action="append", dest="profile_ids", help="Repeat to compose several sources into one corpus.")
     parser.add_argument("--cutoff", help="Fixed UTC cutoff in YYYYMMDDHHMM format; primarily for deterministic recovery/tests.")
     parser.add_argument("--category", action="append", dest="categories")
+    parser.add_argument("--refresh", action="store_true", help="Catch the activated corpus up in place instead of provisioning it.")
+    parser.add_argument("--source", help="Restrict a refresh to one source identifier.")
     arguments = parser.parse_args()
+    if arguments.refresh:
+        profile_dir = arguments.profile_dir or arguments.profiles[0].parent
+        print(json.dumps(refresh(arguments.data_dir, profile_dir, arguments.source, arguments.cutoff)), flush=True)
+        return
     categories = arguments.categories
     if categories is None and os.environ.get("VANTA_MODULE_OPTION_CATEGORIES"):
         categories = json.loads(os.environ["VANTA_MODULE_OPTION_CATEGORIES"])
-    profile_path = arguments.profile or resolve_profile(arguments.profile_dir, arguments.profile_id)
+    profile_paths = arguments.profiles or resolve_profiles(arguments.profile_dir, arguments.profile_ids or requested_profile_ids())
     result = provision(
         arguments.data_dir,
-        profile_path,
+        profile_paths,
         cutoff=arguments.cutoff,
         categories=categories,
     )

@@ -30,7 +30,7 @@ function node(hardware) {
   };
 }
 
-function receiptLine(moduleId, version = TEXT_TOOLS_VERSION) {
+function receiptLine(moduleId, version = TEXT_TOOLS_VERSION, installOptions) {
   const receipt = {
     schemaVersion: 1,
     moduleId,
@@ -41,6 +41,7 @@ function receiptLine(moduleId, version = TEXT_TOOLS_VERSION) {
     entrypoint: ["python3", "server.py"],
     files: [],
     runtime: { mode: "on-demand" },
+    ...(installOptions ? { installOptions } : {}),
   };
   return `${moduleId}|${Buffer.from(JSON.stringify(receipt)).toString("base64")}\n`;
 }
@@ -540,7 +541,7 @@ test("schema v2 installation submits a durable job after verified staging", asyn
   const manager = new ModuleManager({
     maxConcurrency: 1,
     nodes: [target],
-    modules: { "corpus-search": { installOptions: { profileId: "medium-arxiv-cs" } } },
+    modules: { "corpus-search": { installOptions: { profileIds: ["medium-arxiv-cs"] } } },
   }, pool, path.join(root, "modules"), jobs);
   const [result] = await manager.install("corpus-search", [target], 300_000, {
     categories: ["cs.AI", "cs.LG"],
@@ -551,15 +552,23 @@ test("schema v2 installation submits a durable job after verified staging", asyn
   assert.equal(submitted.length, 1);
   assert.equal(submitted[0].input.kind, "module-install");
   assert.equal(submitted[0].input.environment.VANTA_MODULE_DATA_DIR, "/mnt/ssd/vantamcpd/corpora/corpus-search");
-  assert.equal(submitted[0].input.environment.VANTA_MODULE_OPTION_PROFILE_ID, "medium-arxiv-cs");
+  assert.equal(submitted[0].input.environment.VANTA_MODULE_OPTION_PROFILE_IDS, '["medium-arxiv-cs"]');
   assert.equal(submitted[0].input.environment.VANTA_MODULE_OPTION_TARGET_RECORDS, undefined);
   assert.equal(submitted[0].input.environment.VANTA_MODULE_OPTION_CATEGORIES, '["cs.AI","cs.LG"]');
+  // The receipt records what the node was installed with, so the control plane can report it later.
+  // A job-backed install carries its lifecycle script, and the receipt inside it, into the durable job.
+  const staged = commands.map((entry) => entry.command).find((command) => command.includes("module-staging"));
+  const script = Buffer.from(/printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d >/.exec(staged ?? "")?.[1] ?? "", "base64").toString("utf8");
+  const encoded = /printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d > "\$tmp"/.exec(script);
+  assert.ok(encoded, "the install writes an encoded receipt");
+  const written = JSON.parse(Buffer.from(encoded[1], "base64").toString("utf8"));
+  assert.deepEqual(written.installOptions, { profileIds: ["medium-arxiv-cs"], categories: ["cs.AI", "cs.LG"] });
   assert.ok(commands.some((entry) => entry.command.includes("/var/lib/vantamcpd/module-staging/corpus-search-")));
   assert.ok(!commands.at(-1).command.startsWith("rm -rf -- /tmp/vantamcpd-corpus-search-"));
 
   await assert.rejects(
-    manager.install("corpus-search", [target], 300_000, { profileId: "unsupported-arxiv-cs" }),
-    /profileId must be one of: small-arxiv-cs, medium-arxiv-cs, large-arxiv-cs/,
+    manager.install("corpus-search", [target], 300_000, { profileIds: ["unsupported-arxiv-cs"] }),
+    /profileIds must contain only: small-arxiv-cs, medium-arxiv-cs, large-arxiv-cs, wikipedia-en-titles/,
   );
 });
 
@@ -602,19 +611,19 @@ test("per-node install options override the cluster-wide defaults", async () => 
     nodes: [target],
     modules: {
       "corpus-search": {
-        installOptions: { profileId: "small-arxiv-cs" },
-        nodes: { [target.name]: { installOptions: { profileId: "large-arxiv-cs" } } },
+        installOptions: { profileIds: ["small-arxiv-cs"] },
+        nodes: { [target.name]: { installOptions: { profileIds: ["large-arxiv-cs", "wikipedia-en-titles"] } } },
       },
     },
   }, pool, path.join(root, "modules"), jobs);
 
   const [result] = await manager.install("corpus-search", [target], 300_000);
   assert.equal(result.ok, true);
-  assert.equal(submitted[0].input.environment.VANTA_MODULE_OPTION_PROFILE_ID, "large-arxiv-cs");
+  assert.equal(submitted[0].input.environment.VANTA_MODULE_OPTION_PROFILE_IDS, '["large-arxiv-cs","wikipedia-en-titles"]');
 
   // An explicit tool argument still wins over both configured layers.
-  await manager.install("corpus-search", [target], 300_000, { profileId: "medium-arxiv-cs" });
-  assert.equal(submitted[1].input.environment.VANTA_MODULE_OPTION_PROFILE_ID, "medium-arxiv-cs");
+  await manager.install("corpus-search", [target], 300_000, { profileIds: ["medium-arxiv-cs"] });
+  assert.equal(submitted[1].input.environment.VANTA_MODULE_OPTION_PROFILE_IDS, '["medium-arxiv-cs"]');
 });
 
 test("persistent data purge requires uninstall and a module marker", async () => {
@@ -1008,7 +1017,7 @@ test("discovers installed module receipt counts per node", async () => {
     host: first.host,
     ok: true,
     code: 0,
-    stdout: receiptLine("text-tools") + receiptLine("science-corpus", "1.4.2") + receiptLine("text-tools"),
+    stdout: receiptLine("text-tools") + receiptLine("science-corpus", "1.4.2", { profileIds: ["large-arxiv-cs"] }) + receiptLine("text-tools"),
     stderr: "",
     durationMs: 1,
     truncated: false,
@@ -1027,6 +1036,7 @@ test("discovers installed module receipt counts per node", async () => {
     count: 2,
     modules: ["science-corpus", "text-tools"],
     moduleVersions: { "text-tools": TEXT_TOOLS_VERSION, "science-corpus": "1.4.2" },
+    moduleOptions: { "science-corpus": { profileIds: ["large-arxiv-cs"] } },
   });
   assert.deepEqual(inventory[1], {
     node: "offline-node",

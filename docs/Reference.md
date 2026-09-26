@@ -686,7 +686,7 @@ guaranteed before computation begins.
   "modules": {
     "corpus-search": {
       "installOptions": {
-        "profileId": "medium-arxiv-cs",
+        "profileIds": ["medium-arxiv-cs", "wikipedia-en-titles"],
         "categories": ["cs.AI", "cs.LG", "cs.CL"]
       }
     }

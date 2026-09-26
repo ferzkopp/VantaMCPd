@@ -23,7 +23,7 @@ data lifecycle, and troubleshooting instructions.
 | --- | --- | --- | --- |
 | `artifact-storage` | Immutable shared artifacts with quotas and expiration | Singleton service | [Artifact Storage](../modules/artifact-storage/ArtifactStorage.md) |
 | `text-tools` | Bounded text, data, document, security, and developer operations | Replicated, on demand | [Text Tools](../modules/text-tools/TextTools.md) |
-| `corpus-search` | Provenance-aware arXiv metadata search with SQLite FTS5/BM25 | Singleton, on demand | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
+| `corpus-search` | Provenance-aware multi-source metadata search with SQLite FTS5/BM25 | Singleton, on demand | [Scientific Corpus Search](../modules/corpus-search/CorpusSearch.md) |
 | `browser-retrieval` | JavaScript-rendered page retrieval and structured extraction | Replicated service | [Browser Retrieval](../modules/browser-retrieval/BrowserRetrieval.md) |
 | `python-compute` | Sandboxed Python calculation, analysis, and rendered artifacts | Replicated service | [Python Compute](../modules/python-compute/PythonCompute.md) |
 | `image-processing` | Isolated raster inspection, editing, composition, conversion, and comparison | Replicated service | [Image Processing](../modules/image-processing/ImageProcessing.md) |
@@ -63,7 +63,10 @@ commands may be installed only when their apt packages are declared by the manif
 leaves the previous active version intact.
 
 Typed `installOptions` expose their descriptions, defaults, and bounds through `cluster_list_modules`.
-Explicit options are validated before remote work begins. Persistent defaults can be set globally and
+Explicit options are validated before remote work begins. The resolved values are recorded in the
+installation receipt, so `cluster_list_modules` and the dashboard report what each node was actually
+installed with rather than what the configuration currently says. A node installed before this was
+recorded reports no options until its next install. Persistent defaults can be set globally and
 per node in `cluster.config.local.json`:
 
 ```json
@@ -293,15 +296,18 @@ health and tools, and `/var/lib/vantamcpd/jobs/<job-id>/` for durable job state.
 Platform work under consideration:
 
 1. Add artifact ACLs, backup, replication, deduplication, and optional alternate storage backends.
-2. Add corpus adapters for approved documentation, PubMed, Crossref, Semantic Scholar, conferences,
-   dataset catalogs, and repository metadata, with provenance and licensing recorded per source.
+2. Extend `corpus-search` with further source adapters behind its existing adapter boundary. PubMed is
+   the strongest next candidate, followed by DBLP, then DataCite and Zenodo, then Crossref; OpenAlex and
+   Semantic Scholar are deferred on licensing and size. Each adapter records provenance and licensing
+   per source, as the arXiv and Wikipedia adapters already do. Candidate reference datasets are listed
+   under Future Expansion in the [module guide](../modules/corpus-search/CorpusSearch.md).
 3. Add precomputed embeddings and vector or hybrid retrieval only on compatible node profiles.
-4. Evaluate separate modules for OCR and screenshots, PDF extraction, geospatial operations, and
-   curated Wikipedia data.
+4. Evaluate separate modules for OCR and screenshots, PDF extraction, and geospatial operations. Curated
+   Wikipedia content beyond the ingested title index belongs with them rather than in `corpus-search`.
 5. Support heavier ML and vision workloads as suitable arm64, x86-64, GPU, or accelerator-equipped
    nodes join the same inventory and compatibility model.
-6. Declare background calls for `image-processing` batch work and add a corpus refresh tool for
-   `corpus-search`; both can use the existing background-call mechanism.
+6. Declare background calls for `image-processing` batch work, using the same background-call mechanism
+   that `corpus-search` now uses for `corpus_refresh`.
 
 Persistent Python sessions, caller-installed dependencies, network access from submitted code,
 authenticated browser sessions, scripted browser interaction, and browser-generated binary outputs

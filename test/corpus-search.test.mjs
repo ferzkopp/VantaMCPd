@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -117,8 +118,10 @@ test("provisions fixture metadata and serves bounded MCP search tools", { skip: 
       { name: "corpus_search", arguments: { query: "x", limit: 500 } },
       { name: "corpus_categories", arguments: { contains: "retrieval" } },
     ]);
-    assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), ["corpus_search", "corpus_get", "corpus_info", "corpus_categories"]);
+    assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), ["corpus_search", "corpus_get", "corpus_info", "corpus_categories", "corpus_refresh"]);
     assert.equal(responses[2].result.structuredContent.results[0].id, "2609.00001");
+    assert.equal(responses[2].result.structuredContent.results[0].source, "arxiv");
+    assert.match(responses[2].result.structuredContent.results[0].license, /arXiv API terms/);
     assert.equal(responses[3].result.structuredContent.authors[0], "Ada Example");
     assert.equal(responses[4].result.structuredContent.records, 2);
     assert.equal(responses[4].result.structuredContent.samplePercent, 100);
@@ -126,6 +129,8 @@ test("provisions fixture metadata and serves bounded MCP search tools", { skip: 
     assert.deepEqual(responses[4].result.structuredContent.topics, ["cs.IR", "cs.DB"]);
     assert.match(responses[4].result.structuredContent.source, /bulk metadata snapshot/);
     assert.match(responses[4].result.structuredContent.catchUpSourceUrl, /oaipmh\.arxiv\.org/);
+    assert.deepEqual(responses[4].result.structuredContent.sources.map((entry) => entry.source), ["arxiv"]);
+    assert.equal(responses[4].result.structuredContent.sources[0].records, 2);
     assert.equal(responses[5].result.isError, true);
 
     // A plain-language subject must resolve to the identifier corpus_search accepts.
@@ -234,12 +239,12 @@ test("reuses a matching snapshot and adds newer OAI records without duplicates",
 test("arXiv throttling uses bounded Retry-After and exponential backoff", { skip: !pythonCommand }, () => {
   const script = [
     "import urllib.error",
-    "import provision",
+    "import fetching",
     "from provision import ArxivClient",
     "sleeps = []",
     "clock = [100.0]",
     "attempts = 0",
-    "provision.time.monotonic = lambda: clock[0]",
+    "fetching.time.monotonic = lambda: clock[0]",
     "def sleep(seconds):",
     "    sleeps.append(seconds)",
     "    clock[0] += seconds",
@@ -283,4 +288,395 @@ test("parses resumable arXiv OAI metadata pages", { skip: !pythonCommand }, () =
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
   });
   assert.equal(result.status, 0, result.stderr || result.error?.message);
+});
+
+// A packaged profile's bytes are its content identity. Changing one silently discards the corpus an
+// installed node already holds, so the checksums are pinned rather than merely documented.
+test("packaged arXiv profiles keep the identities installed corpora were built from", () => {
+  const checksums = {
+    "small-arxiv.json": "15f785048eb66fcd86e059bf2b370604af795fa235b1e704745735fd145ecbb7",
+    "medium-arxiv.json": "6a3402cad17eacf7333c758bd4d616b4a76265da97c6e540036fc28ad75820d4",
+    "large-arxiv.json": "ce4ece6c777b10971812f44abb9d313f9ccb94658de5b5529f136dd9b3aa7808",
+  };
+  for (const [name, expected] of Object.entries(checksums)) {
+    const raw = readFileSync(path.join(moduleDirectory, "profiles", name));
+    assert.equal(createHash("sha256").update(raw).digest("hex"), expected, `${name} must keep its content identity`);
+  }
+});
+
+test("packaged profiles each configure exactly one source", { skip: !pythonCommand }, () => {
+  const script = [
+    "from pathlib import Path",
+    "import sources",
+    "from provision import configure_profiles, load_profiles",
+    `directory = Path(${JSON.stringify(path.join(moduleDirectory, "profiles"))})`,
+    "paths = sorted(directory.glob('*.json'))",
+    "loaded = {}",
+    "for candidate in paths:",
+    "    profiles, base_hash = load_profiles([candidate])",
+    "    configured, profile_hash, _ = configure_profiles(profiles, base_hash)",
+    "    assert profile_hash == base_hash",
+    "    loaded[configured[0]['id']] = configured[0]['source']",
+    "assert loaded['small-arxiv-cs'] == 'arxiv-bulk-snapshot'",
+    "assert loaded['wikipedia-en-titles'] == 'wikipedia-title-index'",
+    "assert set(loaded) == {'small-arxiv-cs', 'medium-arxiv-cs', 'large-arxiv-cs', 'wikipedia-en-titles'}",
+    // Composing independent profiles changes the identity, and the order they are named does not.
+    "combined = [directory / 'small-arxiv.json', directory / 'wikipedia-en-titles.json']",
+    "profiles, base_hash = load_profiles(combined)",
+    "assert [profile['source'] for profile in profiles] == ['arxiv-bulk-snapshot', 'wikipedia-title-index']",
+    "assert base_hash == load_profiles(list(reversed(combined)))[1]",
+    "assert base_hash != load_profiles([combined[0]])[1]",
+    "try:",
+    "    load_profiles([combined[0], combined[0]])",
+    "except ValueError as error:",
+    "    assert 'more than once' in str(error), error",
+    "else:",
+    "    raise AssertionError('a repeated profile must be rejected')",
+  ].join("\n");
+  const result = spawnSync(pythonCommand, ["-c", script], {
+    cwd: moduleDirectory,
+    encoding: "utf8",
+    timeout: 30_000,
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+});
+
+test("migrates a version 1 corpus in place instead of reingesting it", { skip: !pythonCommand }, () => {
+  const dataDirectory = mkdtempSync(path.join(tmpdir(), "vanta-corpus-migrate-"));
+  const profilePath = path.join(dataDirectory, "profile.json");
+  writeFileSync(profilePath, JSON.stringify({
+    schemaVersion: 2,
+    id: "fixture",
+    source: "arxiv-bulk-snapshot",
+    samplePercent: 100,
+    sampleSeed: "fixture-v1",
+    topics: ["cs.IR"],
+  }));
+  const legacySchema = [
+    "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    "CREATE TABLE papers (id TEXT PRIMARY KEY, title TEXT NOT NULL, abstract TEXT NOT NULL, authors_json TEXT NOT NULL,",
+    " authors_search TEXT NOT NULL, categories_json TEXT NOT NULL, categories_search TEXT NOT NULL, primary_category TEXT,",
+    " published TEXT NOT NULL, updated TEXT NOT NULL, doi TEXT, journal_ref TEXT, comment TEXT, abstract_url TEXT NOT NULL,",
+    " pdf_url TEXT, source_query TEXT NOT NULL, profile_slice TEXT NOT NULL, fetched_at TEXT NOT NULL);",
+    "CREATE INDEX papers_published_idx ON papers(published);",
+    "CREATE INDEX papers_primary_category_idx ON papers(primary_category);",
+    "CREATE VIRTUAL TABLE papers_fts USING fts5(title, abstract, authors, categories, tokenize='unicode61 remove_diacritics 2');",
+    "CREATE VIRTUAL TABLE papers_vocab USING fts5vocab(papers_fts, 'row');",
+  ].join("");
+  const script = [
+    "import hashlib, json, sqlite3, zipfile",
+    "from pathlib import Path",
+    "from corpus import connect",
+    "from provision import provision",
+    `data = Path(${JSON.stringify(dataDirectory)})`,
+    `profile_path = Path(${JSON.stringify(profilePath)})`,
+    `archive = data / 'snapshot.zip'`,
+    "snapshot_record = {'id':'2609.00001','authors':'Ada Example','authors_parsed':[['Example','Ada','']],'title':'Document Retrieval','abstract':'Snapshot metadata.','categories':'cs.IR','versions':[{'version':'v1','created':'Thu, 10 Sep 2026 00:00:00 GMT'}],'update_date':'2026-09-10'}",
+    "with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:",
+    "    bundle.writestr('arxiv-metadata-oai-snapshot.json', json.dumps(snapshot_record) + '\\n')",
+    "with zipfile.ZipFile(archive) as bundle:",
+    "    member = bundle.getinfo('arxiv-metadata-oai-snapshot.json')",
+    "    identity = '%08x:%d:%d' % (member.CRC, member.file_size, member.compress_size)",
+    // A corpus written by the previous release, holding a record the snapshot does not contain.
+    "legacy = sqlite3.connect(data / 'corpus.db')",
+    `legacy.executescript(${JSON.stringify(legacySchema)})`,
+    "legacy.execute('INSERT INTO papers VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', ('2609.09999', 'Legacy Retrieval Record', 'Retained from the previous schema.', '[\"Ada Example\"]', 'Ada Example', '[\"cs.IR\"]', '|cs.IR|', 'cs.IR', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', None, None, None, 'https://arxiv.org/abs/2609.09999', None, 'bulk:sample=100%;topics=cs.IR', 'bulk-snapshot', '2026-09-01T00:00:00Z'))",
+    "legacy.execute('INSERT INTO papers_fts(rowid, title, abstract, authors, categories) SELECT rowid, title, abstract, authors_search, categories_search FROM papers')",
+    "legacy.executemany('INSERT INTO metadata VALUES(?, ?)', [",
+    "    ('schema_version', '1'),",
+    "    ('profile_id', 'fixture'),",
+    "    ('profile_hash', hashlib.sha256(profile_path.read_bytes()).hexdigest()),",
+    "    ('sample_percent', '100'),",
+    "    ('content_mode', 'profile'),",
+    "    ('configured_categories', '[\"cs.IR\"]'),",
+    "    ('snapshot_identity', identity),",
+    "    ('snapshot_cutoff', '2026-09-10T00:00:00Z'),",
+    "    ('catchup_cutoff', '2026-09-13'),",
+    "])",
+    "legacy.commit()",
+    "legacy.close()",
+    "class Client:",
+    "    def fetch(self, category, from_date, until_date, token=None):",
+    "        assert from_date == '2026-09-13', from_date",
+    "        return b'<OAI-PMH xmlns=\"http://www.openarchives.org/OAI/2.0/\"><ListRecords /></OAI-PMH>'",
+    "result = provision(data, profile_path, Client(), '202609141200', snapshot_path=archive)",
+    "assert result == {'records': 1, 'reused': True}, result",
+    "with connect(data / 'corpus.db', readonly=True) as connection:",
+    "    metadata = dict(connection.execute('SELECT key, value FROM metadata'))",
+    "    assert metadata['schema_version'] == '2'",
+    "    assert metadata['profile_hash'] == hashlib.sha256(profile_path.read_bytes()).hexdigest()",
+    "    row = connection.execute('SELECT source, license, title FROM papers WHERE id = ?', ('2609.09999',)).fetchone()",
+    "    assert row['source'] == 'arxiv' and row['title'] == 'Legacy Retrieval Record'",
+    "    assert 'arXiv' in row['license']",
+    "    assert connection.execute(\"SELECT count(*) FROM papers_fts WHERE papers_fts MATCH 'legacy'\").fetchone()[0] == 1",
+    "    sources_row = connection.execute('SELECT * FROM sources').fetchone()",
+    "    assert sources_row['source'] == 'arxiv' and sources_row['records'] == 1",
+    "    assert sources_row['snapshot_cutoff'] == '2026-09-10T00:00:00Z'",
+  ].join("\n");
+  try {
+    const result = spawnSync(pythonCommand, ["-c", script], {
+      cwd: moduleDirectory,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+  } finally {
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("adding a source keeps the records the retained corpus already holds", { skip: !pythonCommand }, () => {
+  const dataDirectory = mkdtempSync(path.join(tmpdir(), "vanta-corpus-add-"));
+  const arxivProfile = path.join(dataDirectory, "arxiv-profile.json");
+  const wikipediaProfile = path.join(dataDirectory, "wikipedia-profile.json");
+  writeFileSync(arxivProfile, JSON.stringify({
+    schemaVersion: 2,
+    id: "fixture-arxiv",
+    source: "arxiv-bulk-snapshot",
+    samplePercent: 100,
+    sampleSeed: "fixture-v1",
+    topics: ["cs.IR"],
+  }));
+  writeFileSync(wikipediaProfile, JSON.stringify({
+    schemaVersion: 2,
+    id: "fixture-wikipedia",
+    source: "wikipedia-title-index",
+    wiki: "enwiki",
+    samplePercent: 100,
+    sampleSeed: "fixture-wiki-v1",
+  }));
+  const script = [
+    "import gzip, json, zipfile",
+    "from contextlib import closing",
+    "from pathlib import Path",
+    "from corpus import connect",
+    "from provision import provision",
+    `data = Path(${JSON.stringify(dataDirectory)})`,
+    `arxiv = Path(${JSON.stringify(arxivProfile)})`,
+    `wikipedia = Path(${JSON.stringify(wikipediaProfile)})`,
+    "archive = data / 'snapshot.zip'",
+    "record = {'id':'2609.00001','authors':'Ada Example','authors_parsed':[['Example','Ada','']],'title':'Document Retrieval','abstract':'Snapshot metadata.','categories':'cs.IR','versions':[{'version':'v1','created':'Thu, 10 Sep 2026 00:00:00 GMT'}],'update_date':'2026-09-10'}",
+    "with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:",
+    "    bundle.writestr('arxiv-metadata-oai-snapshot.json', json.dumps(record) + '\\n')",
+    "titles = data / 'titles.gz'",
+    "with gzip.open(titles, 'wb') as handle:",
+    "    handle.write(b'page_title\\nRobot_learning\\nDatabase_index\\n')",
+    "class Client:",
+    "    def __init__(self): self.calls = 0",
+    "    def fetch(self, category, from_date, until_date, token=None):",
+    "        self.calls += 1",
+    "        return b'<OAI-PMH xmlns=\"http://www.openarchives.org/OAI/2.0/\"><ListRecords /></OAI-PMH>'",
+    // A corpus holding arXiv alone, as an installed node would already have.
+    "assert provision(data, arxiv, Client(), '202609131200', snapshot_path=archive) == {'records': 1, 'reused': False}",
+    "with closing(connect(data / 'corpus.db', readonly=True)) as connection:",
+    "    fetched = connection.execute('SELECT fetched_at FROM papers WHERE id = ?', ('2609.00001',)).fetchone()[0]",
+    // Adding an independent source must not disturb the source already present.
+    "overrides = {'wikipedia': {'dump_path': titles}}",
+    "result = provision(data, [arxiv, wikipedia], Client(), '202609141200', snapshot_path=archive, overrides=overrides)",
+    "assert result == {'records': 3, 'reused': True}, result",
+    "with closing(connect(data / 'corpus.db', readonly=True)) as connection:",
+    "    rows = {row['source']: row for row in connection.execute('SELECT * FROM sources')}",
+    "    assert sorted(rows) == ['arxiv', 'wikipedia'], sorted(rows)",
+    "    assert rows['arxiv']['records'] == 1 and rows['wikipedia']['records'] == 2",
+    "    assert rows['arxiv']['profile_id'] == 'fixture-arxiv'",
+    "    assert rows['wikipedia']['profile_id'] == 'fixture-wikipedia'",
+    "    kept = connection.execute('SELECT fetched_at FROM papers WHERE id = ?', ('2609.00001',)).fetchone()[0]",
+    "    assert kept == fetched, 'the arXiv record was reingested instead of kept'",
+    "    assert connection.execute(\"SELECT count(*) FROM papers_fts WHERE papers_fts MATCH 'retrieval'\").fetchone()[0] == 1",
+    // Dropping a source removes its records and leaves the other one alone.
+    "assert provision(data, arxiv, Client(), '202609151200', snapshot_path=archive) == {'records': 1, 'reused': True}",
+    "with closing(connect(data / 'corpus.db', readonly=True)) as connection:",
+    "    assert [row[0] for row in connection.execute('SELECT source FROM sources')] == ['arxiv']",
+    "    assert connection.execute('SELECT count(*) FROM papers WHERE source = ?', ('wikipedia',)).fetchone()[0] == 0",
+    "    assert connection.execute(\"SELECT count(*) FROM papers_fts WHERE papers_fts MATCH 'robot'\").fetchone()[0] == 0",
+    "    assert connection.execute('SELECT fetched_at FROM papers WHERE id = ?', ('2609.00001',)).fetchone()[0] == fetched",
+  ].join("\n");
+  try {
+    const result = spawnSync(pythonCommand, ["-c", script], {
+      cwd: moduleDirectory,
+      encoding: "utf8",
+      timeout: 60_000,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+  } finally {
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("changing a source's own profile reingests only that source", { skip: !pythonCommand }, () => {
+  const dataDirectory = mkdtempSync(path.join(tmpdir(), "vanta-corpus-change-"));
+  const wide = path.join(dataDirectory, "wide.json");
+  const narrow = path.join(dataDirectory, "narrow.json");
+  writeFileSync(wide, JSON.stringify({
+    schemaVersion: 2,
+    id: "fixture-wide",
+    source: "arxiv-bulk-snapshot",
+    samplePercent: 100,
+    sampleSeed: "fixture-v1",
+    topics: ["cs.IR", "cs.DB"],
+  }));
+  writeFileSync(narrow, JSON.stringify({
+    schemaVersion: 2,
+    id: "fixture-narrow",
+    source: "arxiv-bulk-snapshot",
+    samplePercent: 100,
+    sampleSeed: "fixture-v1",
+    topics: ["cs.IR"],
+  }));
+  const script = [
+    "import json, zipfile",
+    "from contextlib import closing",
+    "from pathlib import Path",
+    "from corpus import connect",
+    "from provision import provision",
+    `data = Path(${JSON.stringify(dataDirectory)})`,
+    "archive = data / 'snapshot.zip'",
+    "records = [",
+    "    {'id':'2609.00001','authors':'A','authors_parsed':[['A','A','']],'title':'Document Retrieval','abstract':'x','categories':'cs.IR','versions':[{'version':'v1','created':'Thu, 10 Sep 2026 00:00:00 GMT'}],'update_date':'2026-09-10'},",
+    "    {'id':'2609.00002','authors':'B','authors_parsed':[['B','B','']],'title':'Database Search','abstract':'y','categories':'cs.DB','versions':[{'version':'v1','created':'Fri, 11 Sep 2026 00:00:00 GMT'}],'update_date':'2026-09-11'},",
+    "]",
+    "with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:",
+    "    bundle.writestr('arxiv-metadata-oai-snapshot.json', ''.join(json.dumps(item) + '\\n' for item in records))",
+    "class Client:",
+    "    def fetch(self, category, from_date, until_date, token=None):",
+    "        return b'<OAI-PMH xmlns=\"http://www.openarchives.org/OAI/2.0/\"><ListRecords /></OAI-PMH>'",
+    `assert provision(data, Path(${JSON.stringify(wide)}), Client(), '202609131200', snapshot_path=archive) == {'records': 2, 'reused': False}`,
+    // The same source under a different topic list is not the same content, so it is rebuilt.
+    `result = provision(data, Path(${JSON.stringify(narrow)}), Client(), '202609141200', snapshot_path=archive)`,
+    "assert result == {'records': 1, 'reused': False}, result",
+    "with closing(connect(data / 'corpus.db', readonly=True)) as connection:",
+    "    assert [row[0] for row in connection.execute('SELECT id FROM papers')] == ['2609.00001']",
+    "    assert connection.execute(\"SELECT count(*) FROM papers_fts WHERE papers_fts MATCH 'database'\").fetchone()[0] == 0",
+  ].join("\n");
+  try {
+    const result = spawnSync(pythonCommand, ["-c", script], {
+      cwd: moduleDirectory,
+      encoding: "utf8",
+      timeout: 60_000,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+  } finally {
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("composes a second source into one corpus and refreshes only what has a feed", { skip: !pythonCommand }, () => {
+  const dataDirectory = mkdtempSync(path.join(tmpdir(), "vanta-corpus-sources-"));
+  const arxivProfile = path.join(dataDirectory, "arxiv-profile.json");
+  const wikipediaProfile = path.join(dataDirectory, "wikipedia-profile.json");
+  writeFileSync(arxivProfile, JSON.stringify({
+    schemaVersion: 2,
+    id: "fixture-arxiv",
+    source: "arxiv-bulk-snapshot",
+    samplePercent: 100,
+    sampleSeed: "fixture-v1",
+    topics: ["cs.IR", "cs.DB"],
+  }));
+  writeFileSync(wikipediaProfile, JSON.stringify({
+    schemaVersion: 2,
+    id: "fixture-wikipedia",
+    source: "wikipedia-title-index",
+    wiki: "enwiki",
+    samplePercent: 100,
+    sampleSeed: "fixture-wiki-v1",
+  }));
+  const records = [
+    { id: "2609.00001", authors: "Ada Example", authors_parsed: [["Example", "Ada", ""]], title: "Document Retrieval", abstract: "A document retrieval example.", categories: "cs.IR cs.AI", versions: [{ version: "v1", created: "Thu, 10 Sep 2026 00:00:00 GMT" }], update_date: "2026-09-10" },
+    { id: "2609.00002", authors: "Grace Sample", authors_parsed: [["Sample", "Grace", ""]], title: "Database Search", abstract: "A database metadata example.", categories: "cs.DB", versions: [{ version: "v1", created: "Fri, 11 Sep 2026 00:00:00 GMT" }], update_date: "2026-09-11" },
+  ];
+  const provisionScript = [
+    "import gzip, json, zipfile",
+    "from pathlib import Path",
+    "from provision import provision",
+    `data = Path(${JSON.stringify(dataDirectory)})`,
+    "archive = data / 'snapshot.zip'",
+    `records = json.loads(${JSON.stringify(JSON.stringify(records))})`,
+    "with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:",
+    "    bundle.writestr('arxiv-metadata-oai-snapshot.json', ''.join(json.dumps(item) + '\\n' for item in records))",
+    "titles = data / 'titles.gz'",
+    "with gzip.open(titles, 'wb') as handle:",
+    "    handle.write(b'page_title\\nDocument_retrieval\\nDatabase_index\\nRobot_learning\\n')",
+    "class Client:",
+    "    def fetch(self, category, from_date, until_date, token=None):",
+    "        return b'<OAI-PMH xmlns=\"http://www.openarchives.org/OAI/2.0/\"><ListRecords /></OAI-PMH>'",
+    `result = provision(data, [Path(${JSON.stringify(arxivProfile)}), Path(${JSON.stringify(wikipediaProfile)})], Client(), '202609131200', snapshot_path=archive, overrides={'wikipedia': {'dump_path': titles}})`,
+    "assert result == {'records': 5, 'reused': False}, result",
+  ].join("\n");
+  const refreshScript = [
+    "import json",
+    "from pathlib import Path",
+    "from provision import refresh",
+    `data = Path(${JSON.stringify(dataDirectory)})`,
+    "catchup = b'''<OAI-PMH xmlns=\"http://www.openarchives.org/OAI/2.0/\"><ListRecords><record><header><identifier>oai:arXiv.org:2609.00003</identifier></header><metadata><arXiv xmlns=\"http://arxiv.org/OAI/arXiv/\"><id>2609.00003</id><created>2026-09-14</created><authors><author><keyname>Sample</keyname><forenames>Grace</forenames></author></authors><title>Later Retrieval Work</title><categories>cs.IR</categories><abstract>Harvested after installation.</abstract></arXiv></metadata></record></ListRecords></OAI-PMH>'''",
+    "class Client:",
+    "    def fetch(self, category, from_date, until_date, token=None):",
+    "        return catchup",
+    "result = refresh(data, data, cutoff='202609151200', overrides={'arxiv': {'oai_client': Client()}})",
+    "assert [entry['source'] for entry in result['refreshed']] == ['arxiv'], result",
+    "assert result['refreshed'][0]['added'] == 1, result",
+    "assert result['skipped'][0]['source'] == 'wikipedia', result",
+    "assert 'incremental feed' in result['skipped'][0]['reason'], result",
+    "assert result['records'] == 6, result",
+  ].join("\n");
+  const runPython = (script) => {
+    const result = spawnSync(pythonCommand, ["-c", script], {
+      cwd: moduleDirectory,
+      encoding: "utf8",
+      timeout: 60_000,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+  };
+  try {
+    runPython(provisionScript);
+    const responses = runProtocol(dataDirectory, [
+      { name: "corpus_search", arguments: { query: "retrieval" } },
+      { name: "corpus_search", arguments: { query: "retrieval", source: "wikipedia" } },
+      { name: "corpus_get", arguments: { id: "wikipedia:Robot_learning" } },
+      { name: "corpus_info", arguments: {} },
+      { name: "corpus_categories", arguments: { source: "wikipedia" } },
+      { name: "corpus_search", arguments: { query: "retrieval", source: "nowhere" } },
+    ]);
+    assert.deepEqual(
+      responses[2].result.structuredContent.results.map((entry) => entry.id).sort(),
+      ["2609.00001", "wikipedia:Document_retrieval"],
+      "one query reaches every source in the corpus",
+    );
+    assert.deepEqual(responses[3].result.structuredContent.results.map((entry) => entry.id), ["wikipedia:Document_retrieval"]);
+    // A title index carries no abstract, so the snippet falls back to the title.
+    assert.equal(responses[3].result.structuredContent.results[0].snippet, "Document retrieval");
+
+    const article = responses[4].result.structuredContent;
+    assert.equal(article.title, "Robot learning");
+    assert.equal(article.source, "wikipedia");
+    assert.equal(article.license, "CC BY-SA 4.0");
+    assert.equal(article.abstractUrl, "https://en.wikipedia.org/wiki/Robot_learning");
+
+    const described = responses[5].result.structuredContent.sources;
+    assert.deepEqual(responses[5].result.structuredContent.profileIds, ["fixture-arxiv", "fixture-wikipedia"]);
+    assert.deepEqual(described.map((entry) => entry.source), ["arxiv", "wikipedia"]);
+    assert.deepEqual(described.map((entry) => entry.records), [2, 3]);
+    assert.equal(described[1].license, "CC BY-SA 4.0");
+    assert.equal(described[1].cutoff, described[1].snapshotCutoff, "a source without a feed keeps its snapshot cutoff");
+    assert.match(described[0].termsUrl, /info\.arxiv\.org/);
+
+    // Wikipedia titles carry no subject scheme, so no category is attributable to them.
+    assert.deepEqual(responses[6].result.structuredContent.categories, []);
+    assert.equal(responses[7].result.isError, true, "an unknown source is rejected rather than ignored");
+
+    runPython(refreshScript);
+    const afterRefresh = runProtocol(dataDirectory, [
+      { name: "corpus_search", arguments: { query: "harvested" } },
+      { name: "corpus_info", arguments: {} },
+    ]);
+    assert.deepEqual(afterRefresh[2].result.structuredContent.results.map((entry) => entry.id), ["2609.00003"], "a refreshed record is indexed immediately");
+    assert.equal(afterRefresh[3].result.structuredContent.records, 6);
+    assert.equal(afterRefresh[3].result.structuredContent.cutoff, "2026-09-15T23:59:59Z");
+  } finally {
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
 });

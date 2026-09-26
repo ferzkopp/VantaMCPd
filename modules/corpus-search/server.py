@@ -5,10 +5,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import sources
 from corpus import get_paper, info, list_categories, search, self_test, verify, connect
+from fetching import route_progress
+from provision import refresh
 
 PROTOCOL_VERSION = "2025-06-18"
-VERSION = "0.4.1"
+VERSION = "0.5.0"
+SOURCE_INPUT = {
+    "type": "string",
+    "maxLength": 32,
+    "description": "Restrict to one ingested source, such as arxiv or wikipedia. Use corpus_info to see which sources this corpus holds.",
+}
 
 
 def database_path() -> Path:
@@ -21,6 +29,17 @@ def database_path() -> Path:
     return database
 
 
+def profiles_path() -> Path:
+    return Path(__file__).resolve().parent / "profiles"
+
+
+def refresh_corpus(arguments: dict[str, Any]) -> dict[str, Any]:
+    source = arguments.get("source")
+    if source is not None and not isinstance(source, str):
+        raise ValueError("source must be a source identifier such as arxiv")
+    return refresh(database_path().parent, profiles_path(), source)
+
+
 TOOLS = {
     "corpus_search": {
         "description": (
@@ -31,7 +50,8 @@ TOOLS = {
             "Words are not stemmed or expanded, so use OR or prefix* for plural and spelling variants. "
             "A misspelled word is corrected automatically when the query finds nothing; when the response contains "
             "a corrections array, say which words were changed before presenting results. "
-            "Resolve a subject named in plain language with corpus_categories before filtering by category."
+            "Results carry the source and licence they came from. Resolve a subject named in plain language with "
+            "corpus_categories before filtering by category, and use source to restrict to one dataset."
         ),
         "inputSchema": {
             "type": "object",
@@ -42,6 +62,7 @@ TOOLS = {
                     "maxLength": 500,
                     "description": "Search terms. All terms are required unless separated by OR. Prefix a term with - to exclude it; a query of only exclusions is rejected.",
                 },
+                "source": SOURCE_INPUT,
                 "category": {"type": "string", "maxLength": 40, "description": "Exact arXiv category identifier such as cs.RO, matched against cross-lists too. Use corpus_categories to find it."},
                 "publishedFrom": {"type": "string", "description": "Inclusive YYYY-MM-DD date."},
                 "publishedTo": {"type": "string", "description": "Inclusive YYYY-MM-DD date."},
@@ -55,17 +76,20 @@ TOOLS = {
         "handler": lambda arguments: search(database_path(), arguments),
     },
     "corpus_get": {
-        "description": "Return one exact arXiv metadata record from the installed corpus.",
+        "description": (
+            "Return one exact metadata record from the installed corpus. Accepts a bare arXiv identifier or "
+            "abstract URL, or a prefixed identifier from another source such as wikipedia:Robot_learning."
+        ),
         "inputSchema": {
             "type": "object",
-            "properties": {"id": {"type": "string", "maxLength": 100}},
+            "properties": {"id": {"type": "string", "maxLength": 300}},
             "required": ["id"],
             "additionalProperties": False
         },
         "handler": lambda arguments: get_paper(database_path(), arguments.get("id")),
     },
     "corpus_info": {
-        "description": "Describe the installed corpus profile, provenance, record counts, size, and refresh cutoff.",
+        "description": "Describe the installed corpus profile, its sources with their licences and cutoffs, record counts, size, and refresh time.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         "handler": lambda _arguments: info(database_path()),
     },
@@ -75,11 +99,26 @@ TOOLS = {
             "type": "object",
             "properties": {
                 "contains": {"type": "string", "minLength": 1, "maxLength": 80, "description": "Case-insensitive substring matched against the identifier and the category name."},
-                "ingestedOnly": {"type": "boolean", "default": False, "description": "Restrict results to the profile's ingestion topics, excluding cross-listed categories."}
+                "ingestedOnly": {"type": "boolean", "default": False, "description": "Restrict results to the profile's ingestion topics, excluding cross-listed categories."},
+                "source": SOURCE_INPUT
             },
             "additionalProperties": False
         },
         "handler": lambda arguments: list_categories(database_path(), arguments),
+    },
+    "corpus_refresh": {
+        "description": (
+            "Catch the installed corpus up with its sources without reinstalling it, harvesting records published "
+            "since the recorded cutoff and indexing them in place. Only a source with an incremental feed can be "
+            "refreshed; the response reports which sources were skipped and why. This contacts the upstream service "
+            "and can run for a long time, so it runs only as a background job."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"source": SOURCE_INPUT},
+            "additionalProperties": False
+        },
+        "handler": refresh_corpus,
     },
 }
 
@@ -121,8 +160,12 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def main() -> None:
+    # stdout carries the MCP protocol, so refresh progress has to leave by the other channel.
+    route_progress(sys.stderr)
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         self_test()
+        assert sources.identifiers() == ["arxiv", "wikipedia"]
+        assert profiles_path().is_dir()
         if os.environ.get("VANTA_MODULE_DATA_DIR"):
             with connect(database_path(), readonly=True) as connection:
                 verify(connection)

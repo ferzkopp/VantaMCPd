@@ -163,6 +163,14 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
     return (bytes / (1024 * 1024)).toFixed(1) + " MiB";
   }
 
+  function formatInstallOptions(options) {
+    const entries = Object.entries(options || {});
+    if (!entries.length) return undefined;
+    return entries
+      .map(([name, value]) => `${name}: ${Array.isArray(value) ? value.join(", ") : value}`)
+      .join(" · ");
+  }
+
   function renderModules(modules, pending) {
     latestModules = { modules, pending };
     const tb = document.querySelector("#modules tbody");
@@ -487,6 +495,9 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
       moduleState.moduleVersions?.[id] ? `${id}@${moduleState.moduleVersions[id]}` : id,
     );
     kv(mods.dl, "modules", installedModules?.join(", ") || (moduleState?.count === 0 ? "none" : undefined));
+    Object.entries(moduleState?.moduleOptions || {}).forEach(([id, options]) => {
+      kv(mods.dl, `${id} options`, formatInstallOptions(options));
+    });
     kv(mods.dl, "invalid receipts", moduleState?.invalidReceipts?.join(", "));
     kv(mods.dl, "inventory", moduleState?.stale ? "stale" : moduleState?.reachable === false ? "unreachable" : "current");
     kv(mods.dl, "last refresh", moduleState?.refreshedAt?.replace("T", " ").slice(0, 19));
@@ -637,11 +648,13 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
     kv(installations.dl, "nodes", `${module.nodeCount} of ${module.configuredNodeCount}`);
     module.installedNodes.forEach((node) => {
       const readAt = node.refreshedAt ? ` · read ${formatRelativeTime(node.refreshedAt)}` : "";
+      const options = formatInstallOptions(node.options);
       kv(
         installations.dl,
         node.node,
         `${node.version}${node.stale ? " · stale" : node.reachable ? " · reachable" : " · unreachable"}${readAt}`,
       );
+      if (options) kv(installations.dl, `${node.node} options`, options);
     });
     dlgBody.appendChild(installations);
 

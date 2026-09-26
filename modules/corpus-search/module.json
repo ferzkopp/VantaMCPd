@@ -2,14 +2,16 @@
   "schemaVersion": 2,
   "id": "corpus-search",
   "name": "Scientific Corpus Search",
-  "version": "0.4.1",
-  "description": "Provision and search a sampled, provenance-aware arXiv metadata corpus with SQLite FTS5/BM25.",
+  "version": "0.5.0",
+  "description": "Provision and search a sampled, provenance-aware multi-source metadata corpus with SQLite FTS5/BM25.",
   "capabilities": [
     "search scientific paper metadata by topic, category and date",
     "search papers with quoted phrases, exclusions, alternatives and field prefixes",
     "look up an exact arXiv record with its abstract and links",
+    "resolve an exact Wikipedia article title and its link",
     "resolve a subject named in plain language to its arXiv category identifier",
-    "report the local corpus coverage, freshness and record counts"
+    "report the local corpus coverage, sources, freshness and record counts",
+    "catch the installed corpus up with newly published records"
   ],
   "entrypoint": ["python3", "server.py"],
   "compatibility": {
@@ -34,15 +36,18 @@
     "retainOnUninstall": true
   },
   "installOptions": {
-    "profileId": {
-      "type": "string",
-      "description": "Packaged bulk-snapshot sampling profile to provision.",
-      "values": ["small-arxiv-cs", "medium-arxiv-cs", "large-arxiv-cs"],
-      "default": "small-arxiv-cs"
+    "profileIds": {
+      "type": "string-list",
+      "description": "Packaged profiles to compose into one corpus, at most one per source.",
+      "minItems": 1,
+      "maxItems": 4,
+      "itemPattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "values": ["small-arxiv-cs", "medium-arxiv-cs", "large-arxiv-cs", "wikipedia-en-titles"],
+      "default": ["small-arxiv-cs"]
     },
     "categories": {
       "type": "string-list",
-      "description": "Optional arXiv topics that replace the profile's default topic selection.",
+      "description": "Optional arXiv topics that replace the packaged topic list of every selected profile that accepts topics.",
       "minItems": 1,
       "maxItems": 50,
       "itemPattern": "^[A-Za-z0-9.-]{1,40}$"
@@ -50,6 +55,11 @@
   },
   "deployment": { "mode": "singleton" },
   "runtime": { "mode": "on-demand" },
+  "background": {
+    "tools": { "corpus_refresh": "required" },
+    "maxTimeoutMs": 21600000,
+    "minFreeMemoryMb": 192
+  },
   "limits": {
     "startupMs": 10000,
     "callMs": 30000,

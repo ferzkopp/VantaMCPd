@@ -73,9 +73,6 @@ button.active { border-color: var(--accent); color: var(--accent) }
 .toggle-filter input:checked + .toggle-track::after { left: 16px; background: var(--accent) }
 .toggle-filter input:focus-visible + .toggle-track { outline: 1px solid var(--accent); outline-offset: 2px }
 
-/* min-width lets the filter shrink so the header stays on one line. */
-.grow { flex: 1; min-width: 80px }
-.count { margin-left: auto }
 .cluster-count { color: var(--fg) }
 
 main { padding: 12px 14px; display: grid; gap: 12px }
@@ -106,7 +103,7 @@ th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: upper
   align-items: center;
 }
 .card h2 .hint { color: var(--dim); font-weight: 400; text-transform: none; letter-spacing: 0 }
-.section-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 10px }
+.section-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap }
 .section-link {
   color: var(--accent);
   border: 1px solid var(--line);
@@ -120,6 +117,16 @@ th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: upper
 .section-link:hover:not(:disabled) { border-color: var(--accent) }
 .section-link:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px }
 .section-link:disabled { color: var(--dim); cursor: default }
+/* The section heading is uppercase and tracked out; typed text must not inherit that. */
+.filter-input {
+  width: 220px;
+  padding: 2px 7px;
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+#follow:not(.active) { color: var(--dim); border-color: var(--line) }
 
 #log { font-size: 12px; max-height: 52vh; overflow: auto }
 

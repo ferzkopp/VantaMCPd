@@ -102,11 +102,24 @@ const StringListInstallOptionSchema = z
         return false;
       }
     }, "must be a valid regular expression"),
+    values: z.array(z.string().min(1).max(100)).min(1).max(100).optional(),
+    default: z.array(z.string().min(1).max(100)).min(1).max(100).optional(),
   })
   .strict()
-  .refine((option) => option.minItems <= option.maxItems, {
-    path: ["maxItems"],
-    message: "must be at least minItems",
+  .superRefine((option, context) => {
+    if (option.minItems > option.maxItems) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["maxItems"], message: "must be at least minItems" });
+    }
+    if (option.values && new Set(option.values).size !== option.values.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["values"], message: "must contain unique values" });
+    }
+    if (option.default === undefined) return;
+    if (option.default.length < option.minItems || option.default.length > option.maxItems) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["default"], message: "must contain from minItems to maxItems entries" });
+    }
+    if (option.values && !option.default.every((item) => option.values?.includes(item))) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["default"], message: "must contain only values" });
+    }
   });
 
 const StringInstallOptionSchema = z

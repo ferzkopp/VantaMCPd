@@ -21,11 +21,6 @@
   <select id="node" title="Show only interactions with one node"><option value="">all nodes</option></select>
   <select id="module" title="Show only interactions attributed to one module"><option value="">all modules</option></select>
   <select id="status" title="Filter interactions and jobs by their normalized status"><option value="">any status</option></select>
-  <input id="q" class="grow" placeholder="filter text (command, tool, error)…" autocomplete="off"
-    title="Case-insensitive substring match across the command, the tool name and any error text">
-  <button id="follow" class="active" title="Pause or resume appending new interactions as they happen">following</button>
-  <button id="clear" title="Empty the list on screen. The stored log on disk is not touched.">clear</button>
-  <span class="pill count" id="count" title="Number of interactions currently listed below">0</span>
 </header>
 <main>
   <div class="card">
@@ -73,12 +68,17 @@
     <h2 title="Every SSH command the daemon ran, newest first">
       Interactions <span class="hint" id="scope"></span>
       <span class="section-actions">
+        <input id="q" class="filter-input" placeholder="filter command, tool, error…" autocomplete="off"
+          title="Case-insensitive substring match across the command, the tool name and any error text">
         <label class="toggle-filter" title="Show periodic commands issued by the VantaMCPd engine">
           <input id="polling" type="checkbox" role="switch">
           <span class="toggle-track" aria-hidden="true"></span>
           <span id="polling-label">polling off</span>
         </label>
         <button class="section-link" id="log-file" type="button" disabled title="Copy today's persisted JSONL file URL">copy log path</button>
+        <button class="section-link active" id="follow" type="button" title="Pause or resume appending new interactions as they happen">following</button>
+        <button class="section-link" id="clear" type="button" title="Empty the list on screen. The stored log on disk is not touched.">clear</button>
+        <span class="pill" id="count" title="Number of interactions currently listed below">0</span>
       </span>
     </h2>
     <div class="row loghead">
