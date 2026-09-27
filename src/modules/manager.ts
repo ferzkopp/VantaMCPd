@@ -1186,7 +1186,9 @@ export class ModuleManager {
         servicePreparation +
         dataSetup +
         `if ! bash ${q(modulePackage.manifest.lifecycle.install)}; then rollback; exit 1; fi; ` +
-        `if ! chown -R root:root ${q(installDirectory)} || ! chmod 0755 ${q(installDirectory)}; then rollback; exit 1; fi; ` +
+        // Staging runs under umask 077, so package subdirectories arrive unreadable to the module user.
+        `if ! chown -R root:root ${q(installDirectory)} || ` +
+        `! find ${q(installDirectory)} -type d -exec chmod 0755 {} +; then rollback; exit 1; fi; ` +
         `if ! (set -e; install -d -m 0755 ${q(receiptDirectory)}; ` +
         `tmp=$(mktemp ${q(`${receiptDirectory}/.${id}.XXXXXX`)}); trap 'rm -f "$tmp"' EXIT; ` +
         `printf '%s' ${q(encodedReceipt)} | base64 -d > "$tmp"; chmod 0644 "$tmp"; ` +

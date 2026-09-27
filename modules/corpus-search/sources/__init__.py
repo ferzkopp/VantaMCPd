@@ -9,9 +9,10 @@ interface, so adding a dataset does not change the pipeline or the tools.
 from typing import Any
 
 from sources.arxiv import ArxivSource
+from sources.pubchemlite import PubChemLiteSource
 from sources.wikipedia import WikipediaSource
 
-_ADAPTERS = [ArxivSource(), WikipediaSource()]
+_ADAPTERS = [ArxivSource(), PubChemLiteSource(), WikipediaSource()]
 _BY_KEY = {adapter.key: adapter for adapter in _ADAPTERS}
 _BY_ID = {adapter.id: adapter for adapter in _ADAPTERS}
 

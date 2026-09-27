@@ -14,7 +14,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import sqlite3
 from collections.abc import Sequence
 from contextlib import closing
@@ -27,19 +26,20 @@ from corpus import (
     SCHEMA_VERSION,
     SUPPORTED_SCHEMA_VERSIONS,
     connect,
-    count_categories,
+    census,
     drop_source,
     index_papers,
+    index_source,
     initialize,
     migrate,
     put_metadata,
     put_source,
-    rebuild_search,
     source_rows,
+    total_records,
     upsert_papers,
     verify,
 )
-from fetching import atomic_json, emit_progress
+from fetching import atomic_json, copy_file, emit_progress
 from sources.arxiv import ArxivClient, OaiClient, oai_set_spec, parse_feed, parse_oai_feed
 
 CHECKPOINT_VERSION = 3
@@ -191,8 +191,8 @@ def sampled(identifier: str, sample_percent: int, seed: str) -> bool:
     return value < (1 << 64) * sample_percent // 100
 
 
-def inspect_database(database: Path) -> tuple[dict[str, str], int, dict[str, int]] | None:
-    """Read the state of a retained database, or None when it cannot serve as a reuse baseline.
+def inspect_database(database: Path) -> dict[str, str] | None:
+    """Read the metadata of a retained database, or None when it cannot serve as a reuse baseline.
 
     Every schema version this module can migrate counts as reusable. A corpus written by an earlier
     version is upgraded in place on the working copy rather than being reingested.
@@ -204,12 +204,7 @@ def inspect_database(database: Path) -> tuple[dict[str, str], int, dict[str, int
             metadata = dict(connection.execute("SELECT key, value FROM metadata"))
             if metadata.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
                 return None
-            records = int(connection.execute("SELECT count(*) FROM papers").fetchone()[0])
-            slice_records = {
-                str(row[0]): int(row[1])
-                for row in connection.execute("SELECT profile_slice, count(*) FROM papers GROUP BY profile_slice")
-            }
-        return metadata, records, slice_records
+        return metadata
     except (sqlite3.Error, OSError, ValueError):
         return None
 
@@ -306,19 +301,18 @@ def provision(
         except (OSError, ValueError):
             checkpoint = None
 
-    active_state = inspect_database(active)
-    active_metadata = active_state[0] if active_state else {}
-    recorded = active_sources(active) if active_state else {}
+    active_metadata = inspect_database(active) or {}
+    recorded = active_sources(active) if active_metadata else {}
     current = {
         adapter.id: source_is_current(previous_state(recorded, active_metadata, adapter.id), spec, identities[adapter.id])
         for adapter, spec in specs
     }
     # Seeding is worth its copy as soon as one source survives unchanged; the rest are reingested.
-    reusable = bool(active_state) and any(current.values())
+    reusable = bool(active_metadata) and any(current.values())
     if checkpoint is None:
         working.unlink(missing_ok=True)
         if reusable:
-            shutil.copy2(active, working)
+            copy_file(active, working, "seed", "Copying the retained corpus.")
         checkpoint = {
             "schemaVersion": CHECKPOINT_VERSION,
             "profileHash": profile_hash,
@@ -353,9 +347,9 @@ def provision(
             checkpoint["pruned"] = True
             save()
 
-        # A reingested source arrives without index entries; when none did, the seeded index is already
-        # correct and only the catch-up records need adding.
-        rebuilding = any(not current.get(adapter.id) for adapter, _ in specs)
+        # A reingested source arrives without index entries and is indexed below; a retained one keeps
+        # the entries the seeded copy brought, so only its catch-up records need adding.
+        reingested = [adapter.id for adapter, _ in specs if not current.get(adapter.id)]
         for adapter, spec in specs:
             state = checkpoint["sources"].setdefault(adapter.id, {})
             earlier = previous_state(recorded, active_metadata, adapter.id)
@@ -371,7 +365,7 @@ def provision(
                 adapter.catch_up(
                     connection, spec, state, save, from_date, until_date, fetched_at,
                     overrides.get(adapter.id, {}), upsert_papers, sampled,
-                    None if rebuilding else index_papers,
+                    None if adapter.id in reingested else index_papers,
                 )
             summaries.append({
                 "adapter": adapter,
@@ -380,8 +374,11 @@ def provision(
                 "catchupCutoff": until_date if adapter.supports_catch_up else None,
             })
 
-        if rebuilding:
-            rebuild_search(connection)
+        for source in reingested:
+            emit_progress("index", 0, 0, f"Building the full-text index for {source}.")
+            index_source(connection, source)
+        emit_progress("summarize", 0, 0, "Counting records and categories.")
+        tally = census(connection)
         for summary in summaries:
             adapter, spec = summary["adapter"], summary["spec"]
             put_source(connection, {
@@ -398,7 +395,7 @@ def provision(
                 "sample_percent": spec.get("samplePercent"),
                 "snapshot_cutoff": summary["snapshotCutoff"],
                 "catchup_cutoff": summary["catchupCutoff"],
-                "records": int(connection.execute("SELECT count(*) FROM papers WHERE source = ?", (adapter.id,)).fetchone()[0]),
+                "records": tally["records"].get(adapter.id, 0),
                 "refreshed_at": fetched_at,
             })
 
@@ -416,7 +413,10 @@ def provision(
             "sample_percent": str(spec["samplePercent"]),
             "content_mode": "topics" if categories is not None else "profile",
             "configured_categories": json.dumps(spec.get("topics", []), separators=(",", ":")),
-            "category_counts": json.dumps(count_categories(connection), separators=(",", ":"), sort_keys=True),
+            "category_counts": json.dumps(tally["categories"], separators=(",", ":"), sort_keys=True),
+            "primary_category_counts": json.dumps(
+                tally["primaryCategories"], separators=(",", ":"), sort_keys=True
+            ),
             "source": adapter.name,
             "source_url": adapter.source_url,
             "catchup_source_url": adapter.catchup_source_url or "",
@@ -429,11 +429,17 @@ def provision(
             "cutoff": f"{until_date}T23:59:59Z",
             "refreshed_at": fetched_at,
         })
+        # Sampled statistics keep the planner informed without the full index scan ANALYZE defaults to.
+        emit_progress("optimize", 0, 0, "Updating query planner statistics.")
+        connection.execute("PRAGMA analysis_limit=1000")
         connection.execute("ANALYZE")
         connection.commit()
-        count = verify(connection)
+        total = sum(tally["records"].values())
+        emit_progress("verify", total, total, "Verifying the corpus.")
+        count = verify(connection, count=total)
         if count == 0:
             raise ValueError("this corpus profile produced an empty corpus")
+        emit_progress("activate", count, count, "Activating the corpus database.")
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         connection.execute("PRAGMA journal_mode=DELETE")
     connection.close()
@@ -474,6 +480,7 @@ def refresh(
     until_date = until_date_for(cutoff)
 
     refreshed: list[dict[str, Any]] = []
+    caught_up: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
     added = 0
     # A rollback journal keeps the activated file self-contained, so read-only callers are unaffected.
@@ -505,35 +512,49 @@ def refresh(
                 skipped.append({"source": adapter.id, "reason": "no recorded cutoff to resume from; reinstall to rebuild this source"})
                 continue
             from_date = baseline[:10]
-            before = int(connection.execute("SELECT count(*) FROM papers WHERE source = ?", (adapter.id,)).fetchone()[0])
+            # The recorded total is authoritative, which saves counting the source before and after.
+            before = earlier.get("records")
+            if before is None:
+                before = int(connection.execute("SELECT count(*) FROM papers WHERE source = ?", (adapter.id,)).fetchone()[0])
             adapter.catch_up(
                 connection, spec, {}, lambda: None, from_date, until_date, fetched_at,
                 overrides.get(adapter.id, {}), upsert_papers, sampled, index_papers,
             )
-            records = int(connection.execute("SELECT count(*) FROM papers WHERE source = ?", (adapter.id,)).fetchone()[0])
-            added += records - before
-            put_source(connection, {
-                "source": adapter.id,
-                "name": adapter.name,
-                "profile_id": spec["id"],
-                "identity": earlier.get("identity"),
-                "config_hash": earlier.get("config_hash") or source_config_hash(spec),
-                "source_url": adapter.source_url,
-                "catchup_source_url": adapter.catchup_source_url,
-                "terms_url": adapter.terms_url,
-                "license": adapter.license,
-                "topics_json": json.dumps(spec.get("topics", []), separators=(",", ":")),
-                "sample_percent": spec.get("samplePercent"),
-                "snapshot_cutoff": earlier.get("snapshot_cutoff"),
-                "catchup_cutoff": until_date,
-                "records": records,
-                "refreshed_at": fetched_at,
-            })
-            refreshed.append({"source": adapter.id, "from": from_date, "until": until_date, "added": records - before, "records": records})
+            caught_up.append({"adapter": adapter, "spec": spec, "earlier": earlier, "before": int(before), "from": from_date})
 
-        if refreshed:
+        if caught_up:
+            emit_progress("summarize", 0, 0, "Counting records and categories.")
+            tally = census(connection)
+            for entry in caught_up:
+                adapter, spec, earlier = entry["adapter"], entry["spec"], entry["earlier"]
+                records = tally["records"].get(adapter.id, 0)
+                added += records - entry["before"]
+                put_source(connection, {
+                    "source": adapter.id,
+                    "name": adapter.name,
+                    "profile_id": spec["id"],
+                    "identity": earlier.get("identity"),
+                    "config_hash": earlier.get("config_hash") or source_config_hash(spec),
+                    "source_url": adapter.source_url,
+                    "catchup_source_url": adapter.catchup_source_url,
+                    "terms_url": adapter.terms_url,
+                    "license": adapter.license,
+                    "topics_json": json.dumps(spec.get("topics", []), separators=(",", ":")),
+                    "sample_percent": spec.get("samplePercent"),
+                    "snapshot_cutoff": earlier.get("snapshot_cutoff"),
+                    "catchup_cutoff": until_date,
+                    "records": records,
+                    "refreshed_at": fetched_at,
+                })
+                refreshed.append({
+                    "source": adapter.id, "from": entry["from"], "until": until_date,
+                    "added": records - entry["before"], "records": records,
+                })
             put_metadata(connection, {
-                "category_counts": json.dumps(count_categories(connection), separators=(",", ":"), sort_keys=True),
+                "category_counts": json.dumps(tally["categories"], separators=(",", ":"), sort_keys=True),
+                "primary_category_counts": json.dumps(
+                    tally["primaryCategories"], separators=(",", ":"), sort_keys=True
+                ),
                 "catchup_cutoff": until_date,
                 "cutoff": f"{until_date}T23:59:59Z",
                 "refreshed_at": fetched_at,
@@ -542,7 +563,7 @@ def refresh(
         integrity = connection.execute("PRAGMA quick_check").fetchone()[0]
         if integrity != "ok":
             raise ValueError(f"SQLite check failed after refresh: {integrity}")
-        total = int(connection.execute("SELECT count(*) FROM papers").fetchone()[0])
+        total = sum(tally["records"].values()) if caught_up else total_records(connection, source_rows(connection))
     connection.close()
     emit_progress("complete", total, total, "Corpus refresh complete.")
     return {

@@ -13,6 +13,9 @@ SUPPORTED_SCHEMA_VERSIONS = ("1", "2")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SOURCE_ID = re.compile(r"^[a-z0-9-]{1,32}$")
 NO_CATEGORIES = "||"
+# SQLite defaults to a 2 MiB page cache. Ingesting millions of rows walks the primary-key b-tree in
+# identifier order, so a cache this much larger is what keeps a low-memory node off the disk.
+WRITE_CACHE_KIB = 65536
 
 
 def connect(database: Path, readonly: bool = False, journal: str = "WAL") -> sqlite3.Connection:
@@ -25,6 +28,7 @@ def connect(database: Path, readonly: bool = False, journal: str = "WAL") -> sql
     else:
         connection.execute(f"PRAGMA journal_mode={journal}")
         connection.execute("PRAGMA synchronous=NORMAL")
+        connection.execute(f"PRAGMA cache_size=-{WRITE_CACHE_KIB}")
     return connection
 
 
@@ -189,12 +193,20 @@ def upsert_papers(connection: sqlite3.Connection, papers: Iterable[dict[str, Any
     return connection.total_changes - before
 
 
-def rebuild_search(connection: sqlite3.Connection) -> None:
-    connection.execute("DELETE FROM papers_fts")
+def index_source(connection: sqlite3.Connection, source: str) -> int:
+    """Index one source's records, leaving every other source's entries untouched.
+
+    `papers_fts` holds its own content rather than shadowing `papers`, so a source ingested beside a
+    seeded corpus can be indexed alone. Re-tokenizing every record instead would make adding a small
+    source cost as much as adding the largest one.
+    """
+    before = connection.total_changes
     connection.execute(
         "INSERT INTO papers_fts(rowid, title, abstract, authors, categories) "
-        "SELECT rowid, title, abstract, authors_search, categories_search FROM papers"
+        "SELECT rowid, title, abstract, authors_search, categories_search FROM papers WHERE source = ?",
+        (source,),
     )
+    return connection.total_changes - before
 
 
 def index_papers(connection: sqlite3.Connection, identifiers: Iterable[str]) -> int:
@@ -220,15 +232,36 @@ def index_papers(connection: sqlite3.Connection, identifiers: Iterable[str]) -> 
     return len(rows)
 
 
-def verify(connection: sqlite3.Connection, maximum: int | None = None) -> int:
-    integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+def verify(connection: sqlite3.Connection, maximum: int | None = None, count: int | None = None) -> int:
+    """Check that a freshly built corpus is sound and answerable.
+
+    `quick_check` validates page and b-tree structure without re-reading the content of every index.
+    On a multi-gigabyte corpus the difference against `integrity_check` is hours on a low-end node,
+    and the structural faults a build can plausibly produce are the ones it still catches.
+    """
+    integrity = connection.execute("PRAGMA quick_check").fetchone()[0]
     if integrity != "ok":
         raise ValueError(f"SQLite integrity check failed: {integrity}")
-    count = int(connection.execute("SELECT count(*) FROM papers").fetchone()[0])
+    if count is None:
+        count = int(connection.execute("SELECT count(*) FROM papers").fetchone()[0])
     if maximum is not None and count > maximum:
         raise ValueError(f"corpus has {count} records, above profile cap {maximum}")
-    connection.execute("SELECT count(*) FROM papers_fts WHERE papers_fts MATCH 'science'").fetchone()
+    connection.execute("SELECT rowid FROM papers_fts WHERE papers_fts MATCH 'science' LIMIT 1").fetchone()
     return count
+
+
+def probe(connection: sqlite3.Connection) -> None:
+    """Confirm the activated corpus can be served, without reading it end to end.
+
+    Provisioning already verified the corpus it built, so the post-install self-test only has to
+    prove the file this module will serve is present, of a schema it understands, and searchable.
+    """
+    version = stored_schema_version(connection)
+    if version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError(f"unsupported corpus schema version {version!r}")
+    if connection.execute("SELECT 1 FROM papers LIMIT 1").fetchone() is None:
+        raise ValueError("the activated corpus holds no records")
+    connection.execute("SELECT rowid FROM papers_fts WHERE papers_fts MATCH 'science' LIMIT 1").fetchone()
 
 
 def source_summaries(connection: sqlite3.Connection, metadata: dict[str, str], total: int) -> list[dict[str, Any]]:
@@ -273,11 +306,10 @@ def source_summaries(connection: sqlite3.Connection, metadata: dict[str, str], t
 def info(database: Path) -> dict[str, Any]:
     with connect(database, readonly=True) as connection:
         metadata = dict(connection.execute("SELECT key, value FROM metadata"))
-        count = int(connection.execute("SELECT count(*) FROM papers").fetchone()[0])
-        categories = [dict(row) for row in connection.execute(
-            "SELECT primary_category AS category, count(*) AS records FROM papers "
-            "WHERE primary_category IS NOT NULL GROUP BY primary_category ORDER BY records DESC, category LIMIT 100"
-        )]
+        rows = source_rows(connection)
+        count = total_records(connection, rows)
+        ranked = sorted(primary_counts(connection, metadata).items(), key=lambda item: (-item[1], item[0]))
+        categories = [{"category": name, "records": records} for name, records in ranked[:100]]
         summaries = source_summaries(connection, metadata, count)
     sample_percent = metadata.get("sample_percent")
     configured_categories = metadata.get("configured_categories")
@@ -304,18 +336,58 @@ def info(database: Path) -> dict[str, Any]:
     }
 
 
-def count_categories(connection: sqlite3.Connection) -> dict[str, int]:
-    """Count every category membership, including cross-lists.
+def census(connection: sqlite3.Connection) -> dict[str, Any]:
+    """Count records, primary categories and every category membership in one pass.
 
-    Run at provisioning time only: it scans the corpus, which the read-only tools must not do.
-    Records from sources without a subject scheme are skipped rather than counted as uncategorized.
+    Run at provisioning time only: this scans the corpus, which the read-only tools must not do.
+    Counting each of these separately would cost a full scan apiece, so they share one. Records from
+    sources without a subject scheme contribute no category rather than an uncategorized one.
     """
-    counts: dict[str, int] = {}
-    for (packed,) in connection.execute("SELECT categories_search FROM papers WHERE categories_search <> ?", (NO_CATEGORIES,)):
-        for category in packed.split("|"):
-            if category:
-                counts[category] = counts.get(category, 0) + 1
-    return counts
+    categories: dict[str, int] = {}
+    primary: dict[str, dict[str, int]] = {}
+    records: dict[str, int] = {}
+    for source, primary_category, packed in connection.execute(
+        "SELECT source, primary_category, categories_search FROM papers"
+    ):
+        records[source] = records.get(source, 0) + 1
+        if primary_category is not None:
+            counts = primary.setdefault(source, {})
+            counts[primary_category] = counts.get(primary_category, 0) + 1
+        if packed != NO_CATEGORIES:
+            for category in packed.split("|"):
+                if category:
+                    categories[category] = categories.get(category, 0) + 1
+    return {"categories": categories, "primaryCategories": primary, "records": records}
+
+
+def primary_counts(
+    connection: sqlite3.Connection, metadata: dict[str, str], source: str | None = None
+) -> dict[str, int]:
+    """Read the recorded primary-category counts, falling back to a scan for older corpora."""
+    packed = metadata.get("primary_category_counts")
+    if packed is None:
+        rows = connection.execute(
+            "SELECT primary_category, count(*) FROM papers WHERE primary_category IS NOT NULL"
+            + (" AND source = ?" if source else "")
+            + " GROUP BY primary_category",
+            (source,) if source else (),
+        )
+        return {str(row[0]): int(row[1]) for row in rows}
+    stored: dict[str, dict[str, int]] = json.loads(packed)
+    if source is not None:
+        return {name: int(value) for name, value in stored.get(source, {}).items()}
+    merged: dict[str, int] = {}
+    for per_source in stored.values():
+        for name, value in per_source.items():
+            merged[name] = merged.get(name, 0) + int(value)
+    return merged
+
+
+def total_records(connection: sqlite3.Connection, rows: list[sqlite3.Row]) -> int:
+    """Total the per-source record counts, falling back to a scan for older corpora."""
+    if rows:
+        return sum(int(row["records"] or 0) for row in rows)
+    return int(connection.execute("SELECT count(*) FROM papers").fetchone()[0])
 
 
 def validated_source(value: Any) -> str | None:
@@ -340,13 +412,7 @@ def list_categories(database: Path, arguments: dict[str, Any] | None = None) -> 
 
     with connect(database, readonly=True) as connection:
         metadata = dict(connection.execute("SELECT key, value FROM metadata"))
-        rows = connection.execute(
-            "SELECT primary_category, count(*) FROM papers WHERE primary_category IS NOT NULL"
-            + (" AND source = ?" if source else "")
-            + " GROUP BY primary_category",
-            (source,) if source else (),
-        )
-        primary = {str(row[0]): int(row[1]) for row in rows}
+        primary = primary_counts(connection, metadata, source)
         configured = {row["source"]: row["topics_json"] for row in source_rows(connection)}
 
     if source is not None and sources.by_id(source).subject_scheme is None:

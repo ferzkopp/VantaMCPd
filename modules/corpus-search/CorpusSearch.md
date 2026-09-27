@@ -17,12 +17,13 @@ The SQLite database remains on node storage between calls, daemon restarts, and 
 
 ## Content Sources
 
-Two sources are available today. Each is enabled by naming one of its profiles at install time, and a
+Three sources are available today. Each is enabled by naming one of its profiles at install time, and a
 corpus may hold any combination of them:
 
 | Source | Profiles | Content | Download | Subjects | Stays current by | Licence |
 | --- | --- | --- | ---: | --- | --- | --- |
 | [arXiv](#arxiv) | `small-arxiv-cs`<br>`medium-arxiv-cs`<br>`large-arxiv-cs` | Paper metadata: title, abstract, authors, categories, dates, DOI, journal reference, abstract and PDF links | 1.71 GiB | arXiv categories | [`corpus_refresh`](#corpus_refresh) over OAI-PMH | [arXiv API terms](https://info.arxiv.org/help/api/tou.html) |
+| [PubChemLite](#pubchemlite) | `pubchemlite-exposomics` | Compound metadata: name, synonym, formula, InChIKey, monoisotopic mass, XLogP, structure strings, PubChem annotation coverage and link | 191 MiB | PubChem annotation categories | Reinstall for a newer release | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | [Wikipedia](#wikipedia) | `wikipedia-en-titles` | Every main-namespace article title and its link, redirects included, without article text | 104 MB | none | Reinstall for a newer dump | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
 
 Name the profiles you want; the corpus is their union:
@@ -33,6 +34,8 @@ What each source is for:
 
 - **arXiv** answers questions about research: what has been published on a topic, by whom, when, and
 	with what abstract. It is the source behind the category filter and the date filters.
+- **PubChemLite** answers questions about chemical substances: which compound a name or synonym refers
+	to, its formula and InChIKey, and how well annotated it is for safety, toxicity, food or drug use.
 - **Wikipedia** answers questions about naming: whether an article exists, what its exact canonical
 	title is, and which URL to hand to a retrieval tool. It holds no article text, so it complements
 	`browser-retrieval` rather than replacing it.
@@ -96,6 +99,7 @@ corpus is their union, so sources stay independent of each other and are selecte
 | `small-arxiv-cs` | [arXiv](#arxiv) | 1% | Default, lightweight local search |
 | `medium-arxiv-cs` | [arXiv](#arxiv) | 25% | Broader research coverage |
 | `large-arxiv-cs` | [arXiv](#arxiv) | 100% | Every matching record in the snapshot |
+| `pubchemlite-exposomics` | [PubChemLite](#pubchemlite) | 100% | Compound name, formula and InChIKey resolution |
 | `wikipedia-en-titles` | [Wikipedia](#wikipedia) | 100% | Exact article-title resolution and existence checks |
 
 Naming more than one profile composes them:
@@ -178,6 +182,59 @@ cross-list categories outside this list, which are retained in each record and a
 [`corpus_categories`](#corpus_categories) to see which identifiers a provisioned corpus actually contains
 and how many records each one reaches.
 
+### PubChemLite
+
+| | |
+| --- | --- |
+| Identifier | `pubchem` |
+| Profiles | `pubchemlite-exposomics` (100%) |
+| Baseline | [PubChemLite for Exposomics](https://doi.org/10.5281/zenodo.5995885), one CSV of roughly 191 MiB holding about 470,000 compounds |
+| Catch-up | None; reinstall to adopt a newer release |
+| Record IDs | `pubchem:` and the PubChem CID, as in `pubchem:2244` |
+| Subjects | PubChem annotation categories |
+| Licence | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
+
+PubChemLite is a curated subset of PubChem, ranked by how well each compound is annotated rather than
+by how recently it was deposited. That makes it the part of PubChem worth holding locally: the
+compounds an agent is actually likely to be asked about, in a single file small enough for a
+single-board node, instead of the full hundred-million-record database.
+
+A record carries the compound name, a synonym, the molecular formula, the InChIKey, the monoisotopic
+mass, the XLogP partition coefficient, and the SMILES and InChI structure strings. Searching resolves
+an approximate or trade name to a canonical one and yields the CID and the PubChem URL, which is the
+chemistry counterpart of what the Wikipedia titles do for article names.
+
+The structure strings are stored on each record but deliberately left out of the full-text index. An
+InChI tokenizes into dozens of fragments that no plain-language query will ever match, so indexing
+them would inflate the index without making any question answerable. They are returned by
+[`corpus_get`](#corpus_get) in the record's `comment` field.
+
+Unlike the Wikipedia titles, this source brings a subject scheme of its own, so
+[`corpus_categories`](#corpus_categories) works against it. Each category counts the PubChem
+annotations a compound has under that heading, and a compound's primary category is the heading it is
+most annotated under:
+
+| Category | Name | Category | Name |
+| --- | --- | --- | --- |
+| `AgroChemInfo` | Agrochemical Information | `SafetyInfo` | Safety and Hazards |
+| `BioPathway` | Biological Pathways | `ToxicityInfo` | Toxicity Information |
+| `DrugMedicInfo` | Drug and Medication Information | `KnownUse` | Known Uses |
+| `FoodRelated` | Food Related | `DisorderDisease` | Disorders and Diseases |
+| `PharmacoInfo` | Pharmacology and Biochemistry | `Identification` | Identification |
+| `NORMANSLE` | NORMAN Suspect List Exchange | | |
+
+These categories describe a record rather than select it, so unlike arXiv topics they cannot be
+narrowed with the `categories` install option: the profile always ingests the complete release. Use
+the `category` filter at query time instead.
+
+> Search the corpus for `chlorpyrifos` and report which annotation categories cover it.
+
+Releases are published as versions of a Zenodo record rather than through an incremental feed.
+Acquisition reads the concept record first, which always resolves to the newest version and names its
+download URL, size and checksum, so a reinstall recognizes an unchanged release without fetching the
+CSV. The recorded `doi` on each record is the versioned dataset DOI it came from, which is what a
+citation of these values should reference.
+
 ### Wikipedia
 
 | | |
@@ -209,29 +266,33 @@ more profiles, with its own licence and terms recorded alongside its records.
 
 | Candidate | Fit | Considerations |
 | --- | --- | --- |
-| [NIST DLMF](https://dlmf.nist.gov/) | Mathematical function chapters and equations map to titled, linkable records with a chapter taxonomy | Content is NIST-authored with its own [terms](https://dlmf.nist.gov/about/notices); the value is exact section and equation lookup rather than full-text mathematics |
-| Abramowitz and Stegun | The public-domain predecessor of the DLMF, already digitized as page-level scans with a chapter and table structure | Public domain as a US government work; useful mainly as stable citations and table locations |
-| [NIST Atomic Spectra Database](https://www.nist.gov/pml/atomic-spectra-database) | Lines and levels are small, uniform, heavily identified records that suit exact lookup and bounded search | Tabular numeric data rather than prose, so it would need a numeric filter beyond the current date and category filters |
-| [NIST Physical Reference Data](https://www.nist.gov/pml/productsservices/physical-reference-data) | Constants and cross-section tables are compact and citable | Same numeric-filter consideration; several sub-collections have distinct terms |
-| [NIST Chemistry WebBook](https://webbook.nist.gov/chemistry/) (selective mirror) | Species records carry names, formulas, identifiers, and links, which is exactly the record shape here | Bulk mirroring is restricted; a selective mirror would need explicit permission and a bounded species list |
-| [PubChemLite for Exposomics](https://doi.org/10.5281/zenodo.5995885) | 371,663 compound records in a single 190 MB CSV, each carrying a PubChem CID, an InChIKey, and counts across ten annotation categories such as `FoodRelated` and `ToxicityInfo`; it is the only candidate here that arrives with a subject scheme `corpus_categories` could expose directly, and each record links to its PubChem page | CC BY 4.0 and [described in J. Cheminform.](https://doi.org/10.1186/s13321-021-00489-0); published as monthly Zenodo versions rather than an incremental feed, so it would refresh by reinstall as the Wikipedia titles do; CIDs and InChIKeys need their own normalization rules, comparable to the arXiv identifier rules |
-| CRC Handbook of Chemistry and Physics (pre-1930 editions) | Table-level records with stable citations | The weakest candidate here. Only editions published before 1930 are out of copyright, such as the [8th edition of 1920](https://archive.org/details/HandbookOfChemistryAndPhysics8thEd.1920); the current edition is subscription-licensed through [ChemNetBase](https://hbcp.chemnetbase.com/). Those old editions exist only as page scans, so ingestion would need the OCR and table extraction this module deliberately leaves to other modules, and a century-old value is a citation rather than a reference. NIST Physical Reference Data covers the same ground with current values and no copyright boundary to establish |
+| [Abramowitz and Stegun](https://archive.org/details/handbookofmathe0000abra) | The classic handbook of mathematical functions, digitized with a chapter, table and formula structure that maps onto titled, linkable records | Public domain as a work of the US government, published by the National Bureau of Standards in 1964. It exists as page scans, so ingestion would need the OCR and table extraction this module deliberately leaves to other modules, and the value is stable citations and table locations rather than computable values |
 | [The Arcane Algorithm Archive](https://www.algorithm-archive.org/) | Each chapter is a titled, linkable Markdown document under a section taxonomy, so a chapter is already the record shape here, and it gives an agent a citable definition of an algorithm instead of a recalled one | Roughly forty chapters rather than hundreds of algorithms, so it adds precision rather than breadth; licensing is mixed, with prose under CC BY-SA 4.0 but code examples under MIT and graphics licensed per chapter, so only the prose lead of each chapter would be ingested; the [repository](https://github.com/algorithm-archivists/algorithm-archive) has been dormant since 2022 and publishes no incremental feed, so refreshing it means reinstalling |
 
+NIST's Physical Reference Data collections — the DLMF, the Atomic Spectra Database, XCOM, the X-ray
+attenuation and stopping-power tables, and the Chemistry WebBook — were considered and rejected. They
+are technically an excellent fit, but they are [NIST Standard Reference
+Data](https://www.nist.gov/srd/public-law), which the Standard Reference Data Act
+([15 U.S.C. § 290e](https://www.govinfo.gov/content/pkg/USCODE-2014-title15/pdf/USCODE-2014-title15-chap7A-sec290e.pdf))
+allows the Secretary of Commerce to copyright. NIST states that none of it "may be reproduced, stored
+in a retrieval system or transmitted ... without prior permission", and building a local searchable
+corpus is exactly that. They are out of scope unless permission is obtained.
+
 A source is a plausible fit when its records are titled, individually identified, externally linkable,
-and small enough that a sampled corpus stays within a node's storage budget. One that also brings its own
-subject scheme gets `corpus_categories` for free; one that does not is still fully searchable, as the
-Wikipedia titles are. Each would ship as its own profile, selectable alongside the existing ones rather
-than replacing them. Full text, binary assets, and anything requiring per-request authorization remain
-outside the module's scope.
+openly licensed, and small enough that a sampled corpus stays within a node's storage budget. One that
+also brings its own subject scheme gets `corpus_categories` for free, as PubChemLite does; one that
+does not is still fully searchable, as the Wikipedia titles are. Each would ship as its own profile,
+selectable alongside the existing ones rather than replacing them. Full text, binary assets, and
+anything requiring per-request authorization remain outside the module's scope.
 
 ## Install
 
 The target needs Debian or Ubuntu on `armhf`, `arm64`, or `amd64`, at least 256 MB RAM, and configured
 node-local storage with at least 10 GiB free. This accommodates the approximately 1.71 GiB compressed
 metadata snapshot, its approximately 5.15 GiB uncompressed form, and the generated SQLite database.
-The `wikipedia-en-titles` profile is far lighter, retaining a single compressed dump of roughly 104 MB,
-but the declared requirement is the same because it is the module's, not any one profile's.
+The `pubchemlite-exposomics` and `wikipedia-en-titles` profiles are far lighter, retaining a single
+file of roughly 191 MiB and 104 MB respectively, but the declared requirement is the same because it
+is the module's, not any one profile's.
 The module declares `bash`, Python 3, SQLite, and CA certificates; VantaMCPd installs missing declared
 packages during preflight.
 
@@ -241,9 +302,10 @@ points `SQLITE_TMPDIR` at the storage volume so that this lands beside the corpu
 
 The durable job timeout is twelve hours. Actual duration depends on network, CPU, storage, profile, and
 snapshot size. Small and Medium still download and extract the complete source snapshot; profile size
-primarily changes ingestion and FTS indexing time. A single-board node composing both sources needs
-most of that budget: insert rates fall as the table grows past a few million rows, and the index
-rebuild that follows ingestion covers every record in the corpus.
+primarily changes ingestion and FTS indexing time. A single-board node building every source at once
+needs much of that budget, because insert rates fall as the table grows past a few million rows. Adding
+a source to a corpus that already exists is far cheaper: the sources already present are copied rather
+than reingested, and only the new one is indexed.
 
 In Copilot Chat Agent mode, check placement before starting the download:
 
@@ -281,14 +343,20 @@ disconnects. Progress changes units by phase:
 
 | Phase | Progress unit | Meaning |
 | --- | --- | --- |
+| `seed` | bytes | Copy the retained corpus, when at least one source survives unchanged |
 | `download` | bytes | Download or resume the cached snapshot ZIP |
 | `extract` | bytes | Decompress the JSONL snapshot beside the ZIP |
-| `ingest` | JSON bytes scanned | Filter topics, apply deterministic sampling, and insert metadata into SQLite |
+| `ingest` | bytes, titles or compounds, by source | Filter, apply deterministic sampling, and insert metadata into SQLite |
 | `catchup` | topics | Harvest post-snapshot metadata through OAI-PMH |
+| `index` | - | Build the full-text index for a reingested source, leaving the sources beside it alone |
+| `summarize` | - | Count records and categories in a single pass over the corpus |
+| `optimize` | - | Update query planner statistics |
+| `verify` | records | Run the structural and full-text checks on the built database |
+| `activate` | records | Check-point the write-ahead log and swap the database into place |
 | `complete` | records | Activate the verified database and module receipt |
 
-After `catchup` reaches its topic total, the displayed phase may remain there while SQLite rebuilds FTS,
-runs `ANALYZE`, and performs integrity checks. Completion is indicated only by the terminal job status and
+The phases after `catchup` each cover a pass over the whole corpus, so on a low-end node they can take a
+while without the record count changing. Completion is indicated by the terminal job status and the
 `Corpus database activated.` message.
 
 > Show the status and recent log output for the corpus-search installation job.
@@ -333,8 +401,8 @@ defaults.
 Reuse is decided per source, not for the corpus as a whole. Adding a profile leaves the sources already
 present untouched and ingests only the new one; dropping a profile deletes only that source's records.
 A source is reingested when its own profile changes, when its topic list changes, or when its upstream
-artefact has been republished. Adding the Wikipedia titles to an installed arXiv corpus therefore costs
-the Wikipedia ingestion and an index rebuild, not a reingestion of the arXiv records.
+artefact has been republished. Only a reingested source is indexed afterwards, so adding a small source
+to a large corpus costs its own ingestion rather than a rebuild of everything already there.
 
 Uninstall never deletes corpus data. Use `cluster_purge_module_data` to reclaim the storage mount, and
 only when the corpus is no longer wanted.
@@ -348,7 +416,7 @@ call to one of them, using the identifiers from [Content Sources](#content-sourc
 | --- | --- |
 | `corpus_search` | Search titles, abstracts, authors, and categories using phrases, exclusions, alternatives, and field restrictions |
 | `corpus_get` | Retrieve one exact record by its identifier or canonical URL |
-| `corpus_categories` | Resolve a plain-language subject to an arXiv category identifier and see how populated it is |
+| `corpus_categories` | Resolve a plain-language subject to a category identifier and see how populated it is |
 | `corpus_info` | Inspect profiles, per-source provenance, record counts, storage size, and refresh time |
 | `corpus_refresh` | Catch the corpus up with the sources that publish an incremental feed |
 
@@ -365,8 +433,8 @@ The target may be omitted because the module has exactly one active installation
 | Input | Required | Bounds | Meaning |
 | --- | --- | --- | --- |
 | `query` | yes | 1-500 characters, 1-32 searchable terms | Terms matched across title, abstract, authors, and categories |
-| `source` | no | a source identifier | Restrict to one source, such as `arxiv` or `wikipedia` |
-| `category` | no | 1-40 characters | Exact arXiv category membership, including cross-lists |
+| `source` | no | a source identifier | Restrict to one source, such as `arxiv`, `pubchem` or `wikipedia` |
+| `category` | no | 1-40 characters | Exact category membership, including arXiv cross-lists |
 | `publishedFrom` | no | `YYYY-MM-DD` | Inclusive lower bound on original publication date |
 | `publishedTo` | no | `YYYY-MM-DD` | Inclusive upper bound on original publication date |
 | `fuzzy` | no | boolean, default `true` | Retry a zero-result query with corrected spelling |
@@ -520,7 +588,7 @@ result in `output`:
 	"ok": true,
 	"node": "storage-a",
 	"moduleId": "corpus-search",
-	"moduleVersion": "0.5.0",
+	"moduleVersion": "0.5.3",
 	"toolName": "corpus_search",
 	"deployment": { "mode": "singleton" },
 	"selection": "explicit",
@@ -535,6 +603,8 @@ Use `corpus_get` after search when the complete abstract or exact provenance fie
 > Retrieve the complete corpus record for arXiv `2608.21252`.
 
 > Get the corpus record for the Wikipedia article `Robot learning`.
+
+> Look up the compound record for `pubchem:2244`.
 
 For an arXiv record the `id` may be a bare modern or legacy arXiv identifier, an `arxiv.org/abs/` URL, or
 a versioned ID such as `2608.21252v2`. URL prefixes and version suffixes are normalized before lookup.
@@ -736,7 +806,9 @@ directory.
 Baseline arXiv metadata comes from Cornell University's weekly
 [arXiv metadata snapshot](https://www.kaggle.com/datasets/Cornell-University/arxiv), followed by newer
 records from [arXiv OAI-PMH](https://info.arxiv.org/help/oa/index.html) under the
-[arXiv API terms](https://info.arxiv.org/help/api/tou.html). Wikipedia titles come from the Wikimedia
+[arXiv API terms](https://info.arxiv.org/help/api/tou.html). Compound metadata comes from
+[PubChemLite for Exposomics](https://doi.org/10.5281/zenodo.5995885) under CC BY 4.0, described in
+[J. Cheminform.](https://doi.org/10.1186/s13321-021-00489-0). Wikipedia titles come from the Wikimedia
 [database dumps](https://dumps.wikimedia.org/enwiki/latest/) under CC BY-SA 4.0. Search results retain
 links to each record's canonical page.
 
@@ -745,7 +817,7 @@ links to each record's canonical page.
 | Symptom | Check or action |
 | --- | --- |
 | Preflight reports insufficient storage | Configure a distinct node-local storage mount with at least 10 GiB free; root filesystem space does not satisfy this requirement |
-| Job appears paused after `catchup` reaches all topics | Check its heartbeat and log; FTS rebuild, analysis, and integrity verification do not currently emit separate progress markers |
+| Job appears paused after `catchup` reaches all topics | Expected: the `summarize`, `optimize` and `verify` phases each read the whole corpus. Check the heartbeat and log rather than the record count |
 | Install fails or is canceled | Read the job log, correct the cause, and reinstall with the same profile to reuse retained downloads and checkpoints |
 | Search returns no results | Inspect `corpus_info` for profile/topics and `corpus_categories` for the identifier; check the response for a `corrections` array, then broaden with `OR` or a prefix term |
 | A source is reported as skipped by `corpus_refresh` | That source publishes no incremental feed; reinstall the profile to adopt a newer snapshot of it |
@@ -770,7 +842,8 @@ Run the fixture-backed provisioning and complete MCP protocol tests from the rep
 node --test test/corpus-search.test.mjs
 ```
 
-The fixture tests do not contact Kaggle, arXiv, or Wikimedia. They build a temporary snapshot ZIP, a
-temporary title dump, and a corpus, then exercise bulk ingestion, OAI catch-up, schema migration from the
-previous version, multi-source search and lookup, in-place refresh, every tool, query operators, spelling
-correction, and input bounds, and remove the data afterward.
+The fixture tests do not contact Kaggle, arXiv, Zenodo, or Wikimedia. They build a temporary snapshot
+ZIP, a temporary title dump, a temporary compound CSV, and a corpus, then exercise bulk ingestion, OAI
+catch-up, schema migration from the previous version, multi-source search and lookup, per-source
+indexing, in-place refresh, every tool, query operators, spelling correction, and input bounds, and
+remove the data afterward.

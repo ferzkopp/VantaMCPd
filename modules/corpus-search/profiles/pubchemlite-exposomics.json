@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 2,
+  "id": "pubchemlite-exposomics",
+  "description": "Every PubChemLite for Exposomics compound, for name, formula and InChIKey resolution with PubChem annotation coverage.",
+  "source": "pubchemlite-compound-index",
+  "samplePercent": 100,
+  "sampleSeed": "vantamcpd-pubchemlite-compounds-v1"
+}

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import sources
-from corpus import get_paper, info, list_categories, search, self_test, verify, connect
+from corpus import get_paper, info, list_categories, probe, search, self_test, connect
 from fetching import route_progress
 from provision import refresh
 
@@ -164,11 +164,11 @@ def main() -> None:
     route_progress(sys.stderr)
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         self_test()
-        assert sources.identifiers() == ["arxiv", "wikipedia"]
+        assert sources.identifiers() == ["arxiv", "pubchem", "wikipedia"]
         assert profiles_path().is_dir()
         if os.environ.get("VANTA_MODULE_DATA_DIR"):
             with connect(database_path(), readonly=True) as connection:
-                verify(connection)
+                probe(connection)
         print("ok")
         return
     for line in sys.stdin:

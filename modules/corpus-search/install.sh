@@ -7,9 +7,9 @@ set -euo pipefail
 : "${VANTA_MODULE_DATA_DIR:?VANTA_MODULE_DATA_DIR is required}"
 
 for file in server.py corpus.py query.py taxonomy.py fetching.py provision.py module.json \
-	sources/__init__.py sources/arxiv.py sources/wikipedia.py \
+	sources/__init__.py sources/arxiv.py sources/pubchemlite.py sources/wikipedia.py \
 	profiles/small-arxiv.json profiles/medium-arxiv.json profiles/large-arxiv.json \
-	profiles/wikipedia-en-titles.json; do
+	profiles/wikipedia-en-titles.json profiles/pubchemlite-exposomics.json; do
 	test -f "$VANTA_MODULE_STAGE/$file"
 done
 for command in python3 sqlite3; do

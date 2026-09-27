@@ -146,6 +146,39 @@ test("provisions fixture metadata and serves bounded MCP search tools", { skip: 
   }
 });
 
+test("reports coverage from recorded totals instead of scanning the corpus", { skip: !pythonCommand }, () => {
+  const dataDirectory = mkdtempSync(path.join(tmpdir(), "vanta-corpus-"));
+  try {
+    provisionFixture(dataDirectory);
+    // Emptying the table proves the counts come from recorded totals: a scan would now report zero.
+    const script = [
+      "from pathlib import Path",
+      "from corpus import connect",
+      `with connect(Path(${JSON.stringify(path.join(dataDirectory, "corpus.db"))})) as connection:`,
+      "    connection.execute('DELETE FROM papers')",
+    ].join("\n");
+    const emptied = spawnSync(pythonCommand, ["-c", script], {
+      cwd: moduleDirectory,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+    assert.equal(emptied.status, 0, emptied.stderr || emptied.error?.message);
+
+    const responses = runProtocol(dataDirectory, [
+      { name: "corpus_info", arguments: {} },
+      { name: "corpus_categories", arguments: { contains: "retrieval" } },
+    ]);
+    const info = responses[2].result.structuredContent;
+    assert.equal(info.records, 2);
+    assert.equal(info.sources[0].records, 2);
+    assert.deepEqual(info.categories, [{ category: "cs.DB", records: 1 }, { category: "cs.IR", records: 1 }]);
+    assert.equal(responses[3].result.structuredContent.categories[0].primaryRecords, 1);
+  } finally {
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
 test("applies query operators and corrects spelling only when a query finds nothing", { skip: !pythonCommand }, () => {
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "vanta-corpus-query-"));
   try {
@@ -323,7 +356,8 @@ test("packaged profiles each configure exactly one source", { skip: !pythonComma
     "    loaded[configured[0]['id']] = configured[0]['source']",
     "assert loaded['small-arxiv-cs'] == 'arxiv-bulk-snapshot'",
     "assert loaded['wikipedia-en-titles'] == 'wikipedia-title-index'",
-    "assert set(loaded) == {'small-arxiv-cs', 'medium-arxiv-cs', 'large-arxiv-cs', 'wikipedia-en-titles'}",
+    "assert loaded['pubchemlite-exposomics'] == 'pubchemlite-compound-index'",
+    "assert set(loaded) == {'small-arxiv-cs', 'medium-arxiv-cs', 'large-arxiv-cs', 'wikipedia-en-titles', 'pubchemlite-exposomics'}",
     // Composing independent profiles changes the identity, and the order they are named does not.
     "combined = [directory / 'small-arxiv.json', directory / 'wikipedia-en-titles.json']",
     "profiles, base_hash = load_profiles(combined)",
@@ -680,6 +714,112 @@ test("composes a second source into one corpus and refreshes only what has a fee
     assert.deepEqual(afterRefresh[2].result.structuredContent.results.map((entry) => entry.id), ["2609.00003"], "a refreshed record is indexed immediately");
     assert.equal(afterRefresh[3].result.structuredContent.records, 6);
     assert.equal(afterRefresh[3].result.structuredContent.cutoff, "2026-09-15T23:59:59Z");
+  } finally {
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("adds PubChemLite compounds without reindexing the source beside them", { skip: !pythonCommand }, () => {
+  const dataDirectory = mkdtempSync(path.join(tmpdir(), "vanta-corpus-pubchem-"));
+  const pubchemProfile = path.join(dataDirectory, "pubchem-profile.json");
+  writeFileSync(pubchemProfile, JSON.stringify({
+    schemaVersion: 2,
+    id: "fixture-pubchem",
+    source: "pubchemlite-compound-index",
+    samplePercent: 100,
+    sampleSeed: "fixture-pubchem-v1",
+  }));
+  const columns = [
+    "Identifier", "FirstBlock", "PubMed_Count", "Patent_Count", "Related_CIDs", "Synonym", "MolecularFormula",
+    "SMILES", "InChI", "InChIKey", "MonoisotopicMass", "XLogP", "CompoundName", "AnnoTypeCount",
+    "AgroChemInfo", "BioPathway", "DrugMedicInfo", "FoodRelated", "PharmacoInfo", "SafetyInfo",
+    "ToxicityInfo", "KnownUse", "DisorderDisease", "Identification", "NORMANSLE",
+  ];
+  const compounds = [
+    ["2244", "BSYNRYMUTXBXSQ", "1", "2", "", "acetylsalicylic acid", "C9H8O4", "CC(=O)OC1=CC=CC=C1C(=O)O",
+      "InChI=1S/C9H8O4/c1-6(10)13-8-5-3-2-4-7(8)9(11)12/h2-5H,1H3,(H,11,12)", "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+      "180.042258736", "1.2", "Aspirin", "6", "0", "1", "4", "0", "2", "7", "3", "0", "0", "0", "1"],
+    ["702", "LFQSCWFLJHTTHZ", "5", "6", "", "ethyl alcohol", "C2H6O", "CCO",
+      "InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3", "LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
+      "46.041864814", "-0.1", "Ethanol", "2", "0", "0", "0", "5", "0", "3", "0", "0", "0", "0", "0"],
+    ["99999", "ZZZZZZZZZZZZZZ", "0", "0", "", "", "C1H1", "C", "InChI=1S/CH4/h1H4", "ZZZZZZZZZZZZZZ-UHFFFAOYSA-N",
+      "16.0313", "0.0", "Unannotated Example", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"],
+  ];
+  const script = [
+    "import csv, json",
+    "from contextlib import closing",
+    "from pathlib import Path",
+    "from corpus import connect",
+    "from provision import provision",
+    `data = Path(${JSON.stringify(dataDirectory)})`,
+    "archive = data / 'snapshot.zip'",
+    "dataset = data / 'pubchemlite.csv'",
+    `columns = json.loads(${JSON.stringify(JSON.stringify(columns))})`,
+    `compounds = json.loads(${JSON.stringify(JSON.stringify(compounds))})`,
+    "with dataset.open('w', newline='', encoding='utf-8') as handle:",
+    "    writer = csv.writer(handle)",
+    "    writer.writerow(columns)",
+    "    writer.writerows(compounds)",
+    "class Client:",
+    "    def fetch(self, category, from_date, until_date, token=None):",
+    "        return b'<OAI-PMH xmlns=\"http://www.openarchives.org/OAI/2.0/\"><ListRecords /></OAI-PMH>'",
+    // Marking the retained index makes a rebuild visible: a rebuild would erase this token.
+    "with closing(connect(data / 'corpus.db')) as connection:",
+    "    connection.execute(\"UPDATE papers_fts SET title = 'sentineltoken' WHERE rowid = (SELECT min(rowid) FROM papers_fts)\")",
+    "    connection.commit()",
+    `result = provision(data, [Path(${JSON.stringify(path.join(dataDirectory, "profile.json"))}), Path(${JSON.stringify(pubchemProfile)})], Client(), '202609131200', snapshot_path=archive, overrides={'pubchem': {'dataset_path': dataset}})`,
+    "assert result == {'records': 5, 'reused': True}, result",
+    "with closing(connect(data / 'corpus.db', readonly=True)) as connection:",
+    "    assert connection.execute(\"SELECT count(*) FROM papers_fts WHERE papers_fts MATCH 'sentineltoken'\").fetchone()[0] == 1",
+    "    assert connection.execute(\"SELECT count(*) FROM papers_fts WHERE papers_fts MATCH 'aspirin'\").fetchone()[0] == 1",
+    "    assert connection.execute('SELECT count(*) FROM papers_fts').fetchone()[0] == 5",
+    "    row = connection.execute(\"SELECT primary_category, categories_search, comment FROM papers WHERE id = 'pubchem:2244'\").fetchone()",
+    "    assert row['primary_category'] == 'SafetyInfo', row['primary_category']",
+    "    assert row['categories_search'] == '|BioPathway|DrugMedicInfo|PharmacoInfo|SafetyInfo|ToxicityInfo|NORMANSLE|', row['categories_search']",
+    "    assert row['comment'].startswith('SMILES CC(=O)OC1'), row['comment']",
+    "    bare = connection.execute(\"SELECT primary_category, categories_search FROM papers WHERE id = 'pubchem:99999'\").fetchone()",
+    "    assert bare['primary_category'] is None and bare['categories_search'] == '||', tuple(bare)",
+    // Structure strings stay out of the index: they would enlarge it without answering any query.
+    "    assert connection.execute(\"SELECT count(*) FROM papers_fts WHERE papers_fts MATCH 'InChI'\").fetchone()[0] == 0",
+  ].join("\n");
+  try {
+    provisionFixture(dataDirectory);
+    const result = spawnSync(pythonCommand, ["-c", script], {
+      cwd: moduleDirectory,
+      encoding: "utf8",
+      timeout: 60_000,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+
+    const responses = runProtocol(dataDirectory, [
+      { name: "corpus_get", arguments: { id: "https://pubchem.ncbi.nlm.nih.gov/compound/702" } },
+      { name: "corpus_search", arguments: { query: "acetylsalicylic", source: "pubchem" } },
+      { name: "corpus_categories", arguments: { source: "pubchem", contains: "safety" } },
+      { name: "corpus_info", arguments: {} },
+    ]);
+    const ethanol = responses[2].result.structuredContent;
+    assert.equal(ethanol.id, "pubchem:702", "a PubChem URL resolves to its stored identifier");
+    assert.equal(ethanol.title, "Ethanol");
+    assert.equal(ethanol.license, "CC BY 4.0");
+    assert.equal(ethanol.abstractUrl, "https://pubchem.ncbi.nlm.nih.gov/compound/702");
+    assert.deepEqual(ethanol.categories, ["FoodRelated", "SafetyInfo"]);
+    assert.match(ethanol.abstract, /Also known as ethyl alcohol\. Molecular formula C2H6O\./);
+
+    assert.deepEqual(responses[3].result.structuredContent.results.map((entry) => entry.id), ["pubchem:2244"]);
+
+    const safety = responses[4].result.structuredContent.categories;
+    assert.deepEqual(safety.map((entry) => entry.category), ["SafetyInfo"]);
+    assert.equal(safety[0].name, "Safety and Hazards");
+    assert.equal(safety[0].group, "PubChemLite Annotations");
+    assert.equal(safety[0].records, 2, "both annotated compounds count toward the category");
+    assert.equal(safety[0].primaryRecords, 1, "only one of them is filed under it primarily");
+
+    const described = responses[5].result.structuredContent.sources;
+    assert.deepEqual(described.map((entry) => entry.source), ["arxiv", "pubchem"]);
+    assert.deepEqual(described.map((entry) => entry.records), [2, 3]);
+    assert.equal(described[1].license, "CC BY 4.0");
+    assert.match(described[1].sourceUrl, /zenodo\.5995885/);
   } finally {
     rmSync(dataDirectory, { recursive: true, force: true });
   }

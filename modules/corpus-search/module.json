@@ -2,13 +2,14 @@
   "schemaVersion": 2,
   "id": "corpus-search",
   "name": "Corpus Search",
-  "version": "0.5.0",
+  "version": "0.5.3",
   "description": "Provision and search a sampled, provenance-aware multi-source metadata corpus with SQLite FTS5/BM25.",
   "capabilities": [
     "search scientific paper metadata by topic, category and date",
     "search papers with quoted phrases, exclusions, alternatives and field prefixes",
     "look up an exact arXiv record with its abstract and links",
     "resolve an exact Wikipedia article title and its link",
+    "look up a chemical compound by name, formula or InChIKey with its PubChem link",
     "resolve a subject named in plain language to its arXiv category identifier",
     "report the local corpus coverage, sources, freshness and record counts",
     "catch the installed corpus up with newly published records"
@@ -42,7 +43,7 @@
       "minItems": 1,
       "maxItems": 4,
       "itemPattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
-      "values": ["small-arxiv-cs", "medium-arxiv-cs", "large-arxiv-cs", "wikipedia-en-titles"],
+      "values": ["small-arxiv-cs", "medium-arxiv-cs", "large-arxiv-cs", "wikipedia-en-titles", "pubchemlite-exposomics"],
       "default": ["small-arxiv-cs"]
     },
     "categories": {

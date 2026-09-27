@@ -2,6 +2,7 @@
 """HTTP retrieval, throttling, and progress helpers shared by every corpus source adapter."""
 import json
 import os
+import shutil
 import sys
 import time
 import urllib.error
@@ -39,6 +40,24 @@ def emit_progress(phase: str, current: int, total: int, message: str, unit: str 
         file=_progress_stream,
         flush=True,
     )
+
+
+def copy_file(source: Path, destination: Path, phase: str, message: str) -> None:
+    """Copy a large file, reporting progress the way a download does.
+
+    `shutil.copy2` is silent, and copying a multi-gigabyte corpus takes long enough on a low-end node
+    that the phase is otherwise indistinguishable from a stall.
+    """
+    total = source.stat().st_size
+    copied = 0
+    emit_progress(phase, 0, total, message, "bytes")
+    with source.open("rb") as reader, destination.open("wb") as writer:
+        while chunk := reader.read(DOWNLOAD_CHUNK_BYTES):
+            writer.write(chunk)
+            copied += len(chunk)
+            if copied % PROGRESS_INTERVAL_BYTES < len(chunk):
+                emit_progress(phase, copied, total, message, "bytes")
+    shutil.copystat(source, destination)
 
 
 def atomic_json(path: Path, value: Any) -> None:

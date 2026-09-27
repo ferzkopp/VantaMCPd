@@ -297,7 +297,8 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
     jobs.forEach((job) => {
       const tr = document.createElement("tr");
       const progress = job.progress;
-      const progressText = progress
+      // A phase that reports no count still reports its name, so show a dash rather than a bare zero.
+      const progressText = progress && (progress.current || progress.total)
         ? `${num.format(progress.current || 0)}${progress.total ? ` / ${num.format(progress.total)}` : ""}${progress.unit ? ` ${progress.unit}` : ""}`
         : "-";
       const started = Date.parse(job.startedAt || "");
