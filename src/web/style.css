@@ -8,6 +8,9 @@
   --bad: #f85149;
   --warn: #d29922;
   --accent: #58a6ff;
+  --gpu: #a371f7;
+  --store: #39c5cf;
+  --cap-fill: #7f9a88;
 }
 
 * { box-sizing: border-box }
@@ -87,8 +90,21 @@ table { border-collapse: collapse; width: 100% }
 th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap }
 th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .5px }
 
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; overflow: hidden }
-.card h2 {
+/* Capacity rank from the recorded inventory: a neutral hexagon fills with the tier, and only the
+   accelerator and storage badges carry colour, so capacity never competes with status hues. */
+.node-cell { display: flex; align-items: center; gap: 7px }
+.cap { flex: none }
+.cap-hex-outline { fill: none; stroke: var(--fg); stroke-width: 1.3; stroke-linejoin: round }
+.cap-hex-fill { fill: var(--cap-fill) }
+/* Stroke first, in the row colour, so an overlaid badge keeps a clean edge against the hexagon. */
+.cap-badge { paint-order: stroke fill; stroke: var(--panel); stroke-width: 2; stroke-linejoin: round }
+.cap-badge rect, .cap-badge path, .cap-badge ellipse { fill: currentColor }
+.cap-gpu { color: var(--gpu) }
+.cap-storage { color: var(--store) }
+.cap-gpu .cap-die { fill: var(--panel); stroke: none }
+.cap-storage .cap-drum-top { fill: var(--panel); opacity: .35 }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; overflow: hidden }.card h2 {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: .6px;

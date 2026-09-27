@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { withTool, withToolParameters, type AuditLog } from "./audit.js";
 import type { ClusterConfig } from "./config.js";
+import { nodeCapability } from "./hardware.js";
 import type { JobManager } from "./jobs/manager.js";
 import { jobStatusKey } from "./jobs/types.js";
 import type { ModuleManager, NodeModuleInventory } from "./modules/manager.js";
@@ -253,6 +254,7 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
             return {
               node: node.name,
               role: node.role,
+              capability: nodeCapability(node),
               total: row?.total ?? 0,
               failed: row?.failed ?? 0,
               totalMs: row?.totalMs ?? 0,

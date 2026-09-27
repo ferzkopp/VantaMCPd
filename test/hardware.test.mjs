@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseHardware } from "../dist/hardware.js";
+import { nodeCapability, parseHardware } from "../dist/hardware.js";
 
 test("parses discovered GPU capabilities into the hardware inventory", () => {
   const hardware = parseHardware([
@@ -36,6 +36,35 @@ test("records an empty accelerator inventory when no GPU tool reports a device",
   const hardware = parseHardware("cpu_cores|2\narch|armv7l\ndiscovered_at|2026-09-13T20:00:00Z\n");
 
   assert.deepEqual(hardware.accelerators, []);
+});
+
+test("ranks node capacity by its weakest axis rather than by core count alone", () => {
+  const rank = (hardware, storage) => nodeCapability({ name: "n", hardware, ...(storage ? { storage } : {}) });
+
+  // Equal core counts, very different machines: the architecture weight has to separate them.
+  const board = rank({ cpu: { packageArch: "armhf", cores: 4, maxMhz: 960 }, memory: { totalMb: 1000 } });
+  const server = rank({ cpu: { packageArch: "amd64", cores: 4 }, memory: { totalMb: 3921 } });
+  assert.equal(board.tier, "low");
+  assert.equal(server.tier, "medium");
+
+  // Plenty of fast cores cannot rescue a node that has no memory to use them with.
+  assert.equal(rank({ cpu: { packageArch: "amd64", cores: 16, maxMhz: 3600 }, memory: { totalMb: 1024 } }).tier, "low");
+  assert.equal(rank({ cpu: { packageArch: "amd64", cores: 8, maxMhz: 3600 }, memory: { totalMb: 32768 } }).tier, "high");
+
+  // An undiscovered clock must not demote a node, and an unprobed node is reported as unknown.
+  assert.equal(rank({ cpu: { packageArch: "amd64", cores: 4 }, memory: { totalMb: 8192 } }).tier, "medium");
+  assert.equal(rank({}).tier, "unknown");
+  assert.equal(rank({}).summary, "hardware inventory not discovered");
+
+  const equipped = rank(
+    { cpu: { packageArch: "amd64", cores: 8, maxMhz: 3600 }, memory: { totalMb: 32768 }, accelerators: [{ kind: "gpu", model: "RTX 4070" }] },
+    { mountpoint: "/mnt/ssd" },
+  );
+  assert.equal(equipped.accelerator, "RTX 4070");
+  assert.equal(equipped.storage, true);
+  // The overlays carry these, so repeating them in the summary would double them in the tooltip.
+  assert.equal(equipped.summary, "8 amd64 cores, 3600 MHz, 32768 MB RAM");
+  assert.equal(board.storage, false);
 });
 
 test("records an fstab network share that was idle when the node was probed", () => {

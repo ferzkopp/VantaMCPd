@@ -171,6 +171,62 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
       .join(" · ");
   }
 
+  const SVG_NS = "http://www.w3.org/2000/svg";
+
+  function svg(name, attributes) {
+    const el = document.createElementNS(SVG_NS, name);
+    Object.entries(attributes).forEach(([key, value]) => el.setAttribute(key, value));
+    return el;
+  }
+
+  function capabilityDetail(capability) {
+    return [
+      `${capability?.tier || "unknown"} capacity`,
+      capability?.summary,
+      capability?.accelerator ? `accelerator: ${capability.accelerator}` : undefined,
+      capability?.storage ? "node-local storage" : undefined,
+    ].filter(Boolean).join(" · ");
+  }
+
+  // A pointy-top hexagon filled from the bottom to roughly 40%, 70% or 100% of its height. Each
+  // level lands inside the straight-sided band, so the fill edge is always a full-width chord.
+  const HEXAGON = "9,2 16.79,6.5 16.79,15.5 9,20 1.21,15.5 1.21,6.5";
+  const HEX_FILL = {
+    low: "1.21,12.8 16.79,12.8 16.79,15.5 9,20 1.21,15.5",
+    medium: "1.21,7.4 16.79,7.4 16.79,15.5 9,20 1.21,15.5",
+    high: HEXAGON,
+  };
+
+  /** Capacity hexagon with the accelerator and storage badges overlaid on its right-hand corners. */
+  function capabilityIcon(capability) {
+    const tier = capability?.tier || "unknown";
+    const icon = svg("svg", { viewBox: "0 0 25 22", width: "28", height: "25", class: `cap cap-${tier}`, role: "img" });
+    if (HEX_FILL[tier]) icon.appendChild(svg("polygon", { points: HEX_FILL[tier], class: "cap-hex-fill" }));
+    icon.appendChild(svg("polygon", { points: HEXAGON, class: "cap-hex-outline" }));
+
+    if (capability?.accelerator) {
+      const gpu = svg("g", { class: "cap-badge cap-gpu" });
+      gpu.appendChild(svg("rect", { x: 16, y: 2.7, width: 6.5, height: 7, rx: 1.6 }));
+      [4.1, 6.9].forEach((y) => {
+        gpu.appendChild(svg("rect", { x: 14.4, y, width: 1.6, height: 1.3, rx: 0.45 }));
+        gpu.appendChild(svg("rect", { x: 22.5, y, width: 1.6, height: 1.3, rx: 0.45 }));
+      });
+      gpu.appendChild(svg("rect", { x: 17.8, y: 4.7, width: 2.9, height: 3, rx: 0.8, class: "cap-die" }));
+      icon.appendChild(gpu);
+    }
+
+    if (capability?.storage) {
+      const drum = svg("g", { class: "cap-badge cap-storage" });
+      drum.appendChild(svg("path", { d: "M14.2 13.4a4.6 1.7 0 0 1 9.2 0v5.2a4.6 1.7 0 0 1-9.2 0z" }));
+      drum.appendChild(svg("ellipse", { cx: 18.8, cy: 13.4, rx: 4.6, ry: 1.7, class: "cap-drum-top" }));
+      icon.appendChild(drum);
+    }
+
+    // The tooltip lives on the cell: an SVG <title> would also land in the table's text content.
+    icon.setAttribute("aria-label", capabilityDetail(capability));
+    return icon;
+  }
+
   function renderModules(modules, pending) {
     latestModules = { modules, pending };
     const tb = document.querySelector("#modules tbody");
@@ -371,6 +427,11 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
           ].forEach((v, i) => {
             const td = document.createElement("td");
             td.textContent = v;
+            if (i === 0) {
+              td.className = "node-cell";
+              td.title = capabilityDetail(n.capability);
+              td.prepend(capabilityIcon(n.capability));
+            }
             if (i === 2) {
               td.title = n.moduleError || (n.moduleNames || []).join(", ") || "No modules installed";
               if (n.moduleReachable === false) td.className = "warn";
@@ -506,6 +567,7 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
 
     if (hw.cpu) {
       const cpu = section("CPU");
+      kv(cpu.dl, "capacity", n.capability ? `${n.capability.tier} (weighted cores ${n.capability.score})` : undefined);
       kv(cpu.dl, "model", hw.cpu.model);
       kv(cpu.dl, "soc", hw.cpu.soc);
       kv(cpu.dl, "architecture", hw.cpu.arch);

@@ -90,6 +90,62 @@ export interface HardwareProbe {
   error?: string;
 }
 
+export type CapabilityTier = "unknown" | "low" | "medium" | "high";
+
+export interface NodeCapability {
+  tier: CapabilityTier;
+  /** Weighted core count behind the tier, exposed so the dashboard can explain the badge. */
+  score: number;
+  accelerator?: string;
+  storage: boolean;
+  summary: string;
+}
+
+const TIERS: CapabilityTier[] = ["unknown", "low", "medium", "high"];
+/** A 32-bit ARM core does far less work per cycle than an x86-64 one, so cores alone would mislead. */
+const ARCHITECTURE_WEIGHT: Record<string, number> = { armel: 1, armhf: 1, arm64: 2, amd64: 3 };
+
+function weakest(left: CapabilityTier, right: CapabilityTier): CapabilityTier {
+  return TIERS[Math.min(TIERS.indexOf(left), TIERS.indexOf(right))] as CapabilityTier;
+}
+
+/**
+ * Rank a node's capacity for display only, from the recorded inventory rather than a benchmark.
+ * A node is treated as no more capable than its weakest axis, because on these boards a fast CPU
+ * with 1 GB of RAM still cannot run the work that memory excludes.
+ */
+export function nodeCapability(node: ResolvedNode): NodeCapability {
+  const cpu = node.hardware?.cpu;
+  const memoryMb = node.hardware?.memory?.totalMb;
+  const accelerator = node.hardware?.accelerators?.[0];
+  const storage = Boolean(node.storage);
+  if (cpu?.cores === undefined && memoryMb === undefined) {
+    return { tier: "unknown", score: 0, storage, summary: "hardware inventory not discovered" };
+  }
+
+  const weight = ARCHITECTURE_WEIGHT[cpu?.packageArch ?? ""] ?? 1;
+  // An undiscovered clock counts as nominal, so a quiet probe does not demote an otherwise able node.
+  const clockFactor = cpu?.maxMhz ? Math.min(Math.max(cpu.maxMhz / 2000, 0.5), 1.5) : 1;
+  const score = Math.round((cpu?.cores ?? 1) * weight * clockFactor * 10) / 10;
+  const cpuTier: CapabilityTier = score >= 16 ? "high" : score >= 6 ? "medium" : "low";
+  const memoryTier: CapabilityTier =
+    memoryMb === undefined ? cpuTier : memoryMb >= 8192 ? "high" : memoryMb >= 2048 ? "medium" : "low";
+
+  // The accelerator and storage are carried as their own fields, so they stay out of this summary.
+  const parts = [
+    cpu?.cores ? `${cpu.cores} ${cpu.packageArch ?? cpu.arch ?? ""} core${cpu.cores === 1 ? "" : "s"}`.trim() : undefined,
+    cpu?.maxMhz ? `${cpu.maxMhz} MHz` : undefined,
+    memoryMb ? `${memoryMb} MB RAM` : undefined,
+  ].filter(Boolean);
+  return {
+    tier: weakest(cpuTier, memoryTier),
+    score,
+    ...(accelerator ? { accelerator: accelerator.model ?? accelerator.kind } : {}),
+    storage,
+    summary: parts.join(", "),
+  };
+}
+
 /** Split `key=value key=value` records. Values may be quoted and may contain spaces. */
 function parsePairs(line: string): Record<string, string> {
   const marks: { key: string; keyStart: number; valueStart: number }[] = [];

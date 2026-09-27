@@ -1,12 +1,11 @@
-# Scientific Corpus Search
+# Corpus Search
 
 `corpus-search` provisions a sampled, provenance-aware metadata corpus on a node's configured storage
 volume and exposes bounded SQLite FTS5/BM25 lookup through MCP. It stores descriptive metadata and
 external links; it does not download or serve papers, PDFs, article text, or source archives.
 
-A corpus is built from one or more *sources*. arXiv descriptive metadata is the default source; a
-profile may compose further sources, such as the English Wikipedia article title index, into the same
-database and the same search. Every record carries the source and licence it came from.
+A corpus is built from one or more *sources*, each enabled independently. Every record carries the
+source and licence it came from.
 
 ![Corpus-search retrieval-augmented generation research workflow](corpus-search-sample.png)
 
@@ -16,6 +15,32 @@ It uses singleton deployment, so the cluster may have one installed instance. It
 starts a fresh Python MCP process over SSH stdio for each discovery or tool call and closes it afterward.
 The SQLite database remains on node storage between calls, daemon restarts, and node reboots.
 
+## Content Sources
+
+Two sources are available today. Each is enabled by naming one of its profiles at install time, and a
+corpus may hold any combination of them:
+
+| Source | Profiles | Content | Download | Subjects | Stays current by | Licence |
+| --- | --- | --- | ---: | --- | --- | --- |
+| [arXiv](#arxiv) | `small-arxiv-cs`<br>`medium-arxiv-cs`<br>`large-arxiv-cs` | Paper metadata: title, abstract, authors, categories, dates, DOI, journal reference, abstract and PDF links | 1.71 GiB | arXiv categories | [`corpus_refresh`](#corpus_refresh) over OAI-PMH | [arXiv API terms](https://info.arxiv.org/help/api/tou.html) |
+| [Wikipedia](#wikipedia) | `wikipedia-en-titles` | Every main-namespace article title and its link, redirects included, without article text | 104 MB | none | Reinstall for a newer dump | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
+
+Name the profiles you want; the corpus is their union:
+
+> Install corpus-search on storage-a with the profiles `large-arxiv-cs` and `wikipedia-en-titles`.
+
+What each source is for:
+
+- **arXiv** answers questions about research: what has been published on a topic, by whom, when, and
+	with what abstract. It is the source behind the category filter and the date filters.
+- **Wikipedia** answers questions about naming: whether an article exists, what its exact canonical
+	title is, and which URL to hand to a retrieval tool. It holds no article text, so it complements
+	`browser-retrieval` rather than replacing it.
+
+[Profiles and Install Options](#profiles-and-install-options) covers how to select and combine them,
+[Source Reference](#source-reference) documents each one in detail, and
+[Future Expansion](#future-expansion) records the datasets under consideration.
+
 ## Quickstart
 
 The shortest path from an available storage node to a verified first search is:
@@ -24,8 +49,8 @@ The shortest path from an available storage node to a verified first search is:
 
 	> Check whether corpus-search is compatible with storage-a.
 
-2. Install a profile. Small is the 1% default; Medium is a practical broader starting point. Name more
-	than one to compose sources:
+2. Choose the content from [Content Sources](#content-sources) and install its profiles. Small is the
+	1% arXiv default; Medium is a practical broader starting point:
 
 	> Install corpus-search on storage-a using the Medium profile.
 
@@ -38,13 +63,13 @@ The shortest path from an available storage node to a verified first search is:
 4. Wait for `status: succeeded`, `phase: complete`, and the message `Corpus database activated.` The
 	module receipt is not activated before the replacement database passes integrity and FTS checks.
 
-5. Verify the installed profile and coverage:
+5. Verify the installed sources and coverage:
 
-	> Describe the installed corpus-search dataset, including its profile, sample percentage, topics,
-	> cutoff, record count, database size, and largest categories.
+	> Describe the installed corpus-search dataset, including its profiles, sources, sample percentage,
+	> topics, cutoff, record count, database size, and largest categories.
 
-	Confirm that `profileIds` lists the requested profiles, `records` is greater than zero, and `cutoff` is
-	recent enough for the intended analysis.
+	Confirm that `profileIds` lists the requested profiles, that `sources` names the content you expected,
+	`records` is greater than zero, and `cutoff` is recent enough for the intended analysis.
 
 6. Run a first search, then retrieve complete records for useful results:
 
@@ -56,22 +81,22 @@ The shortest path from an available storage node to a verified first search is:
 
 	> Find papers about `"large language model"` applied to robotics, excluding surveys.
 
-The target node must have configured node-local storage with at least 10 GiB free. Every arXiv profile
-downloads and retains the same ZIP and extracted JSON, so Small reduces database ingestion but does not
-avoid the source-data storage requirement or the initial download and extraction work. Each named
-profile retains its own source data, so composing profiles adds their requirements together.
+The target node must have configured node-local storage with at least 10 GiB free. Each named profile
+downloads and retains its own source data, so composing profiles adds their requirements together. All
+three arXiv profiles retain the same ZIP and extracted JSON, so Small reduces database ingestion but does
+not avoid the source-data storage requirement or the initial download and extraction work.
 
-## Corpus Configuration
+## Profiles and Install Options
 
 A profile configures exactly one source. An installation names the set of profiles it wants, and the
 corpus is their union, so sources stay independent of each other and are selected additively:
 
 | Profile ID | Source | Sample | Intended use |
 | --- | --- | ---: | --- |
-| `small-arxiv-cs` | arXiv | 1% | Default, lightweight local search |
-| `medium-arxiv-cs` | arXiv | 25% | Broader research coverage |
-| `large-arxiv-cs` | arXiv | 100% | Every matching record in the snapshot |
-| `wikipedia-en-titles` | Wikipedia | 100% | Exact article-title resolution and existence checks |
+| `small-arxiv-cs` | [arXiv](#arxiv) | 1% | Default, lightweight local search |
+| `medium-arxiv-cs` | [arXiv](#arxiv) | 25% | Broader research coverage |
+| `large-arxiv-cs` | [arXiv](#arxiv) | 100% | Every matching record in the snapshot |
+| `wikipedia-en-titles` | [Wikipedia](#wikipedia) | 100% | Exact article-title resolution and existence checks |
 
 Naming more than one profile composes them:
 
@@ -80,6 +105,52 @@ Naming more than one profile composes them:
 No more than one profile per source may be named, since two samples of the same source would be one
 corpus contradicting itself. The order they are named in does not matter: the set has a single identity,
 so the same selection written either way reuses the same corpus.
+
+The active configuration combines `profileIds` with an optional topic override:
+
+| Option | Bounds | Meaning |
+| --- | --- | --- |
+| `profileIds` | 1-4 packaged profile IDs; defaults to `["small-arxiv-cs"]` | The sources to ingest, one profile each |
+| `categories` | 1-50 arXiv category names | Replace the packaged topic list; use identifiers such as `cs.AI`, `stat.ML`, or `math.GT` |
+
+A topic override applies to every named profile whose source has a subject scheme. It is rejected when
+no named profile has one, because a title index cannot be narrowed by arXiv category.
+
+## Source Reference
+
+Each source is an adapter that owns its acquisition, record parsing, identifier scheme, subject scheme,
+licence, and terms. The pipeline, the database, and the tools are the same for all of them, so the
+search, category, and lookup behaviour documented under [Tools](#tools) does not change as sources are
+added.
+
+Records are identified the way their source identifies them. arXiv records keep bare arXiv identifiers,
+so every identifier issued before other sources existed is still valid. Every other source prefixes its
+identifiers, as in `wikipedia:Robot_learning`. [`corpus_get`](#corpus_get) accepts either form, and also
+accepts the canonical URL of a record.
+
+Provenance is recorded per source rather than per corpus. [`corpus_info`](#corpus_info) returns a
+`sources` array giving each source's name, sample percentage, topics, source and catch-up URLs, terms
+URL, licence, snapshot and catch-up cutoffs, record count, and last refresh. Search results and records
+carry `source` and `license`, so a synthesized answer can attribute and licence each record it used.
+Licensing differs by source and is the caller's responsibility to respect.
+
+### arXiv
+
+| | |
+| --- | --- |
+| Identifier | `arxiv` |
+| Profiles | `small-arxiv-cs` (1%), `medium-arxiv-cs` (25%), `large-arxiv-cs` (100%) |
+| Baseline | [Cornell arXiv metadata snapshot](https://www.kaggle.com/datasets/Cornell-University/arxiv), 1.71 GiB compressed and about 5.15 GiB extracted |
+| Catch-up | [arXiv OAI-PMH](https://info.arxiv.org/help/oa/index.html) |
+| Record IDs | Bare arXiv identifiers, as in `2608.21252` |
+| Subjects | [arXiv categories](https://arxiv.org/category_taxonomy) |
+| Licence | Metadata under the [arXiv API terms of use](https://info.arxiv.org/help/api/tou.html); per-article licences vary |
+
+Every arXiv installation starts from the snapshot ZIP. The installer caches the ZIP, extracts its JSONL
+member, streams matching records into SQLite, and retains both source files beside the database. It then
+uses arXiv's OAI-PMH feed to add records newer than the snapshot, applying the same topics and sampling
+rule. OAI requests are serialized with at least three seconds between them; JSON offsets and OAI
+resumption tokens are checkpointed for recovery.
 
 All arXiv profiles use the same deterministic sample seed. Selection hashes each arXiv ID, making the
 sample stable across reinstalls and ensuring that the 1% population is contained in the 25% population,
@@ -107,53 +178,28 @@ cross-list categories outside this list, which are retained in each record and a
 [`corpus_categories`](#corpus_categories) to see which identifiers a provisioned corpus actually contains
 and how many records each one reaches.
 
-The active configuration combines a `profileId` with an optional topic override:
+### Wikipedia
 
-| Option | Bounds | Meaning |
-| --- | --- | --- |
-| `profileIds` | 1-4 packaged profile IDs; defaults to `["small-arxiv-cs"]` | The sources to ingest, one profile each |
-| `categories` | 1-50 arXiv category names | Replace the packaged topic list; use identifiers such as `cs.AI`, `stat.ML`, or `math.GT` |
+| | |
+| --- | --- |
+| Identifier | `wikipedia` |
+| Profiles | `wikipedia-en-titles` (100%) |
+| Baseline | [`enwiki-latest-all-titles-in-ns0.gz`](https://dumps.wikimedia.org/enwiki/latest/), 104 MB compressed |
+| Catch-up | None; reinstall to adopt a newer dump |
+| Record IDs | `wikipedia:` and the underscored title, as in `wikipedia:Robot_learning` |
+| Subjects | None |
+| Licence | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
 
-A topic override applies to every named profile whose source has a subject scheme. It is rejected when
-no named profile has one, because a title index cannot be narrowed by arXiv category.
-
-Every arXiv installation starts from the Cornell University arXiv metadata snapshot ZIP. The installer
-caches the ZIP, extracts its JSONL member, streams matching records into SQLite, and retains both source
-files beside the database. It then uses arXiv's OAI-PMH feed to add records newer than the snapshot,
-applying the same topics and sampling rule. OAI requests are serialized with at least three seconds
-between them; JSON offsets and OAI resumption tokens are checkpointed for recovery.
-
-## Sources and Provenance
-
-Each source is an adapter that owns its acquisition, record parsing, identifier scheme, subject scheme,
-licence, and terms. The pipeline, the database, and the tools are the same for all of them, so the
-search, category, and lookup behaviour described below does not change as sources are added.
-
-| Source | Identifier | Upstream artefact | Approximate size | Subjects | Incremental feed |
-| --- | --- | --- | ---: | --- | --- |
-| arXiv | `arxiv` | [Cornell arXiv metadata snapshot](https://www.kaggle.com/datasets/Cornell-University/arxiv) | 1.71 GiB compressed | arXiv categories | [OAI-PMH](https://info.arxiv.org/help/oa/index.html) |
-| Wikipedia | `wikipedia` | [`enwiki-latest-all-titles-in-ns0.gz`](https://dumps.wikimedia.org/enwiki/latest/) | 104 MB compressed | none | none |
-
-Records are identified the way their source identifies them. arXiv records keep bare arXiv identifiers,
-so every identifier issued before other sources existed is still valid. Every other source prefixes its
-identifiers, as in `wikipedia:Robot_learning`. [`corpus_get`](#corpus_get) accepts either form, and also
-accepts the canonical URL of a record.
-
-The Wikipedia source ingests the main-namespace title index, not article text. That is the choice that
-makes it fit a constrained arm64 node: roughly 104 MB downloaded rather than the 25.7 GB of the full
+This source ingests the main-namespace title index, not article text. That is the choice that makes it
+fit a constrained single-board node: roughly 104 MB downloaded rather than the 25.7 GB of the full
 article dump, while still answering what a title index is actually needed for. An agent can confirm that
 an article exists, recover its exact canonical title from an approximate one, and obtain the URL to hand
-to a retrieval tool, all without a web request. Because a title index carries no abstract, a search
-result from it uses the title as its own snippet.
+to a retrieval tool, all without a web request.
 
-Provenance is recorded per source rather than per corpus. [`corpus_info`](#corpus_info) returns a
-`sources` array giving each source's name, sample percentage, topics, source and catch-up URLs, terms
-URL, licence, snapshot and catch-up cutoffs, record count, and last refresh. Search results and records
-carry `source` and `license`, so a synthesized answer can attribute and licence each record it used.
-
-Licensing differs by source and is the caller's responsibility to respect. arXiv metadata is used under
-the [arXiv API terms of use](https://info.arxiv.org/help/api/tou.html), with per-article licences
-varying. Wikipedia titles are used under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+The dump lists every page title in the main namespace, redirects included, so a lookup resolves common
+alternative spellings as well as canonical titles. Because a title index carries no abstract, a search
+result from it uses the title as its own snippet, and [`corpus_categories`](#corpus_categories) returns
+nothing for this source.
 
 ### Future Expansion
 
@@ -293,12 +339,16 @@ only when the corpus is no longer wanted.
 
 ## Tools
 
+Every tool queries the whole corpus regardless of which sources it holds. The `source` filter narrows a
+call to one of them, using the identifiers from [Content Sources](#content-sources).
+
 | Tool | Purpose |
 | --- | --- |
 | `corpus_search` | Search titles, abstracts, authors, and categories using phrases, exclusions, alternatives, and field restrictions |
-| `corpus_get` | Retrieve one exact arXiv metadata record |
+| `corpus_get` | Retrieve one exact record by its identifier or canonical URL |
 | `corpus_categories` | Resolve a plain-language subject to an arXiv category identifier and see how populated it is |
-| `corpus_info` | Inspect profile, provenance, record counts, storage size, and refresh time |
+| `corpus_info` | Inspect profiles, per-source provenance, record counts, storage size, and refresh time |
+| `corpus_refresh` | Catch the corpus up with the sources that publish an incremental feed |
 
 List the tools advertised by the installed module:
 
@@ -313,6 +363,7 @@ The target may be omitted because the module has exactly one active installation
 | Input | Required | Bounds | Meaning |
 | --- | --- | --- | --- |
 | `query` | yes | 1-500 characters, 1-32 searchable terms | Terms matched across title, abstract, authors, and categories |
+| `source` | no | a source identifier | Restrict to one source, such as `arxiv` or `wikipedia` |
 | `category` | no | 1-40 characters | Exact arXiv category membership, including cross-lists |
 | `publishedFrom` | no | `YYYY-MM-DD` | Inclusive lower bound on original publication date |
 | `publishedTo` | no | `YYYY-MM-DD` | Inclusive upper bound on original publication date |
@@ -400,7 +451,7 @@ Common requests:
 
 > Search the corpus for `diffusion` in the title only, for either `policy` or `planning`.
 
-> Search the scientific corpus for `language model`, return 10 results starting at offset 20, and include
+> Search the corpus for `language model`, return 10 results starting at offset 20, and include
 > each paper's arXiv link.
 
 > Find recent `database query optimization` papers across all available categories and group the results
@@ -503,7 +554,7 @@ Category filters are exact identifiers, so a request phrased in plain language h
 `corpus_categories` does that against the corpus itself rather than from recall, and shows how populated
 each category actually is:
 
-> Which categories in the scientific corpus cover robotics?
+> Which categories in the corpus cover robotics?
 
 > Search the corpus for papers on the use of large language models in robotics.
 
@@ -632,7 +683,7 @@ An agent can discover and compose the bounded tools without the prompt naming ei
 installation node. VantaMCPd automatically routes each call to the singleton instance:
 
 > Investigate recent work on retrieval-augmented generation in computational linguistics using the
-> available scientific metadata corpus. First inspect the corpus coverage and freshness. Search for
+> available metadata corpus. First inspect the corpus coverage and freshness. Search for
 > `retrieval augmented generation` in `cs.CL` with a limit of 5, then retrieve the complete records for
 > the two strongest results in parallel. Produce a compact research brief with corpus provenance, a
 > ranked comparison table, three synthesis bullets, and arXiv links. Use only the available local corpus;
