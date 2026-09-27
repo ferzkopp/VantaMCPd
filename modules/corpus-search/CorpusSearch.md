@@ -239,9 +239,11 @@ FTS index rebuilding and `ANALYZE` spill a temporary file roughly the size of th
 points `SQLITE_TMPDIR` at the storage volume so that this lands beside the corpus rather than in
 `/var/tmp` on the root filesystem, which on a single-board computer is typically a small SD card.
 
-The durable job timeout is six hours. Actual duration depends on network, CPU, storage, profile, and
+The durable job timeout is twelve hours. Actual duration depends on network, CPU, storage, profile, and
 snapshot size. Small and Medium still download and extract the complete source snapshot; profile size
-primarily changes ingestion and FTS indexing time.
+primarily changes ingestion and FTS indexing time. A single-board node composing both sources needs
+most of that budget: insert rates fall as the table grows past a few million rows, and the index
+rebuild that follows ingestion covers every record in the corpus.
 
 In Copilot Chat Agent mode, check placement before starting the download:
 

@@ -27,7 +27,7 @@
   "lifecycle": {
     "install": "install.sh",
     "uninstall": "uninstall.sh",
-    "execution": { "mode": "job", "timeoutMs": 21600000 }
+    "execution": { "mode": "job", "timeoutMs": 43200000 }
   },
   "persistentData": {
     "storage": "node",

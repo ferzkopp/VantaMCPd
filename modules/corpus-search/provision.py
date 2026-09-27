@@ -353,6 +353,9 @@ def provision(
             checkpoint["pruned"] = True
             save()
 
+        # A reingested source arrives without index entries; when none did, the seeded index is already
+        # correct and only the catch-up records need adding.
+        rebuilding = any(not current.get(adapter.id) for adapter, _ in specs)
         for adapter, spec in specs:
             state = checkpoint["sources"].setdefault(adapter.id, {})
             earlier = previous_state(recorded, active_metadata, adapter.id)
@@ -368,6 +371,7 @@ def provision(
                 adapter.catch_up(
                     connection, spec, state, save, from_date, until_date, fetched_at,
                     overrides.get(adapter.id, {}), upsert_papers, sampled,
+                    None if rebuilding else index_papers,
                 )
             summaries.append({
                 "adapter": adapter,
@@ -376,7 +380,8 @@ def provision(
                 "catchupCutoff": until_date if adapter.supports_catch_up else None,
             })
 
-        rebuild_search(connection)
+        if rebuilding:
+            rebuild_search(connection)
         for summary in summaries:
             adapter, spec = summary["adapter"], summary["spec"]
             put_source(connection, {
