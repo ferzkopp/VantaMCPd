@@ -158,6 +158,9 @@ class PubChemLiteSource:
     id = "pubchem"
     prefix = "pubchem"
     name = "PubChemLite for Exposomics compound index"
+    # 2: annotation names dropped from the abstract, which had inverted the ranking of well-annotated
+    # compounds. Bump whenever a record's parsed content changes, so retained records are rebuilt.
+    record_version = 2
     license = LICENSE
     terms_url = TERMS_URL
     catchup_source_url = None

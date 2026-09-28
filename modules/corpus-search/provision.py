@@ -175,12 +175,21 @@ def apply_categories(profiles: Sequence[dict[str, Any]], categories: list[str] |
 
 
 def source_config_hash(profile: dict[str, Any]) -> str:
-    """Identify one source's configuration: its profile bytes plus the fields that select records.
+    """Identify one source's configuration: its profile bytes, the fields that select records, and
+    the version of the adapter that parses them.
 
-    This is deliberately the same value the single-source content hash has always had, so a corpus
-    provisioned before composition existed is still recognized as holding that source unchanged.
+    Reuse otherwise compares only the upstream artefact and the profile, so a correction to how an
+    adapter builds records would never reach a corpus already holding them. An adapter bumps
+    `recordVersion` when its output changes; the key is omitted at version 1 so that every corpus
+    provisioned before this existed is still recognized as holding its sources unchanged.
     """
-    content = {"baseProfileHash": profile["digest"], **sources.by_key(profile["source"]).identity_fields(profile)}
+    adapter = sources.by_key(profile["source"])
+    version = getattr(adapter, "record_version", 1)
+    content = {
+        "baseProfileHash": profile["digest"],
+        **adapter.identity_fields(profile),
+        **({"recordVersion": version} if version > 1 else {}),
+    }
     return hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 

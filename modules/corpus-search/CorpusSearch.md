@@ -400,9 +400,10 @@ defaults.
 
 Reuse is decided per source, not for the corpus as a whole. Adding a profile leaves the sources already
 present untouched and ingests only the new one; dropping a profile deletes only that source's records.
-A source is reingested when its own profile changes, when its topic list changes, or when its upstream
-artefact has been republished. Only a reingested source is indexed afterwards, so adding a small source
-to a large corpus costs its own ingestion rather than a rebuild of everything already there.
+A source is reingested when its own profile changes, when its topic list changes, when its upstream
+artefact has been republished, or when the module ships a newer record format for it. Only a reingested
+source is indexed afterwards, so adding a small source to a large corpus costs its own ingestion rather
+than a rebuild of everything already there.
 
 Uninstall never deletes corpus data. Use `cluster_purge_module_data` to reclaim the storage mount, and
 only when the corpus is no longer wanted.
@@ -851,6 +852,7 @@ links to each record's canonical page.
 | A source is reported as skipped by `corpus_refresh` | That source publishes no incremental feed; reinstall the profile to adopt a newer snapshot of it |
 | `corpus_refresh` is rejected as an immediate call | It is declared background-only; reissue it with background execution and follow the returned job ID |
 | `corpus_refresh` reports a profile mismatch | A packaged profile changed since installation; reinstall rather than refreshing to move the corpus to the new scope |
+| A fixed record field still looks wrong after upgrading | The adapter's `record_version` was not bumped, so reuse kept the records the old parser produced. Only a changed profile, a republished artefact, or a newer record format reingests a source |
 | Install is rejected for naming two profiles | Only one profile per source may be named; drop the duplicate arXiv profile from the list |
 | Root filesystem fills during provisioning | Confirm the installed version is 0.4.1 or later; earlier versions let SQLite spill its index rebuild into `/var/tmp` on the root filesystem instead of the storage volume |
 | Dashboard shows an old catalog or module version | Run `npm run build`, restart the local VantaMCPd MCP server, then refresh the dashboard; the inventory and catalog are loaded by that process |

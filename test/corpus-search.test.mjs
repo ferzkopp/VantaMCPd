@@ -544,6 +544,35 @@ test("adding a source keeps the records the retained corpus already holds", { sk
   }
 });
 
+test("a newer adapter record format reingests the source it parses", { skip: !pythonCommand }, () => {
+  const script = [
+    "import json",
+    "from pathlib import Path",
+    "import sources",
+    "from provision import load_profile, source_config_hash",
+    `directory = Path(${JSON.stringify(path.join(moduleDirectory, "profiles"))})`,
+    "profile, digest = load_profile(directory / 'pubchemlite-exposomics.json')",
+    "profile['digest'] = digest",
+    "adapter = sources.by_key(profile['source'])",
+    "before = source_config_hash(profile)",
+    // A corpus already holding these records must be rebuilt when the parser that produced them changes.
+    "adapter.__class__.record_version += 1",
+    "assert source_config_hash(profile) != before, 'a newer record format must invalidate the retained records'",
+    "adapter.__class__.record_version -= 1",
+    "assert source_config_hash(profile) == before",
+    // Version 1 contributes nothing to the hash, so sources whose format never changed are undisturbed.
+    "assert getattr(sources.by_key('arxiv-bulk-snapshot'), 'record_version', 1) == 1",
+    "assert getattr(sources.by_key('wikipedia-title-index'), 'record_version', 1) == 1",
+  ].join("\n");
+  const result = spawnSync(pythonCommand, ["-c", script], {
+    cwd: moduleDirectory,
+    encoding: "utf8",
+    timeout: 30_000,
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+});
+
 test("changing a source's own profile reingests only that source", { skip: !pythonCommand }, () => {
   const dataDirectory = mkdtempSync(path.join(tmpdir(), "vanta-corpus-change-"));
   const wide = path.join(dataDirectory, "wide.json");
