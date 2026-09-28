@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "corpus-search",
   "name": "Corpus Search",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Provision and search a sampled, provenance-aware multi-source metadata corpus with SQLite FTS5/BM25.",
   "capabilities": [
     "search scientific paper metadata by topic, category and date",

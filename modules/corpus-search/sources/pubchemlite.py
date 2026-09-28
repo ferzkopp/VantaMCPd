@@ -111,14 +111,15 @@ def compound_record(
     categories = [column for column, _ in ANNOTATIONS if counts[column]]
     primary = max(categories, key=lambda column: counts[column], default=None)
 
+    # The annotation names are deliberately absent: they are already indexed as categories, and
+    # listing them here made a well-annotated compound's abstract several times longer than a sparse
+    # one's, so BM25 length normalization ranked the best-documented compounds last.
     described = [
         f"Also known as {synonym}." if synonym and synonym.casefold() != title.casefold() else "",
         f"Molecular formula {formula}." if formula else "",
         f"Monoisotopic mass {mass}." if mass else "",
         f"XLogP {logp}." if logp else "",
         f"InChIKey {key}." if key else "",
-        "Annotated in PubChem for " + ", ".join(ANNOTATION_NAMES[column] for column in categories) + "."
-        if categories else "",
     ]
     structure = [
         f"SMILES {row['SMILES'].strip()}" if clean_text(row.get("SMILES")) else "",

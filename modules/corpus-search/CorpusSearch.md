@@ -527,6 +527,32 @@ Common requests:
 > Find recent `database query optimization` papers across all available categories and group the results
 > by primary category.
 
+#### Cross-source questions
+
+A corpus holding several sources answers questions no single one could. The sources meet at the subject
+rather than at a shared identifier, so a cross-source question is usually two or three bounded calls
+whose results are joined by the caller:
+
+> Resolve `glyphosate OR atrazine` in category `AgroChemInfo`, then find arXiv work on machine learning
+> for molecular property prediction, and give me the Wikipedia article for each compound.
+
+That single request uses all three: PubChemLite resolves the common names to CIDs `3496` and `2256`
+with their formulas and annotation coverage, arXiv supplies the method papers, and the Wikipedia titles
+supply canonical article URLs to hand to `browser-retrieval`.
+
+The bridge between the research and chemistry sources is real rather than incidental: arXiv records
+cross-listed into `q-bio.BM` or `physics.chem-ph` are exactly the papers whose subjects are the
+compounds PubChemLite holds.
+
+> Which compounds in the corpus are annotated for both food relevance and toxicity, and is there arXiv
+> work on predicting that kind of toxicity?
+
+One caution when a corpus holds the Wikipedia titles. They outnumber the other sources by more than an
+order of magnitude and each is a very short document, so BM25 length normalization ranks them above
+longer records for a bare one-word query. Scope the query when that is not what you want:
+
+> Search the corpus for `caffeine` in PubChemLite only.
+
 Each result includes the record ID, its `source` and `license`, title, authors, categories, dates,
 optional DOI/journal/comment fields, abstract and PDF links, a highlighted abstract snippet, score,
 source query, profile slice, and fetch time. Search results omit the complete abstract to keep pages
@@ -820,6 +846,8 @@ links to each record's canonical page.
 | Job appears paused after `catchup` reaches all topics | Expected: the `summarize`, `optimize` and `verify` phases each read the whole corpus. Check the heartbeat and log rather than the record count |
 | Install fails or is canceled | Read the job log, correct the cause, and reinstall with the same profile to reuse retained downloads and checkpoints |
 | Search returns no results | Inspect `corpus_info` for profile/topics and `corpus_categories` for the identifier; check the response for a `corrections` array, then broaden with `OR` or a prefix term |
+| A one-word query returns mostly Wikipedia titles | Expected when the title index is installed: it holds far more records than the other sources and each is short, which BM25 favours. Pass `source` to scope the query, or add a second term |
+| A compound search returns derivatives rather than the compound | PubChemLite titles are systematic names and the common name is a synonym, so `caffeine` matches every caffeine derivative. Quote the full name or use `corpus_get` with the CID once one result identifies it |
 | A source is reported as skipped by `corpus_refresh` | That source publishes no incremental feed; reinstall the profile to adopt a newer snapshot of it |
 | `corpus_refresh` is rejected as an immediate call | It is declared background-only; reissue it with background execution and follow the returned job ID |
 | `corpus_refresh` reports a profile mismatch | A packaged profile changed since installation; reinstall rather than refreshing to move the corpus to the new scope |

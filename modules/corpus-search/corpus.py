@@ -343,7 +343,7 @@ def census(connection: sqlite3.Connection) -> dict[str, Any]:
     Counting each of these separately would cost a full scan apiece, so they share one. Records from
     sources without a subject scheme contribute no category rather than an uncategorized one.
     """
-    categories: dict[str, int] = {}
+    categories: dict[str, dict[str, int]] = {}
     primary: dict[str, dict[str, int]] = {}
     records: dict[str, int] = {}
     for source, primary_category, packed in connection.execute(
@@ -354,10 +354,34 @@ def census(connection: sqlite3.Connection) -> dict[str, Any]:
             counts = primary.setdefault(source, {})
             counts[primary_category] = counts.get(primary_category, 0) + 1
         if packed != NO_CATEGORIES:
+            memberships = categories.setdefault(source, {})
             for category in packed.split("|"):
                 if category:
-                    categories[category] = categories.get(category, 0) + 1
+                    memberships[category] = memberships.get(category, 0) + 1
     return {"categories": categories, "primaryCategories": primary, "records": records}
+
+
+def merge_counts(stored: dict[str, dict[str, int]], source: str | None) -> dict[str, int]:
+    if source is not None:
+        return {name: int(value) for name, value in stored.get(source, {}).items()}
+    merged: dict[str, int] = {}
+    for per_source in stored.values():
+        for name, value in per_source.items():
+            merged[name] = merged.get(name, 0) + int(value)
+    return merged
+
+
+def category_counts(metadata: dict[str, str], source: str | None = None) -> dict[str, int] | None:
+    """Read the recorded category memberships, or None when the corpus never recorded them."""
+    packed = metadata.get("category_counts")
+    if packed is None:
+        return None
+    stored = json.loads(packed)
+    # A corpus provisioned before counts were kept per source recorded one flat map for the whole
+    # corpus, which cannot be attributed to a single source.
+    if not all(isinstance(value, dict) for value in stored.values()):
+        return None if source is not None else {name: int(value) for name, value in stored.items()}
+    return merge_counts(stored, source)
 
 
 def primary_counts(
@@ -374,13 +398,7 @@ def primary_counts(
         )
         return {str(row[0]): int(row[1]) for row in rows}
     stored: dict[str, dict[str, int]] = json.loads(packed)
-    if source is not None:
-        return {name: int(value) for name, value in stored.get(source, {}).items()}
-    merged: dict[str, int] = {}
-    for per_source in stored.values():
-        for name, value in per_source.items():
-            merged[name] = merged.get(name, 0) + int(value)
-    return merged
+    return merge_counts(stored, source)
 
 
 def total_records(connection: sqlite3.Connection, rows: list[sqlite3.Row]) -> int:
@@ -420,10 +438,9 @@ def list_categories(database: Path, arguments: dict[str, Any] | None = None) -> 
         return {"categories": [], "total": 0, "countsIncludeCrossLists": True, "ingestionTopics": []}
     packed_topics = configured.get(source) if source else None
     topics = set(json.loads(packed_topics or metadata.get("configured_categories") or "[]"))
-    packed_counts = metadata.get("category_counts")
-    counts: dict[str, int] = json.loads(packed_counts) if packed_counts else {}
-    # Databases provisioned before category counts were recorded still expose primary-category totals.
-    complete = packed_counts is not None
+    counts = category_counts(metadata, source)
+    complete = counts is not None
+    counts = counts or {}
     names = set(counts) | set(primary) | topics
 
     needle = contains.casefold() if contains else None

@@ -805,6 +805,14 @@ test("adds PubChemLite compounds without reindexing the source beside them", { s
     assert.equal(ethanol.abstractUrl, "https://pubchem.ncbi.nlm.nih.gov/compound/702");
     assert.deepEqual(ethanol.categories, ["FoodRelated", "SafetyInfo"]);
     assert.match(ethanol.abstract, /Also known as ethyl alcohol\. Molecular formula C2H6O\./);
+    // Annotation names stay out of the abstract: including them made the best-annotated compounds,
+    // whose abstracts grew longest, rank below sparse ones under BM25 length normalization.
+    assert.doesNotMatch(ethanol.abstract, /Food Related|Safety and Hazards/);
+    const aspirin = runProtocol(dataDirectory, [{ name: "corpus_get", arguments: { id: "pubchem:2244" } }])[2];
+    assert.ok(
+      aspirin.result.structuredContent.abstract.length < ethanol.abstract.length * 1.5,
+      "a compound with six annotations must not carry a far longer abstract than one with two",
+    );
 
     assert.deepEqual(responses[3].result.structuredContent.results.map((entry) => entry.id), ["pubchem:2244"]);
 
@@ -814,6 +822,16 @@ test("adds PubChemLite compounds without reindexing the source beside them", { s
     assert.equal(safety[0].group, "PubChemLite Annotations");
     assert.equal(safety[0].records, 2, "both annotated compounds count toward the category");
     assert.equal(safety[0].primaryRecords, 1, "only one of them is filed under it primarily");
+
+    // Counts are recorded per source, so restricting to one must not surface another's scheme.
+    const scoped = runProtocol(dataDirectory, [
+      { name: "corpus_categories", arguments: { source: "pubchem" } },
+      { name: "corpus_categories", arguments: {} },
+    ]);
+    const owned = scoped[2].result.structuredContent.categories.map((entry) => entry.category);
+    assert.ok(owned.every((entry) => !entry.startsWith("cs.")), `arXiv categories leaked into a pubchem query: ${owned}`);
+    const everything = scoped[3].result.structuredContent.categories.map((entry) => entry.category);
+    assert.ok(everything.includes("cs.IR") && everything.includes("SafetyInfo"), "an unfiltered call spans every scheme");
 
     const described = responses[5].result.structuredContent.sources;
     assert.deepEqual(described.map((entry) => entry.source), ["arxiv", "pubchem"]);
