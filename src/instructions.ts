@@ -12,6 +12,8 @@ export function serverInstructions(capabilities: string, dashboardUrl?: string):
     "resubmitting. A node rejects new jobs when it is at its concurrent-job limit or short of memory; retry later or " +
     "choose another node rather than forcing the work.\n" +
     "Destructive operations (formatting, reboots, rm -rf, partitioning) require explicit user approval and a confirm flag.\n" +
+    "A node with an NVIDIA GPU is enrolled like any other node and then promoted for CUDA separately: use cluster_gpu " +
+    "(check, enable, test) rather than installing drivers by hand with cluster_run or cluster_packages.\n" +
     (capabilities
       ? "The cluster also runs node modules that do real work for you. Route a request to cluster_call_module_tool " +
         "whenever it matches one of these capabilities, even if the user does not name the module or the node:\n" +

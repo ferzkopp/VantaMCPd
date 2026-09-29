@@ -2,8 +2,8 @@
   "_comment": [
     "Template inventory for VantaMCPd - copy to cluster.config.local.json and edit.",
     "cluster.config.local.json is gitignored and always wins over this file.",
-    "role: worker | worker+storage | control | control+worker | control+storage | storage.",
-    "Each '+'-separated token becomes a tag, so targets:['storage'] hits every storage node.",
+    "role: worker | control | storage, joined with '+', plus the optional 'gpu' modifier - e.g. worker+storage, worker+gpu.",
+    "Each '+'-separated token becomes a tag, so targets:['storage'] hits every storage node and targets:['gpu'] every GPU node.",
     "A node whose role includes 'storage' must also carry a 'storage' block.",
     "The 'hardware' block is written by the daemon (or 'npm run discover') the first time it connects -",
     "you never need to fill it in. Set defaults.autoDiscoverHardware to false to opt out.",

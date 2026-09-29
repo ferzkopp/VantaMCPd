@@ -296,11 +296,13 @@ health and tools, and `/var/lib/vantamcpd/jobs/<job-id>/` for durable job state.
 Platform work under consideration:
 
 1. Add artifact ACLs, backup, replication, deduplication, and optional alternate storage backends.
-2. Extend `corpus-search` with further source adapters behind its existing adapter boundary. PubMed is
-   the strongest next candidate, followed by DBLP, then DataCite and Zenodo, then Crossref; OpenAlex and
-   Semantic Scholar are deferred on licensing and size. Each adapter records provenance and licensing
-   per source, as the arXiv and Wikipedia adapters already do. Candidate reference datasets are listed
-   under Future Expansion in the [module guide](../modules/corpus-search/CorpusSearch.md).
+2. Extend `corpus-search` with further source adapters behind its existing adapter boundary, each
+   selectable as its own profile alongside the installed arXiv, PubChemLite, and Wikipedia sources and
+   recording its own provenance and licensing, as those three already do. A candidate fits when its
+   records are titled, individually identified, externally linkable, openly licensed, and small enough
+   for a sampled corpus to stay within a node's storage budget. The datasets under consideration, and
+   those rejected on licensing, are listed under Future Expansion in the
+   [module guide](../modules/corpus-search/CorpusSearch.md).
 3. Add precomputed embeddings and vector or hybrid retrieval only on compatible node profiles.
 4. Evaluate separate modules for OCR and screenshots, PDF extraction, and geospatial operations. Curated
    Wikipedia content beyond the ingested title index belongs with them rather than in `corpus-search`.

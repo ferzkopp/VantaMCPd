@@ -8,7 +8,30 @@ const SudoMode = z.enum(["nopasswd", "password", "none"]);
 export type SudoMode = z.infer<typeof SudoMode>;
 
 /** A node's job in the cluster. Each "+"-separated token also becomes a targetable tag. */
-const RoleSchema = z.enum(["worker", "worker+storage", "control", "control+worker", "control+storage", "storage"]);
+/**
+ * Roles are '+'-separated tokens rather than a fixed list of combinations: every token becomes a tag,
+ * so "worker+gpu" is targetable as ["gpu"] exactly like "worker+storage" is as ["storage"].
+ */
+const ROLE_PRIMARY = ["control", "worker", "storage"] as const;
+const ROLE_MODIFIER = ["gpu"] as const;
+const ROLE_TOKENS: readonly string[] = [...ROLE_PRIMARY, ...ROLE_MODIFIER];
+
+const RoleSchema = z
+  .string()
+  .min(1)
+  .superRefine((role, ctx) => {
+    const tokens = role.split("+");
+    const unknown = tokens.filter((token) => !ROLE_TOKENS.includes(token));
+    if (unknown.length > 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `unknown role token(s) ${unknown.join(", ")}; allowed: ${ROLE_TOKENS.join(", ")}` });
+    }
+    if (new Set(tokens).size !== tokens.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `repeated role token in "${role}"` });
+    }
+    if (!tokens.some((token) => (ROLE_PRIMARY as readonly string[]).includes(token))) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `role "${role}" needs one of ${ROLE_PRIMARY.join(", ")}` });
+    }
+  });
 export type NodeRole = z.infer<typeof RoleSchema>;
 
 const NfsSchema = z.object({

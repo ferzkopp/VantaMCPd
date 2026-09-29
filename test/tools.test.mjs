@@ -10,6 +10,7 @@ import { serverInstructions } from "../dist/instructions.js";
 import { capabilitySummary, loadModuleCatalog } from "../dist/modules/catalog.js";
 import { registerExecTools } from "../dist/tools/exec.js";
 import { registerFileTools } from "../dist/tools/files.js";
+import { registerGpuTools } from "../dist/tools/gpu.js";
 import { registerJobTools } from "../dist/tools/jobs.js";
 import { registerLogTools } from "../dist/tools/logs.js";
 import { registerModuleTools } from "../dist/tools/modules.js";
@@ -28,6 +29,7 @@ const REGISTRARS = [
   registerFileTools,
   registerStorageTools,
   registerSwapTools,
+  registerGpuTools,
   registerJobTools,
   registerModuleTools,
 ];
@@ -41,6 +43,7 @@ const EXPECTED_TOOLS = [
   "cluster_download",
   "cluster_get_job",
   "cluster_get_job_log",
+  "cluster_gpu",
   "cluster_hardware",
   "cluster_install_module",
   "cluster_list_dir",
@@ -381,6 +384,94 @@ test("destructive tools refuse to act until the caller confirms", async () => {
   assert.match(body(everywhere), /'all' is not accepted/);
 
   assert.equal(pool.calls.length, 0, "no command may reach a node before confirmation");
+});
+
+/** What a Debian 13 VM with a passed-through A4000 and no driver reports to the GPU probe. */
+const GPU_READY_PROBE = [
+  "arch|amd64",
+  "os_id|debian",
+  "os_version|13",
+  "os_name|Debian GNU/Linux 13 (trixie)",
+  "kernel|6.12.0-1-amd64",
+  "virt|kvm",
+  "free_root_mb|48000",
+  "gpu_pci|0000:01:00.0 0x24b0",
+  "gpu_count|1",
+  "secure_boot|disabled",
+  "headers_meta|yes",
+  "nvidia_module|0",
+].join("\n");
+
+test("GPU promotion is a separate, confirmed step that never touches a node before it is approved", async () => {
+  const { tools, pool } = buildContext(recordingPool({ stdout: GPU_READY_PROBE }));
+
+  const unconfirmed = await call(tools, "cluster_gpu", { action: "enable", targets: ["cluster1"] });
+  assert.equal(unconfirmed.isError, true);
+  assert.match(body(unconfirmed), /confirm: true/);
+  assert.match(body(unconfirmed), /builds a kernel module/);
+
+  const untargeted = await call(tools, "cluster_gpu", { action: "enable", confirm: true });
+  assert.equal(untargeted.isError, true);
+  assert.match(body(untargeted), /explicit target/);
+
+  const wholeCluster = await call(tools, "cluster_gpu", { action: "enable", targets: ["all"], confirm: true });
+  assert.equal(wholeCluster.isError, true);
+  assert.match(body(wholeCluster), /exactly one node/);
+
+  assert.equal(pool.calls.length, 0, "promotion must not probe or stage before it is confirmed and targeted");
+});
+
+test("GPU promotion stages a root-owned script and runs it as one durable job per node", async () => {
+  const jobs = recordingJobs();
+  const { tools, pool } = buildContext(recordingPool({ stdout: GPU_READY_PROBE }), jobs);
+
+  const result = await call(tools, "cluster_gpu", {
+    action: "enable",
+    targets: ["cluster1"],
+    driver: "open",
+    containerRuntime: "podman",
+    confirm: true,
+  });
+  assert.notEqual(result.isError, true);
+  const output = JSON.parse(body(result));
+  assert.equal(output.stateBefore, "ready-to-promote");
+  assert.match(output.next, /cluster_get_job/);
+
+  const staging = pool.calls.at(-1);
+  assert.match(staging.command, /base64 -d > '\/var\/lib\/vantamcpd\/gpu-setup\.sh'/);
+  assert.match(staging.command, /chmod 0700/);
+  assert.equal(staging.opts.sudo, true);
+
+  assert.equal(jobs.submitted.length, 1);
+  const { input } = jobs.submitted[0];
+  assert.equal(input.kind, "gpu-setup");
+  assert.deepEqual(input.command, ["/bin/bash", "/var/lib/vantamcpd/gpu-setup.sh"]);
+  // Sharing the apt key keeps a promotion and a background apt job off the same node at once.
+  assert.deepEqual(input.resourceKeys, ["gpu:cluster1", "apt:cluster1"]);
+  assert.equal(input.runAsNodeUser, undefined, "the driver install needs root");
+});
+
+test("GPU promotion refuses a node that cannot run CUDA, before installing anything", async () => {
+  const jobs = recordingJobs();
+  const probe = GPU_READY_PROBE.replace("gpu_count|1", "gpu_count|0");
+  const { tools } = buildContext(recordingPool({ stdout: probe }), jobs);
+
+  const result = await call(tools, "cluster_gpu", { action: "enable", targets: ["cluster1"], confirm: true });
+  assert.equal(result.isError, true);
+  assert.match(body(result), /cannot run CUDA workloads/);
+  assert.match(body(result), /passed through/);
+  assert.equal(jobs.submitted.length, 0);
+});
+
+test("the GPU check is read-only and reports readiness per node", async () => {
+  const { tools, pool } = buildContext(recordingPool({ stdout: GPU_READY_PROBE }));
+  const result = await call(tools, "cluster_gpu", { action: "check" });
+  assert.notEqual(result.isError, true);
+  const [first] = JSON.parse(body(result));
+  assert.equal(first.node, "cluster1");
+  assert.equal(first.state, "ready-to-promote");
+  assert.equal(first.system.cudaRepo, "debian13");
+  assert.deepEqual(pool.calls.map((entry) => entry.nodes), [["cluster1", "cluster4"]]);
 });
 
 test("guarded devices are rejected before any partitioning command is built", async () => {

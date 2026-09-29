@@ -3,7 +3,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { AuditLog, withToolParameters } from "./audit.js";
 import { loadConfig, loadEnvFile } from "./config.js";
-import { discoverMissingHardware } from "./hardware.js";
+import { GPU_JOB_KIND } from "./gpu.js";
+import { discoverMissingHardware, refreshHardware } from "./hardware.js";
 import { JobManager } from "./jobs/manager.js";
 import { JobRegistry } from "./jobs/registry.js";
 import { ModuleManager } from "./modules/manager.js";
@@ -13,6 +14,7 @@ import { serverInstructions } from "./instructions.js";
 import type { ToolContext, ToolServer } from "./tools/context.js";
 import { registerExecTools } from "./tools/exec.js";
 import { registerFileTools } from "./tools/files.js";
+import { registerGpuTools } from "./tools/gpu.js";
 import { registerLogTools } from "./tools/logs.js";
 import { registerJobTools } from "./tools/jobs.js";
 import { registerModuleTools } from "./tools/modules.js";
@@ -52,12 +54,22 @@ async function main(): Promise<void> {
   jobRegistry.register("module-install");
   jobRegistry.register("module-call");
   jobRegistry.register("apt");
+  jobRegistry.register(GPU_JOB_KIND);
   const jobs = new JobManager(config, pool, jobRegistry);
   const modules = new ModuleManager(config, pool, undefined, jobs);
   // A job-backed install writes its receipt long after the tool call returns, so cached module state
   // is only correct once the job settles.
   jobs.onJobSettled((job) => {
     if (job.kind === "module-install") modules.notifyInventoryChanged();
+    // A promoted node only becomes a GPU target once the accelerator is in the inventory.
+    if (job.kind === GPU_JOB_KIND && job.status === "succeeded") {
+      const node = config.nodes.find((candidate) => candidate.name === job.targetNode);
+      if (node) {
+        void refreshHardware(config, pool, [node], { save: true }).catch((err: Error) => {
+          process.stderr.write(`hardware refresh after GPU promotion failed: ${err.message}\n`);
+        });
+      }
+    }
   });
   const ctx: ToolContext = { config, pool, jobs, modules };
 
@@ -81,6 +93,7 @@ async function main(): Promise<void> {
   registerFileTools(tools, ctx);
   registerStorageTools(tools, ctx);
   registerSwapTools(tools, ctx);
+  registerGpuTools(tools, ctx);
   registerJobTools(tools, ctx);
   registerModuleTools(tools, ctx);
   const web = audit && config.monitoring.web ? startWebServer(config, audit, modules, jobs) : undefined;

@@ -125,8 +125,14 @@ Useful variants:
 .\scripts\bootstrap.ps1 -Verify                      # check state, change nothing
 .\scripts\bootstrap.ps1 -Nodes storage-a             # single node
 .\scripts\bootstrap.ps1 -InstallBaseline             # also install usbutils, jq, curl, nfs-common
+.\scripts\bootstrap.ps1 -Nodes storage-a -ResetHostKey  # after a reinstall: forget the old host key
 .\scripts\bootstrap.ps1 -ConfigPath D:\other.json    # explicit inventory, skips the gate
 ```
+
+A reinstalled node presents a new host key, and the script stops rather than trusting it. `-ResetHostKey`
+removes the recorded key from the OpenSSH `known_hosts` and from `~/.vanta/known_hosts.json`, then prints
+the key the node offers now so it can be compared against `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`
+on the node itself. Use it only when the reinstall is expected: a changed key otherwise means interception.
 
 ### Linux
 

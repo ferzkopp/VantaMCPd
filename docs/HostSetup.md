@@ -161,7 +161,8 @@ ssh -p 22 -i "$KEY" -o BatchMode=yes configure@192.0.2.11 \
 
 Repeat those two remote commands for each inventory node. VantaMCPd maintains its own TOFU fingerprint
 store at `~/.vanta/known_hosts.json` and pins each node on its first daemon connection. A later key change
-is rejected while `strictHostKeyChecking` is enabled.
+is rejected while `strictHostKeyChecking` is enabled. After a genuine reinstall, delete that node's entry
+from the store and run `ssh-keygen -R <host>`; on Windows, `bootstrap.ps1 -ResetHostKey` does both.
 
 After building, record hardware through the same code path the daemon uses:
 

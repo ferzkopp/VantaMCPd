@@ -13,10 +13,16 @@
 
     Your passwords are typed directly into ssh/sudo prompts - this script never reads, stores or forwards them.
 
+    A reimaged node presents a new host key, which both trust stores reject as a possible interception.
+    -ResetHostKey forgets the recorded key for the target nodes first. Only use it when you know the node
+    was reinstalled: it discards the evidence that would expose a man-in-the-middle.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -Nodes cluster4 -InstallBaseline
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -Nodes cluster6 -ResetHostKey
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1 -Verify
 #>
@@ -28,6 +34,7 @@ param(
     [switch]   $InstallBaseline,
     [switch]   $SkipKeyInstall,
     [switch]   $SkipSudoSetup,
+    [switch]   $ResetHostKey,
     [switch]   $Verify
 )
 
@@ -56,6 +63,92 @@ foreach ($tool in 'ssh', 'ssh-keygen') {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
         throw "$tool not found. Install the Windows OpenSSH Client feature (Settings > System > Optional features)."
     }
+}
+
+<#
+Forgets a node's recorded host key in both trust stores: the OpenSSH client's known_hosts (used by this
+script) and ~/.vanta/known_hosts.json (used by the daemon). Only ever called behind -ResetHostKey - a
+changed host key is indistinguishable from an interception, so it must never be discarded automatically.
+#>
+function Reset-KnownHostKey {
+    param(
+        [Parameter(Mandatory = $true)][string] $HostName,
+        [int] $Port = 22
+    )
+
+    $sshKnownHosts = Join-Path $HOME '.ssh\known_hosts'
+    if (Test-Path $sshKnownHosts) {
+        # A non-default port is recorded as [host]:port, so both spellings have to go.
+        $ids = @($HostName)
+        if ($Port -ne 22) { $ids += "[$HostName]:$Port" }
+        foreach ($id in $ids) {
+            $output = @(Invoke-Native { & ssh-keygen -R $id -f $sshKnownHosts 2>&1 } | ForEach-Object { "$_" })
+            foreach ($line in $output) {
+                if ($line -match 'found: line (\d+)') { Write-Ok "removed $id from known_hosts (line $($Matches[1]))" }
+            }
+        }
+    }
+
+    $vantaStore = if ($env:VANTA_KNOWN_HOSTS) { Expand-HomePath $env:VANTA_KNOWN_HOSTS } else { Join-Path $HOME '.vanta\known_hosts.json' }
+    if (Test-Path $vantaStore) {
+        $id = "${HostName}:${Port}"
+        try {
+            $store = (Get-Content -Raw -Path $vantaStore) -replace '^\uFEFF', '' | ConvertFrom-Json
+            if ($store.PSObject.Properties.Name -contains $id) {
+                Write-Ok "removed $id from $vantaStore (was $($store.$id))"
+                $store.PSObject.Properties.Remove($id)
+                $json = $store | ConvertTo-Json -Depth 5
+                if (-not $json) { $json = '{}' }
+                [IO.File]::WriteAllText($vantaStore, $json, (New-Object Text.UTF8Encoding($false)))
+            }
+        } catch {
+            Write-Warn2 "could not update $vantaStore ($($_.Exception.Message)); the daemon re-pins on next connect if you delete it"
+        }
+    }
+
+    # Print what the node offers now, so it can be compared against the node's own console.
+    $scanned = @(Invoke-Native { & ssh-keyscan -T 5 -p $Port $HostName 2>$null } | ForEach-Object { "$_" } | Where-Object { $_ -and $_ -notmatch '^#' })
+    if ($scanned.Count -gt 0) {
+        $tmp = [IO.Path]::GetTempFileName()
+        try {
+            [IO.File]::WriteAllLines($tmp, $scanned)
+            $prints = @(Invoke-Native { & ssh-keygen -lf $tmp 2>$null } | ForEach-Object { "$_" })
+            foreach ($print in $prints) { Write-Host "    new host key: $print" -ForegroundColor DarkGray }
+            Write-Host "    verify on the node with: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub" -ForegroundColor DarkGray
+        } finally {
+            Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+<#
+Explains how to grant sudo when this script cannot: both fixes need the root password, which must be
+typed into the node's own prompt and never passed through here.
+#>
+function Show-SudoRemediation {
+    param(
+        [Parameter(Mandatory = $true)][string] $NodeName,
+        [Parameter(Mandatory = $true)][string] $User,
+        [Parameter(Mandatory = $true)][string] $HostName,
+        [int]    $Port = 22,
+        [switch] $InstallSudo,
+        [switch] $AddGroup
+    )
+
+    if ($InstallSudo) { Write-Warn2 "sudo is not installed on $HostName" }
+    if ($AddGroup)    { Write-Warn2 "$User is not in the sudo group on $HostName" }
+    Write-Host '    Debian leaves both out when a root password is set during installation.' -ForegroundColor Yellow
+    Write-Host '    Fix it on the node - "su -" asks for the ROOT password, type it into that prompt:' -ForegroundColor Yellow
+    Write-Host ''
+    $target = if ($Port -eq 22) { "$User@$HostName" } else { "-p $Port $User@$HostName" }
+    Write-Host "      ssh $target" -ForegroundColor White
+    Write-Host '      su -' -ForegroundColor White
+    if ($InstallSudo) { Write-Host '      apt-get update && apt-get install -y sudo' -ForegroundColor White }
+    if ($AddGroup)    { Write-Host "      /usr/sbin/usermod -aG sudo $User" -ForegroundColor White }
+    Write-Host '      exit' -ForegroundColor White
+    Write-Host '      exit' -ForegroundColor White
+    Write-Host ''
+    Write-Host "    Then re-run:  .\scripts\bootstrap.ps1 -Nodes $NodeName" -ForegroundColor Yellow
 }
 
 # ------------------------------------------------------- local inventory gate
@@ -168,13 +261,22 @@ echo "disk=`$(df -hP / | awk 'NR==2{print `$4" free of "`$2}')"
 echo "mem=`$(free -m | awk '/^Mem:/{print `$7"MB available of "`$2"MB"}')"
 "@
 
-$b64AuthKeys = ConvertTo-Base64Script $authorizedKeysScript
-$b64Sudoers  = ConvertTo-Base64Script $sudoersScript
-$b64Verify   = ConvertTo-Base64Script $verifyScript
+# Debian omits sudo entirely when a root password is set during installation, and then never adds the
+# first user to the sudo group. Both are unfixable from here: granting them needs the root password.
+$sudoCapabilityScript = @"
+if command -v sudo >/dev/null 2>&1; then echo "sudo=present"; else echo "sudo=missing"; fi
+if id -nG | tr ' ' '\n' | grep -qx sudo; then echo "group=present"; else echo "group=missing"; fi
+"@
+
+$b64AuthKeys   = ConvertTo-Base64Script $authorizedKeysScript
+$b64Sudoers    = ConvertTo-Base64Script $sudoersScript
+$b64Verify     = ConvertTo-Base64Script $verifyScript
+$b64SudoCheck  = ConvertTo-Base64Script $sudoCapabilityScript
 
 $sshCommon = @('-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=10')
 
 $summary = @()
+$sudoRemediationShown = $false
 
 foreach ($node in $targets) {
     $nodeUser = if ($node.user) { $node.user } else { $defaultUser }
@@ -185,9 +287,23 @@ foreach ($node in $targets) {
     Write-Host ''
     Write-Step "$($node.name)  ($dest`:$nodePort)"
 
+    if ($ResetHostKey) {
+        Write-Warn2 'forgetting the recorded host key - only correct if this node was reinstalled'
+        Reset-KnownHostKey -HostName $node.host -Port $nodePort
+    }
+
     # 1. Key-based auth --------------------------------------------------------
     $keyProbe = @('-p', $nodePort, '-i', $keyFile, '-o', 'BatchMode=yes', '-o', 'PreferredAuthentications=publickey', $dest, 'true')
-    $keyWorks = (Invoke-Ssh ($sshCommon + $keyProbe)).ExitCode -eq 0
+    $probe = Invoke-Ssh ($sshCommon + $keyProbe)
+    $keyWorks = $probe.ExitCode -eq 0
+
+    # accept-new admits an unknown node but refuses a changed key, which is what a reimage looks like.
+    if (-not $keyWorks -and (($probe.Stderr + $probe.Output) -join "`n") -match 'REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed') {
+        Write-Warn2 "host key for $($node.host) does not match the recorded one"
+        Write-Host '    If this node was reinstalled, re-run with -ResetHostKey. Otherwise stop: the traffic may be intercepted.' -ForegroundColor Yellow
+        $summary += [pscustomobject]$state
+        continue
+    }
 
     if ($keyWorks) {
         Write-Ok 'key-based login already working'
@@ -214,10 +330,20 @@ foreach ($node in $targets) {
     } elseif ($SkipSudoSetup -or $Verify) {
         Write-Warn2 'passwordless sudo not configured (setup skipped)'
     } else {
-        Write-Host "    Configuring NOPASSWD sudo - you will be prompted for the sudo password on $($node.host)." -ForegroundColor Yellow
-        Invoke-Native { & ssh @sshCommon -tt -p $nodePort -i $keyFile $dest "echo $b64Sudoers | base64 -d | sudo -p 'sudo password for $($node.host): ' bash -s -- $nodeUser" }
-        if ((Invoke-Ssh ($sshCommon + $sudoProbe)).ExitCode -eq 0) { Write-Ok 'passwordless sudo verified'; $state.nopasswdSudo = $true }
-        else { Write-Warn2 'passwordless sudo still not working' }
+        $capability = Invoke-Ssh ($sshCommon + @('-p', $nodePort, '-i', $keyFile, '-o', 'BatchMode=yes', $dest, "echo $b64SudoCheck | base64 -d | bash -s"))
+        $sudoMissing = $capability.Output -contains 'sudo=missing'
+        $groupMissing = $capability.Output -contains 'group=missing'
+
+        if ($sudoMissing -or $groupMissing) {
+            Show-SudoRemediation -NodeName $node.name -User $nodeUser -HostName $node.host -Port $nodePort `
+                -InstallSudo:$sudoMissing -AddGroup:$groupMissing
+            $sudoRemediationShown = $true
+        } else {
+            Write-Host "    Configuring NOPASSWD sudo - you will be prompted for the sudo password on $($node.host)." -ForegroundColor Yellow
+            Invoke-Native { & ssh @sshCommon -tt -p $nodePort -i $keyFile $dest "echo $b64Sudoers | base64 -d | sudo -p 'sudo password for $($node.host): ' bash -s -- $nodeUser" }
+            if ((Invoke-Ssh ($sshCommon + $sudoProbe)).ExitCode -eq 0) { Write-Ok 'passwordless sudo verified'; $state.nopasswdSudo = $true }
+            else { Write-Warn2 'passwordless sudo still not working' }
+        }
     }
 
     # 3. Report ----------------------------------------------------------------
@@ -259,7 +385,9 @@ if ($reachable -and -not $Verify) {
 $bad = $summary | Where-Object { -not $_.keyAuth -or -not $_.nopasswdSudo }
 if ($bad) {
     Write-Warn2 "Nodes needing attention: $(($bad | ForEach-Object node) -join ', ')"
-    Write-Host '    Re-run this script, or fix manually with:  ssh <user>@<host>  then  sudo visudo -f /etc/sudoers.d/99-vanta'
+    if (-not $sudoRemediationShown) {
+        Write-Host '    Re-run this script, or fix manually with:  ssh <user>@<host>  then  sudo visudo -f /etc/sudoers.d/99-vanta'
+    }
 } else {
     Write-Host ''
     Write-Host 'All nodes ready. Next:' -ForegroundColor Green

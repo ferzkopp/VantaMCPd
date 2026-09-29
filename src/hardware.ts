@@ -39,7 +39,8 @@ echo "cpu_soc|$(awk -F': ' '/^Hardware/{print $2; exit}' /proc/cpuinfo)"
 f=/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq
 [ -r "$f" ] && echo "cpu_max_mhz|$(( $(cat "$f") / 1000 ))"
 if command -v nvidia-smi >/dev/null 2>&1; then
-  cuda_version=$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: *\([0-9.]*\).*/\1/p' | head -n1)
+  # Driver 615 renamed the header field to "CUDA UMD Version"; older drivers print "CUDA Version".
+  cuda_version=$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA \(UMD \)\?Version: *\([0-9.]*\).*/\2/p' | head -n1)
   nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null |
     awk -F', *' -v version="$cuda_version" '{printf "accelerator|kind=gpu vendor=nvidia model=\"%s\" memory_mb=%s runtime=cuda runtime_version=%s\n",$1,$2,version}'
 fi

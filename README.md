@@ -1,6 +1,6 @@
 # VantaMCPd
 
-> **Put old hardware back to work. Give your agent a cluster.**
+> **Put old (or new) hardware back to work. Give your agent a cluster.**
 
 <p align="center">
   <img src="docs/vantamcpd-overview.svg" width="900" alt="An agent connects through VantaMCPd to heterogeneous Linux nodes whose capabilities expand through modules." />
@@ -447,6 +447,7 @@ discover them with `cluster_list_module_tools` and invoke them through `cluster_
 | `cluster_upload_artifact` | Stream an existing local file into artifact-storage with bounded chunks and SHA-256 verification |
 | `cluster_storage` | SSD inspect/format/mount/unmount + NFS export and client mounts |
 | `cluster_swap` | Swap status, persist active swap in fstab, mkswap an existing partition, or repartition a whole disk as maximum-size swap |
+| `cluster_gpu` | Check GPU readiness, promote an enrolled node to CUDA workloads as a durable job (always requires `confirm: true`), and prove it with a container smoke test |
 | `cluster_power` | Reboot or poweroff (always requires `confirm: true`) |
 | `cluster_list_modules` | List modules, deployment policy, compatibility, and live installed-node receipt versions |
 | `cluster_check_module` | Run recorded and live compatibility checks for a module |
@@ -481,6 +482,7 @@ module usage, architecture, implemented packages, and the roadmap are documented
 | [Hardware inventory](docs/Reference.md#hardware-inventory) | What the daemon records per node, and how disk roles (`system`/`swap`/`storage`) are decided |
 | [Swap](docs/Reference.md#swap) | `cluster_swap` actions and their guard rails |
 | [Attached storage](docs/Reference.md#attached-storage) | Formatting the external disk and sharing it over NFS |
+| [GPU nodes](docs/Reference.md#gpu-nodes) | Promoting an enrolled node to CUDA workloads |
 | [Operational tools](docs/Reference.md#operational-tools) | Parameters and examples for packages, services, logs, files, commands and power |
 | [Monitoring](docs/Reference.md#monitoring) | The audit log, the dashboard and its HTTP API |
 | [Security model](docs/Reference.md#security-model) | Auth, injection defences, the destructive-command guard |

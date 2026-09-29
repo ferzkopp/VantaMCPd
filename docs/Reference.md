@@ -8,6 +8,7 @@ configuration file. For installation and day-to-day use, start at [README.md](..
 | [Hardware inventory](#hardware-inventory) | What the daemon records about each node, and how disk roles are decided |
 | [Swap](#swap) | `cluster_swap` actions and their guard rails |
 | [Attached storage](#attached-storage) | Formatting the external disk and sharing it over NFS |
+| [GPU nodes](#gpu-nodes) | Promoting an enrolled node to CUDA workloads |
 | [Operational tools](#operational-tools) | Parameters and examples for packages, services, logs, files, commands and power |
 | [Monitoring](#monitoring) | The audit log, the dashboard and its HTTP API |
 | [Security model](#security-model) | Auth, injection defences, the destructive-command guard |
@@ -131,6 +132,57 @@ Guard rails:
 
 Once mounted, good uses for external storage on 1GB nodes: a shared `apt` cache, container/image
 storage, build artefacts, logs, and a swap file (SD-card swap is slow and wears the card).
+
+---
+
+## GPU nodes
+
+A node with an NVIDIA GPU is enrolled like any other node and then *promoted* with `cluster_gpu`.
+Nothing in enrollment, discovery or the baseline packages differs; a node that is never promoted is
+unaffected. [Node setup](NodeSetup.md#gpu-nodes-nvidia-cuda) covers the hardware and passthrough side.
+
+| Parameter | Meaning |
+| --- | --- |
+| `action` | `check` (read-only readiness and status), `enable` (promote), `test` (container smoke test) |
+| `targets` | `check` accepts any target set; `enable` and `test` need exactly one node |
+| `driver` | `open` (default, `nvidia-open`) or `proprietary` (`cuda-drivers`) |
+| `containerRuntime` | `podman` (default), `docker` (must already be installed) or `none` for a driver-only node |
+| `image` | Image for `test`. Default `docker.io/library/debian:13`, validated against a strict reference pattern |
+| `confirm` | Required for `enable` |
+
+```text
+cluster_gpu { action: "check", targets: ["cluster-gpu"] }                  # safe, read-only
+cluster_gpu { action: "enable", targets: ["cluster-gpu"], confirm: true }  # durable job
+cluster_gpu { action: "test", targets: ["cluster-gpu"] }
+```
+
+`check` resolves the probe into one state: `not-eligible` (with blockers), `ready-to-promote`,
+`reboot-required`, or `enabled`. Debian 12 and 13 on `amd64` or `arm64` are supported; anything else is
+a blocker, as is a missing GPU on the PCI bus or too little free root space. Secure Boot is a warning
+rather than a blocker, because an enrolled MOK makes it work.
+
+`enable` stages a root-owned script at `/var/lib/vantamcpd/gpu-setup.sh` and runs it as one durable
+job per node, so it survives SSH drops and daemon restarts. It records what it installed in a receipt
+at `/var/lib/vantamcpd/gpu.json` and never installs the CUDA toolkit: GPU modules carry their own CUDA
+runtime in their container image.
+
+Guard rails:
+
+- `enable` requires an explicit single target and `confirm: true`; `["all"]` and tags that resolve to
+  several nodes are rejected.
+- Readiness is re-evaluated on the node before the job is submitted, so an ineligible node is refused
+  before anything is installed.
+- The job holds both `gpu:<node>` and `apt:<node>`, so a promotion and a background apt job can never
+  run on one node at the same time.
+- Every step is idempotent, so re-running `enable` is the supported way to regenerate the CDI spec
+  after a driver upgrade.
+- The driver package is marked manually installed, so an unrelated `apt autoremove` cannot remove the
+  driver stack.
+- The apt sources file is backed up before `contrib` is enabled.
+- A kernel module that cannot load in place ends the job with `INCOMPLETE`: reboot with
+  `cluster_power`, then promote again.
+- On success the hardware inventory is refreshed automatically, so the accelerator is recorded and
+  module compatibility can be evaluated against it.
 
 ---
 
@@ -693,6 +745,7 @@ guaranteed before computation begins.
   },
   "nodes": [
     { "name": "worker-a", "host": "192.0.2.11", "role": "worker", "tags": [] },
+    { "name": "gpu-a", "host": "192.0.2.31", "role": "worker+gpu" },
     { "name": "storage-a", "host": "192.0.2.21", "role": "worker+storage", "storage": { },
       "diskRoles": { "sdc": "storage" } }   // optional, overrides disk-role detection
     // a "hardware" block is added to each node automatically - see "Hardware inventory" above
@@ -700,10 +753,19 @@ guaranteed before computation begins.
 }
 ```
 
-Per-node keys override the defaults. `role` defaults to `worker`. The role and the `storage` block must
+Per-node keys override the defaults. `role` defaults to `worker`.
+
+A role is one or more `+`-separated tokens: `control`, `worker` and `storage` describe what the node is
+for, and `gpu` marks it as carrying accelerated workloads. At least one of the first three is required,
+tokens cannot repeat, and an unknown token is rejected at load time rather than quietly becoming a tag.
+Every token also becomes a tag, so `targets: ["storage"]` and `targets: ["gpu"]` select those nodes.
+
+The role and the `storage` block must
 agree: a role containing `storage` without a block, and a block on a node whose role does not include
 `storage`, are both rejected at load time — the storage tools select their node by that block, so a
-mismatch would silently target the wrong machine.
+mismatch would silently target the wrong machine. `gpu` has no equivalent block: it is a declaration of
+intent, while the card itself is proved by the recorded accelerator inventory and by
+[`cluster_gpu`](#gpu-nodes).
 
 `artifacts.enabled` lets manifests that declare artifact access receive the shared NFS artifact root.
 The selected node must have a storage block with NFS enabled, and clients must mount that export at the
@@ -741,11 +803,14 @@ Environment variables (see [.env.example](../.env.example)): `VANTA_CONFIG`, `VA
 | `Private key not found` | Complete the matching [host enrollment](HostSetup.md) path |
 | Node reimaged / new node added | Update the inventory, then repeat enrollment and node preparation |
 | `sudo: a password is required` | Repeat node enrollment, or set `"sudo": "password"` and provide `VANTA_SUDO_PASSWORD` securely |
-| `Host key mismatch` | Node was reimaged? Remove its entry from `~/.vanta/known_hosts.json` |
+| `Host key mismatch` / `REMOTE HOST IDENTIFICATION HAS CHANGED` | Node reimaged? `.\scripts\bootstrap.ps1 -Nodes <node> -ResetHostKey` clears both stores; manually, remove the entry from `~/.vanta/known_hosts.json` and run `ssh-keygen -R <host>` |
 | `Could not get lock /var/lib/dpkg/lock` | Unattended-upgrades is running; retry — apt calls already use `DPkg::Lock::Timeout=300` |
 | `npm warn allow-scripts … not yet covered by allowScripts` | A dependency's install script needs review: `npm approve-scripts <pkg>` or `npm deny-scripts <pkg>` |
 | `sfdisk: command not found` | Debian 12 ships it in the separate `fdisk` package; `cluster_swap` falls back to `parted` |
 | Swap gone after a reboot | `cluster_swap { action: "persist" }` — the entry was never in `/etc/fstab` |
+| GPU promotion log ends with `INCOMPLETE` | The kernel module could not load in place; reboot the node and run `cluster_gpu { action: "enable" }` again |
+| GPU module reports `unknown` compatibility | The accelerator is not in the inventory yet; `cluster_gpu { action: "check" }`, then `cluster_hardware { refresh: true }` |
+| Containers lose GPU access after a driver upgrade | The CDI spec pins driver paths; re-run `cluster_gpu { action: "enable" }` to regenerate it |
 | Daemon not listed by the agent | Run `npm run build`, verify the absolute stdio paths, then restart/reprobe it in the client |
 | Daemon says authentication failed after bootstrap | The daemon loaded the inventory at start-up; restart it |
 | Dashboard not reachable | Check the daemon's stderr for `monitor dashboard: http://127.0.0.1:7420`; port in use → change `monitoring.port` |

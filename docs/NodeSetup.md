@@ -97,6 +97,203 @@ partitioned or formatted manually. VantaMCPd can classify and prepare them after
 > `storage` role or host swap. The destructive-device guard accepts `/dev/sd*` and `/dev/nvme*` only, so
 > it refuses virtio disks that appear as `/dev/vda`.
 
+## GPU Nodes (NVIDIA CUDA)
+
+A GPU node is enrolled exactly like every other node. Once it is in the inventory, one tool call
+**promotes** it: VantaMCPd installs the NVIDIA driver, a container runtime, and the NVIDIA Container
+Toolkit, then exposes the card to containers as a CDI device.
+
+### How It Works
+
+| Aspect | Design |
+| --- | --- |
+| Host footprint | Driver and container toolkit only. The CUDA toolkit, Python, and model weights live in each module's container image, so the host stays a plain managed node |
+| Driver | `nvidia-open` — the open kernel modules, which cover Turing and newer — from NVIDIA's CUDA repository for Debian 12 or 13 on `amd64` or `arm64`. Older cards need the `proprietary` option (`cuda-drivers`) |
+| Kernel module | Built locally by DKMS against the running kernel. The headers meta-package is installed, so a kernel upgrade rebuilds it |
+| Container access | The toolkit generates a CDI spec and containers request `nvidia.com/gpu=all`, so two modules can carry different CUDA, PyTorch, and Python versions without colliding on the host |
+| Driver and toolkit | Versioned independently. A node needs only the driver; an image's CUDA runtime must not exceed what `nvidia-smi` reports |
+| Repository scope | NVIDIA's repository also ships packages Debian maintains, `dkms` among them. An apt pin keeps it to the driver stack, so a later `apt upgrade` cannot quietly move system packages onto vendor builds |
+| Promotion | A durable job runs a staged root-owned script (`/var/lib/vantamcpd/gpu-setup.sh`) and records a receipt (`/var/lib/vantamcpd/gpu.json`). Every step is idempotent, so re-running is also how to regenerate the CDI spec after a driver upgrade |
+| Safeguards | An explicit single target and `confirm: true`; readiness is re-checked on the node before anything is installed; the apt sources file is backed up before `contrib` is enabled; the driver is marked manually installed so `apt autoremove` cannot remove it |
+
+### Before You Start
+
+| Item | Requirement |
+| --- | --- |
+| Node | Debian 12 or 13 on `amd64` or `arm64`, enrolled and reachable |
+| Disk | Roughly 8 GB free on `/` for the driver and DKMS build, plus room for container images |
+| Secure Boot | Off, unless a MOK is enrolled: DKMS-built modules are unsigned and otherwise compile but never load |
+| Passthrough (VMs) | Pass **both** functions of the card, VGA and audio, through `vfio-pci` with IOMMU enabled, and leave the VM console on the emulated display so the guest never drives the card |
+
+### 1. Enroll It Like Any Other Node
+
+Follow [Install the Operating System](#install-the-operating-system), [Verify Before
+Enrolling](#verify-before-enrolling), [Inventory Values](#inventory-values), and [Next
+Steps](#next-steps) unchanged, giving the node the `gpu` role modifier the way a storage node takes
+`+storage`:
+
+```json
+{ "name": "cluster-gpu", "host": "10.0.0.16", "role": "worker+gpu", "tags": ["amd64", "vm"] }
+```
+
+```powershell
+.\scripts\bootstrap.ps1     -Nodes cluster-gpu
+.\scripts\prepare-nodes.ps1 -Nodes cluster-gpu
+```
+
+Every role token becomes a tag, so GPU work can then be targeted with `["gpu"]` rather than by node
+name. Restart the MCP server, then confirm the node from the agent:
+
+> Ping cluster-gpu and show its status.
+
+It is a normal worker at this point, with no accelerator recorded: discovery finds GPUs through
+`nvidia-smi`, which promotion installs.
+
+### 2. Check GPU Readiness
+
+> Check whether cluster-gpu is ready for CUDA workloads.
+
+```text
+cluster_gpu { action: "check", targets: ["cluster-gpu"] }
+```
+
+The probe is read-only and reads the PCI bus directly rather than asking the driver, so it works before
+anything is installed — and it is how you confirm that passthrough reached the guest:
+
+```jsonc
+{
+  "state": "ready-to-promote",
+  "blockers": [],
+  "warnings": ["kernel headers are missing; promotion installs them"],
+  "system": {
+    "os": "Debian GNU/Linux 13 (trixie)", "arch": "amd64", "virtualization": "kvm",
+    "secureBoot": "disabled", "freeRootMb": 472148, "cudaRepo": "debian13"
+  },
+  "gpus": [{ "pci": "0000:00:10.0 0x24b0", "name": "... NVIDIA Corporation GA104GL [RTX A4000] ..." }]
+}
+```
+
+An empty `gpus` list means the card never reached the guest — fix passthrough first; nothing else here
+will work. Warnings never block: they describe something the promotion fixes itself, or a condition to
+know about, such as Secure Boot being enabled.
+
+| Reported `state` | What to do |
+| --- | --- |
+| `ready-to-promote` | Promote (step 3) |
+| `not-eligible` | Fix what `blockers` lists, then check again |
+| `reboot-required` | Reboot, then promote again |
+| `enabled` | Prove it (step 4) |
+
+Run this action again at any time — it doubles as the status view after promotion.
+
+### 3. Promote the Node
+
+> Promote cluster-gpu for GPU workloads.
+
+```text
+cluster_gpu { action: "enable", targets: ["cluster-gpu"], confirm: true }
+```
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `driver` | `open` | `nvidia-open`, the open kernel modules. `proprietary` installs `cuda-drivers` instead |
+| `containerRuntime` | `podman` | Installs Podman and wires up CDI. `docker` configures an existing Docker install; `none` installs the driver only |
+
+The call returns a `jobId` at once and the work continues on the node. Follow it with
+`cluster_get_job` and `cluster_get_job_log`. The log is divided into phases, each reporting progress, so
+the dashboard shows which step a long promotion is on:
+
+```text
+== preflight ==          GPU, architecture and release accepted; repository chosen
+== apt components ==     contrib enabled (sources file backed up first)
+== apt pinning ==        the CUDA repository is limited to the driver stack
+== prerequisites ==      kernel headers, dkms, curl, ca-certificates, gnupg
+== cuda repository ==    cuda-keyring installed, NVIDIA repository fetched
+== driver ==             driver package installed and marked manual
+== driver load ==        nouveau removed, nvidia loaded, persistence enabled
+== container runtime ==  the container runtime and the NVIDIA Container Toolkit
+== device injection ==   /etc/cdi/nvidia.yaml generated
+== receipt ==            /var/lib/vantamcpd/gpu.json written
+== summary ==            COMPLETE or INCOMPLETE
+```
+
+The driver phase is the long one: it downloads the driver and builds the kernel module with DKMS, which
+takes a few minutes on a small node and prints nothing of its own while it compiles.
+
+**How to tell it worked**, in order of authority:
+
+1. The job reaches `status: "succeeded"` and its log ends with `COMPLETE: driver <version> is loaded and
+   the node can run CUDA containers.`
+2. `cluster_gpu { action: "check" }` reports `state: "enabled"`, with a `driver.version` and
+   `container.cdiDevices` listing `nvidia.com/gpu=all`.
+3. The hardware inventory lists the card as an accelerator — refreshed automatically when the job
+   succeeds, which is what makes GPU modules evaluate as `compatible` rather than `unknown`.
+
+**If the log ends with INCOMPLETE**, the driver installed but its kernel module could not be loaded in
+place, usually because `nouveau` was still bound to the card. Reboot and promote again; the second run
+skips everything already done and finishes the device injection:
+
+```text
+cluster_power { action: "reboot", targets: ["cluster-gpu"], confirm: true }
+cluster_gpu   { action: "enable", targets: ["cluster-gpu"], confirm: true }
+```
+
+### 4. Prove It End to End
+
+> Run the GPU smoke test on cluster-gpu.
+
+```text
+cluster_gpu { action: "test", targets: ["cluster-gpu"] }
+```
+
+This is the check that matters: a container, not the host, has to reach the card. The toolkit injects
+the host driver libraries and the `nvidia-smi` binary itself, so a plain `debian:13` image proves the
+whole path — passthrough, driver, CDI, runtime — without pulling a multi-gigabyte CUDA image.
+
+```text
+== host ==
+GPU 0: NVIDIA RTX A4000 (UUID: GPU-eba9e040-...)
+
+== podman container ==
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 615.71.09              KMD Version: 615.71.09     CUDA UMD Version: 13.4      |
+|   0  NVIDIA RTX A4000               On  |   00000000:00:10.0 Off |                  Off |
+| 41%   37C    P8              7W /  140W |       1MiB /  16376MiB |      0%      Default |
++-----------------------------------------------------------------------------------------+
+|  No running processes found                                                               |
++-----------------------------------------------------------------------------------------+
+
+== resident compute processes ==
+pid, process_name, used_gpu_memory [MiB]
+```
+
+**How to tell it worked:** the same card appears in *both* blocks. The host block alone only proves the
+driver loaded; the container block proves a module will be able to use it. An empty process list is
+expected on an idle node.
+
+Pass `image` to repeat the test against a real module image — a CUDA or PyTorch image also proves its
+own runtime works against this driver, which the base image deliberately does not cover.
+
+### Running Several Models at Once
+
+| Concern | Practice |
+| --- | --- |
+| VRAM | The card's memory is the real limit and cannot be oversubscribed. Size each model's resident footprint, cap it per container, and leave headroom for activations and fragmentation |
+| Scheduling | Contexts from separate containers coexist and time-slice. MIG exists only on datacenter cards; elsewhere there is no hardware partitioning, so latency under contention rises |
+| Concurrent kernels | MPS (`nvidia-cuda-mps-control -d`) lets kernels from different processes overlap and caps threads and memory per client, but needs a shared daemon and IPC directory across containers. Start without it |
+| Observation | `cluster_gpu { action: "test" }` lists the resident compute processes; `nvidia-smi dmon` shows utilization over time |
+
+### Pitfalls
+
+| Symptom | Cause and check |
+| --- | --- |
+| Promotion log ends with INCOMPLETE | The module could not load in place. Reboot, then run `enable` again |
+| `nvidia-smi` reports no devices after a kernel upgrade | DKMS did not rebuild. The readiness check reports the headers and DKMS state |
+| Driver builds but never loads | Secure Boot rejecting an unsigned module; the readiness check warns about this before promotion |
+| A container stops seeing the GPU after a driver upgrade | The CDI spec pins driver library paths. Re-run `enable` to regenerate it |
+| A container loses the GPU after `systemctl daemon-reload` | Known interaction between systemd cgroup drivers and the container toolkit; restart the container |
+| A container image fails with a CUDA version error | Its CUDA runtime is newer than the host driver supports. Compare it against the version in the readiness check |
+
 ## Inventory Values
 
 Record these values before editing `cluster.config.local.json`:
@@ -106,7 +303,7 @@ Record these values before editing `cluster.config.local.json`:
 | Node name | `worker-a` | `nodes[].name` |
 | Stable IP address or hostname | `192.0.2.11` | `nodes[].host` |
 | Login user | `configure` | `defaults.user` or `nodes[].user` |
-| Role | `worker` or `worker+storage` | `nodes[].role` |
+| Role | `worker`, `worker+storage`, or `worker+gpu` | `nodes[].role` |
 | Tags, for targeting a subset | `["amd64", "vm"]` | `nodes[].tags` |
 | Storage device, when applicable | `/dev/sda1` | `nodes[].storage.device` |
 
