@@ -24,6 +24,7 @@ data lifecycle, and troubleshooting instructions.
 | `artifact-storage` | Immutable shared artifacts with quotas and expiration | Singleton service | [Artifact Storage](../modules/artifact-storage/ArtifactStorage.md) |
 | `text-tools` | Bounded text, data, document, security, and developer operations | Replicated, on demand | [Text Tools](../modules/text-tools/TextTools.md) |
 | `corpus-search` | Provenance-aware multi-source metadata search with SQLite FTS5/BM25 | Singleton, on demand | [Corpus Search](../modules/corpus-search/CorpusSearch.md) |
+| `document-ocr` | CUDA-assisted OCR for bounded image and scanned-PDF artifacts | Replicated, on demand | [Document OCR](../modules/document-ocr/DocumentOCR.md) |
 | `browser-retrieval` | JavaScript-rendered page retrieval and structured extraction | Replicated service | [Browser Retrieval](../modules/browser-retrieval/BrowserRetrieval.md) |
 | `python-compute` | Sandboxed Python calculation, analysis, and rendered artifacts | Replicated service | [Python Compute](../modules/python-compute/PythonCompute.md) |
 | `image-processing` | Isolated raster inspection, editing, composition, conversion, and comparison | Replicated service | [Image Processing](../modules/image-processing/ImageProcessing.md) |
@@ -56,6 +57,12 @@ Start by listing the catalog and checking the intended target:
 
 Installation never defaults to the entire cluster. The request must identify node names or tags and
 must be approved before `cluster_install_module` is called with `confirm: true`.
+
+When artifact storage is enabled and the manifest declares `artifactAccess`, installation also ensures the configured artifact
+storage node's NFS share is mounted on each client target before staging the module. Missing clients
+receive `nfs-common` and a persistent systemd automount entry; an existing mount is reused, while a
+different mount or fstab source fails the install. This does not mount node-local `persistentData`
+devices or initialize the artifact storage service itself.
 
 VantaMCPd stages the package over SFTP, verifies its SHA-256 manifest, runs the trusted installer,
 checks the installed entrypoint, switches the active version, and writes a root-owned receipt. Missing
@@ -304,7 +311,8 @@ Platform work under consideration:
    those rejected on licensing, are listed under Future Expansion in the
    [module guide](../modules/corpus-search/CorpusSearch.md).
 3. Add precomputed embeddings and vector or hybrid retrieval only on compatible node profiles.
-4. Evaluate separate modules for OCR and screenshots, PDF extraction, and geospatial operations. Curated
+4. Evaluate separate modules for browser screenshots, advanced PDF layout and table extraction, and
+  geospatial operations. Curated
    Wikipedia content beyond the ingested title index belongs with them rather than in `corpus-search`.
 5. Support heavier ML and vision workloads as suitable arm64, x86-64, GPU, or accelerator-equipped
    nodes join the same inventory and compatibility model.

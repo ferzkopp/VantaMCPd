@@ -10,6 +10,7 @@ import { parseKeyValueLines } from "../format.js";
 import { isTerminalJobStatus, type JobState } from "../jobs/types.js";
 import { MODULE_CALL_PATH, type JobManager } from "../jobs/manager.js";
 import { q } from "../security.js";
+import { nfsClientMountScript } from "../storage.js";
 import { mapLimit, type ExecResult, type SshPool } from "../ssh.js";
 import { loadModuleCatalog, type ModuleCatalog, type ModulePackage } from "./catalog.js";
 import { evaluateCompatibility, type CompatibilityResult } from "./compatibility.js";
@@ -247,7 +248,7 @@ export class ModuleManager {
       VANTA_ARTIFACT_READ: access.read ? "1" : "0",
       VANTA_ARTIFACT_WRITE: access.write ? "1" : "0",
       VANTA_ARTIFACT_NODE: storageNode.name,
-      VANTA_ARTIFACT_LOCAL_MOUNT: node.storage?.mountpoint ?? storageNode.storage.mountpoint,
+      VANTA_ARTIFACT_LOCAL_MOUNT: storageNode.storage.mountpoint,
     };
   }
 
@@ -483,6 +484,25 @@ export class ModuleManager {
             version: modulePackage.manifest.version,
             error: `post-dependency preflight ${check.compatibility.status}: ${detail}`,
           };
+        }
+        if (modulePackage.manifest.artifactAccess && this.config.artifacts?.enabled) {
+          const storageNode = this.config.nodes.find((candidate) => candidate.name === this.config.artifacts?.storageNode)
+            ?? this.config.nodes.find((candidate) => candidate.storage);
+          if (!storageNode?.storage) {
+            return { node: node.name, ok: false, moduleId, version: modulePackage.manifest.version, error: "artifact storage node is not configured" };
+          }
+          if (storageNode.name !== node.name) {
+            if (!storageNode.storage.nfs.enabled) {
+              return { node: node.name, ok: false, moduleId, version: modulePackage.manifest.version, error: `NFS is not enabled on ${storageNode.name}` };
+            }
+            const mount = await this.pool.exec(node, nfsClientMountScript(storageNode), {
+              sudo: true,
+              timeoutMs: Math.min(timeoutMs, 600_000),
+            });
+            if (!mount.ok) {
+              return { node: node.name, ok: false, moduleId, version: modulePackage.manifest.version, error: `artifact NFS mount failed: ${resultError(mount)}` };
+            }
+          }
         }
         return this.installOnNode(modulePackage, node, timeoutMs, optionEnvironments.get(node.name) ?? { environment: {}, options: {} });
       });

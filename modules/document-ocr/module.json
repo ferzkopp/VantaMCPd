@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 2,
+  "id": "document-ocr",
+  "name": "Document OCR",
+  "version": "0.1.0",
+  "description": "Extract bounded, page-referenced text from images and scanned PDFs using a CUDA OCR worker.",
+  "capabilities": [
+    "extract printed text and coordinates from scanned PDFs and images",
+    "turn image and PDF artifacts into page-referenced text",
+    "recognize text in scanned documents with a local CUDA GPU"
+  ],
+  "entrypoint": ["python3", "server.py"],
+  "sharedFiles": ["artifact_protocol.py"],
+  "compatibility": {
+    "os": ["debian"],
+    "architectures": ["amd64"],
+    "minCores": 2,
+    "minRamMb": 8192,
+    "minDiskMb": 12288,
+    "requiredCommands": ["bash", "python3", "podman", "slirp4netns", "nvidia-smi", "systemctl"],
+    "accelerators": [{"kind": "gpu", "vendor": "nvidia", "minMemoryMb": 8192, "runtime": "cuda"}]
+  },
+  "packages": {"apt": []},
+  "lifecycle": {"install": "install.sh", "uninstall": "uninstall.sh", "execution": {"mode": "job", "timeoutMs": 7200000}},
+  "artifactAccess": {"read": true, "write": true},
+  "background": {"tools": {"ocr_extract": "optional"}, "maxTimeoutMs": 1200000, "minFreeMemoryMb": 2048},
+  "deployment": {"mode": "replicated", "routing": "round-robin"},
+  "runtime": {"mode": "on-demand"},
+  "limits": {"startupMs": 15000, "callMs": 150000, "maxInputBytes": 100000, "maxOutputBytes": 4000000}
+}

@@ -9,6 +9,7 @@ import { evaluateCompatibility } from "../dist/modules/compatibility.js";
 import { compareSemanticVersions, ModuleManager } from "../dist/modules/manager.js";
 import { parseModuleManifest } from "../dist/modules/manifest.js";
 import { SshMcpTransport } from "../dist/modules/ssh-transport.js";
+import { nfsClientMountScript } from "../dist/storage.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -100,7 +101,7 @@ test("startup reconciliation updates only older installations and then removes t
 test("loads the text-tools package deterministically", () => {
   const catalog = loadModuleCatalog(path.join(root, "modules"));
   assert.deepEqual(catalog.errors, []);
-  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["artifact-storage", "browser-retrieval", "corpus-search", "image-processing", "python-compute", "text-tools"]);
+  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["artifact-storage", "browser-retrieval", "corpus-search", "document-ocr", "image-processing", "python-compute", "text-tools"]);
   const textTools = catalog.modules.find((item) => item.manifest.id === "text-tools");
   assert.ok(textTools.files.some((file) => file.relativePath === "server.py"));
   assert.deepEqual(textTools.manifest.deployment, { mode: "replicated", routing: "round-robin" });
@@ -1197,4 +1198,56 @@ test("background call declarations require schema v2 and at least one tool", () 
   const v2 = pythonComputePackage().manifest;
   assert.throws(() => parseModuleManifest({ ...v2, background: { ...background, tools: {} } }), /must declare at least one tool/);
   assert.throws(() => parseModuleManifest({ ...v2, background: { ...background, tools: { x: "always" } } }), /Invalid enum value/);
+});
+
+test("artifact-dependent installs prepare the NFS client before staging and stop on mount failure", async () => {
+  const target = node({});
+  const storageNode = {
+    ...node({}), name: "storage", host: "192.168.42.4",
+    storage: { mountpoint: "/mnt/ssd", nfs: { enabled: true } },
+  };
+  const commands = [];
+  let mountFails = false;
+  let installed = 0;
+  const pool = {
+    exec: async (_node, command, options) => {
+      commands.push({ command, options });
+      return {
+        node: target.name, host: target.host, ok: !mountFails, code: mountFails ? 1 : 0,
+        stdout: "", stderr: mountFails ? "NFS unavailable" : "", durationMs: 1, truncated: false, timedOut: false,
+      };
+    },
+  };
+  const manager = new ModuleManager({ maxConcurrency: 1, nodes: [target, storageNode], artifacts: { enabled: true, storageNode: "storage" } }, pool, path.join(root, "modules"));
+  manager.check = async () => [{ reachable: true, compatibility: { status: "compatible", reasons: [], unknown: [] }, missingCommands: [] }];
+  manager.installOnNode = async () => { installed += 1; return { node: target.name, ok: true, moduleId: "document-ocr", version: "0.1.0" }; };
+
+  const [result] = await manager.install("document-ocr", [target]);
+  assert.equal(result.ok, true);
+  assert.equal(installed, 1);
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].options.sudo, true);
+  assert.match(commands[0].command, /dpkg -s nfs-common/);
+  assert.match(commands[0].command, /192\.168\.42\.4:\/mnt\/ssd/);
+  assert.match(commands[0].command, /Refusing to replace an existing fstab entry/);
+  assert.match(commands[0].command, /x-systemd\.automount/);
+  assert.ok(commands[0].command.includes("printf '%s\\n'"));
+  assert.match(commands[0].command, /\[ "\$source" = "\$remote" \]/);
+
+  mountFails = true;
+  const [failed] = await manager.install("document-ocr", [target]);
+  assert.equal(failed.ok, false);
+  assert.match(failed.error, /artifact NFS mount failed: NFS unavailable/);
+  assert.equal(installed, 1);
+
+  manager.get("document-ocr").manifest.artifactAccess = undefined;
+  await manager.install("document-ocr", [target]);
+  assert.equal(commands.length, 2, "modules without artifactAccess must not mount NFS");
+  assert.equal(installed, 2);
+});
+
+test("NFS client script respects an explicit manual mountpoint", () => {
+  const script = nfsClientMountScript({ ...node({}), host: "192.168.42.4" }, "/mnt/other");
+  assert.match(script, /192\.168\.42\.4:\/mnt\/other/);
+  assert.match(script, /mountpoint='\/mnt\/other'/);
 });

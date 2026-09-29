@@ -1,0 +1,9 @@
+FROM docker.io/paddlepaddle/paddle:3.0.0-gpu-cuda12.6-cudnn9.5-trt10.5@sha256:6c082f808be674065a78b617deb6f75029d50330b91ab946bf49338fe50dd70a
+
+RUN python -m pip install --no-cache-dir paddlepaddle-gpu==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
+    && python -m pip install --no-cache-dir --ignore-installed PyYAML==6.0.2 \
+    && python -m pip install --no-cache-dir paddleocr==3.3.2 pypdfium2==4.30.0
+
+WORKDIR /app
+COPY worker.py /app/worker.py
+ENTRYPOINT ["python", "-B", "/app/worker.py"]

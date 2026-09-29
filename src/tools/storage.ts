@@ -3,6 +3,7 @@ import { aptGet } from "../apt.js";
 import { resolveTargets, type ResolvedNode } from "../config.js";
 import { errorText, renderResults, text } from "../format.js";
 import { guardDestructiveDevice, q, validateAbsPath, validateCidr, validateMountOptions } from "../security.js";
+import { nfsClientMountScript } from "../storage.js";
 import { targetsSchema, timeoutSchema, type ToolContext, type ToolServer } from "./context.js";
 
 function storageNode(ctx: ToolContext, name?: string): ResolvedNode {
@@ -166,26 +167,7 @@ export function registerStorageTools(server: ToolServer, ctx: ToolContext): void
             );
             if (clients.length === 0) throw new Error("No client nodes to mount on.");
             const remote = `${node.host}:${mountpoint}`;
-            const script = [
-              `set -e`,
-              `dpkg -s nfs-common >/dev/null 2>&1 || ${aptGet("install", { packages: ["nfs-common"] })}`,
-              `mkdir -p ${q(mountpoint)}`,
-              // autofs: mount on first access. A plain boot-time NFS mount races the network coming up
-              // ("mount.nfs: Network is unreachable") and nofail means it is never retried.
-              `line="${remote} ${mountpoint} nfs _netdev,nofail,soft,timeo=100,retrans=3,x-systemd.automount,x-systemd.idle-timeout=600,x-systemd.mount-timeout=30 0 0"`,
-              `if grep -qF ${q(remote)} /etc/fstab; then`,
-              `  echo "fstab already has an entry for ${remote}"`,
-              `else`,
-              `  cp -a /etc/fstab /etc/fstab.bak-$(date +%Y%m%d%H%M%S)`,
-              `  printf '%s\\n' "$line" >> /etc/fstab`,
-              `  echo "added: $line"`,
-              `fi`,
-              `systemctl daemon-reload 2>/dev/null || true`,
-              `systemctl start $(systemd-escape -p --suffix=automount ${q(mountpoint)}) 2>/dev/null || mount ${q(mountpoint)}`,
-              `ls ${q(mountpoint)} >/dev/null 2>&1 || true`,
-              `findmnt ${q(mountpoint)}`,
-              `df -hP ${q(mountpoint)}`,
-            ].join("\n");
+            const script = nfsClientMountScript(node, mountpoint);
             const results = await ctx.pool.execMany(clients, `${script} 2>&1`, { sudo: true, timeoutMs: timeoutMs ?? 600_000 });
             return text(renderResults(`mount ${remote} on clients`, results));
           }
