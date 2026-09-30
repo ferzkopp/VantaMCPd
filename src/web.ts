@@ -316,7 +316,7 @@ export function startWebServer(config: ClusterConfig, audit: AuditLog, modules: 
           json(res, { error: "module has no reachable installation" }, 503);
           return;
         }
-        void withToolParameters("dashboard_module_api", { moduleId }, () => modules.listTools(moduleId, selectedNode))
+        void withToolParameters("dashboard_module_api", { moduleId }, () => modules.listTools(moduleId, selectedNode, undefined, true))
           .then((api) => json(res, { module: moduleState, api }))
           .catch((err: unknown) => json(res, { error: (err as Error).message }, 502));
         return;

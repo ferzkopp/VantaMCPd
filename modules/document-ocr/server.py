@@ -16,7 +16,7 @@ try:
 except ImportError:
     fcntl = None
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 IMAGE = "localhost/vantamcpd-document-ocr:0.1.0"
 STATE = "/var/lib/vantamcpd-document-ocr"
 MODEL_DIR = os.path.join(STATE, "models")

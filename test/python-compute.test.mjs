@@ -188,7 +188,7 @@ test("Python Compute sizes its limits on the node and applies matching cgroup ca
 
 test("Python Compute declares a job-backed service manifest with bundle options", () => {
   const manifest = JSON.parse(readFileSync(path.join(moduleDirectory, "module.json"), "utf8"));
-  assert.equal(manifest.version, "0.3.1");
+  assert.equal(manifest.version, "0.3.3");
   assert.equal(manifest.schemaVersion, 2);
   assert.equal(manifest.lifecycle.execution.mode, "job");
   assert.equal(manifest.runtime.mode, "service");

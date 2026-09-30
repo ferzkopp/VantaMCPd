@@ -290,7 +290,7 @@ test("Image Processing lifecycle and policy keep the hardened service contract",
   const unit = readFileSync(path.join(moduleDirectory, "image-processing.service"), "utf8");
   const policy = readFileSync(path.join(moduleDirectory, "policy.xml"), "utf8");
 
-  assert.equal(manifest.version, "0.2.5");
+  assert.equal(manifest.version, "0.2.6");
   assert.equal(manifest.schemaVersion, 2);
   assert.deepEqual(manifest.artifactAccess, { read: true, write: true });
   assert.deepEqual(manifest.installOptions.backend.values, ["auto", "imagemagick", "pillow"]);

@@ -98,6 +98,36 @@ test("startup reconciliation updates only older installations and then removes t
   assert.equal(cleanupCommands[0].options.sudo, true);
 });
 
+test("startup updates wait for a module's durable update job before updating the next module", async () => {
+  const target = node({});
+  const events = [];
+  const pool = {
+    exec: async () => ({ node: target.name, host: target.host, ok: true, code: 0, stdout: "", stderr: "", durationMs: 1, truncated: false, timedOut: false }),
+  };
+  const jobs = {
+    get: async (jobId) => {
+      events.push(`settled ${jobId}`);
+      return { jobId, status: jobId === "job-python" ? "succeeded" : "failed", error: "apt lock" };
+    },
+  };
+  const manager = new ModuleManager({ maxConcurrency: 2, nodes: [target] }, pool, path.join(root, "modules"), jobs);
+  manager.installedModules = async () => [
+    { node: target.name, reachable: true, count: 2, modules: ["python-compute", "text-tools"], moduleVersions: { "python-compute": "0.0.1", "text-tools": "0.0.1" } },
+  ];
+  manager.install = async (moduleId) => {
+    events.push(`install ${moduleId}`);
+    return moduleId === "python-compute"
+      ? [{ node: target.name, ok: true, moduleId, version: "9.0.0", state: "provisioning", jobId: "job-python" }]
+      : [{ node: target.name, ok: true, moduleId, version: "9.0.0" }];
+  };
+
+  const updates = await manager.updateOutdatedModules();
+  assert.deepEqual(events, ["install python-compute", "settled job-python", "install text-tools"]);
+  assert.equal(updates[0].updated, true);
+  assert.equal(updates[0].jobId, "job-python");
+  assert.equal(updates[1].updated, true);
+});
+
 test("loads the text-tools package deterministically", () => {
   const catalog = loadModuleCatalog(path.join(root, "modules"));
   assert.deepEqual(catalog.errors, []);
@@ -124,7 +154,7 @@ test("loads the ARM-first image-processing service contract", () => {
 test("packages manifest-declared shared files into standalone modules", () => {
   const catalog = loadModuleCatalog(path.join(root, "modules"));
   assert.deepEqual(catalog.errors, []);
-  for (const moduleId of ["image-processing", "python-compute", "text-tools"]) {
+  for (const moduleId of ["browser-retrieval", "image-processing", "python-compute", "text-tools"]) {
     const modulePackage = catalog.modules.find((item) => item.manifest.id === moduleId);
     assert.deepEqual(modulePackage.manifest.sharedFiles, ["artifact_protocol.py"]);
     assert.equal(modulePackage.files.filter((file) => file.relativePath === "artifact_protocol.py").length, 1);
@@ -187,6 +217,33 @@ test("accepts schema v2 job lifecycle and retained node storage", () => {
   assert.equal(parsed.installOptions.profileId.default, "small-arxiv-cs");
   assert.equal(parsed.installOptions.retentionDays.default, 7);
   assert.equal(parsed.installOptions.categories.type, "string-list");
+});
+
+test("accepts pattern-validated free-text string install options", () => {
+  const manifest = textToolsPackage().manifest;
+  const withOption = (option) => parseModuleManifest({
+    ...manifest,
+    schemaVersion: 2,
+    lifecycle: { ...manifest.lifecycle, execution: { mode: "job", timeoutMs: 600_000 } },
+    installOptions: { contact: { type: "string", description: "Operator contact.", ...option } },
+  });
+  assert.equal(withOption({ pattern: "^[a-z@.]{3,20}$", default: "ops@example.org" }).installOptions.contact.pattern, "^[a-z@.]{3,20}$");
+  assert.throws(() => withOption({}), /exactly one of values or pattern/);
+  assert.throws(() => withOption({ values: ["a"], pattern: "^a$" }), /exactly one of values or pattern/);
+  assert.throws(() => withOption({ pattern: "^[a-z]+$", default: "Not Valid" }), /must match pattern/);
+  assert.throws(() => withOption({ pattern: "[" }), /valid regular expression/);
+});
+
+test("free-text install options are validated before remote work", async () => {
+  const target = node({ cpu: { packageArch: "amd64", cores: 4 }, memory: { totalMb: 4096 }, os: { id: "debian", version: "13" }, accelerators: [] });
+  const unexpected = async () => {
+    throw new Error("no remote work expected");
+  };
+  const manager = new ModuleManager({ maxConcurrency: 1, nodes: [target] }, { exec: unexpected, execMany: unexpected }, path.join(root, "modules"));
+  await assert.rejects(
+    manager.install("browser-retrieval", [target], 300_000, { downloadContact: "Mozilla/5.0 (X11; Linux x86_64)" }),
+    /downloadContact must be 1 to 200 characters matching/,
+  );
 });
 
 test("keeps schema v1 manifests unchanged and rejects v2-only fields", () => {
@@ -824,6 +881,7 @@ test("module manager lists and calls only advertised tools over SSH MCP", async 
   const manager = new ModuleManager({ maxConcurrency: 1, nodes: [target, replica] }, pool, path.join(root, "modules"));
   const listed = await manager.listTools("text-tools", target);
   assert.deepEqual(listed.tools.map((tool) => tool.name), ["regex_extract", "fail"]);
+  assert.equal("inputSchema" in listed.tools[0], false);
   assert.equal(listed.server.name, "vanta-text-tools");
   assert.equal(listed.selection, "explicit");
   assert.deepEqual(listed.deployment, { mode: "replicated", routing: "round-robin" });
@@ -871,6 +929,16 @@ test("module manager lists and calls only advertised tools over SSH MCP", async 
   await assert.rejects(
     manager.callTool("text-tools", target, "not_advertised", {}),
     /does not advertise tool/,
+  );
+  const targeted = await manager.listTools("text-tools", target, "regex_extract");
+  assert.deepEqual(targeted.tools, [
+    { name: "regex_extract", description: "test", inputSchema: { type: "object" }, execution: "immediate" },
+  ]);
+  const withSchemas = await manager.listTools("text-tools", target, undefined, true);
+  assert.equal("inputSchema" in withSchemas.tools[0], true);
+  await assert.rejects(
+    manager.listTools("text-tools", target, "not_advertised"),
+    /Available tools: fail, regex_extract/,
   );
 });
 

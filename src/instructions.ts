@@ -22,7 +22,7 @@ export function serverInstructions(capabilities: string, dashboardUrl?: string):
         "artifact-aware module workflows. For a file exposed through a local path, call cluster_upload_artifact and pass " +
         "its immutable artifact ID to the consuming module. This streams the existing bytes through artifact_upload with " +
         "bounded chunks, integrity checks, quotas, and cleanup. If the MCP client supplies raw base64 but no path, use " +
-        "cluster_list_module_tools to get the artifact_upload schema, then call begin, append, and commit through " +
+        "cluster_list_module_tools with toolName=\"artifact_upload\" to get only that schema, then call begin, append, and commit through " +
         "cluster_call_module_tool. For pasted content, first use any client-provided attachment export, download, or " +
         "materialization capability to save the exact bytes to a local temporary file, then call cluster_upload_artifact " +
         "with that path. Do not recreate a file from a rendered preview or vision description. If the client exposes " +
@@ -34,8 +34,8 @@ export function serverInstructions(capabilities: string, dashboardUrl?: string):
         "stage or import artifact content; those paths bypass the artifact API's quotas, integrity checks, and metadata.\n" +
         "These operations are deterministic, bounded and auditable, so prefer them over answering from memory for " +
         "calculation, data analysis, charting, conversion, extraction, redaction, comparison and formatting work. " +
-        "Use cluster_list_modules to confirm what is installed, and cluster_list_module_tools for exact operation names " +
-        "and argument schemas.\n"
+        "Use cluster_list_modules to confirm what is installed. cluster_list_module_tools returns compact operation " +
+        "summaries by default; pass toolName to fetch one exact argument schema. Do not request every schema unless needed.\n"
       : "") +
     (dashboardUrl
       ? `Every SSH interaction is logged and shown live on a local dashboard at ${dashboardUrl} - mention it when the ` +

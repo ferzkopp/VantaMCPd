@@ -122,20 +122,39 @@ const StringListInstallOptionSchema = z
     }
   });
 
+/** Free-text values are capped here so an option can never smuggle unbounded text into a lifecycle environment. */
+export const MAX_STRING_INSTALL_OPTION_LENGTH = 200;
+
 const StringInstallOptionSchema = z
   .object({
     type: z.literal("string"),
     description: z.string().min(1).max(300),
-    values: z.array(z.string().min(1).max(100)).min(1).max(100),
-    default: z.string().min(1).max(100).optional(),
+    values: z.array(z.string().min(1).max(100)).min(1).max(100).optional(),
+    pattern: z.string().min(1).max(200).refine((value) => {
+      try {
+        new RegExp(value);
+        return true;
+      } catch {
+        return false;
+      }
+    }, "must be a valid regular expression").optional(),
+    default: z.string().min(1).max(MAX_STRING_INSTALL_OPTION_LENGTH).optional(),
   })
   .strict()
   .superRefine((option, context) => {
-    if (new Set(option.values).size !== option.values.length) {
+    if ((option.values === undefined) === (option.pattern === undefined)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["values"], message: "must declare exactly one of values or pattern" });
+      return;
+    }
+    if (option.values && new Set(option.values).size !== option.values.length) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["values"], message: "must contain unique values" });
     }
-    if (option.default !== undefined && !option.values.includes(option.default)) {
+    if (option.default === undefined) return;
+    if (option.values && !option.values.includes(option.default)) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["default"], message: "must be one of values" });
+    }
+    if (option.pattern && !new RegExp(option.pattern).test(option.default)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["default"], message: "must match pattern" });
     }
   });
 

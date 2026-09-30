@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "text-tools",
   "name": "Text Tools",
-  "version": "0.5.3",
+  "version": "0.5.5",
   "description": "Bounded text transformation, extraction, analysis, conversion, date/time, developer, document, table, and command-wrapper tools.",
   "capabilities": [
     "convert between JSON, JSONL, YAML, CSV, TOML, INI, XML, dotenv and query strings",

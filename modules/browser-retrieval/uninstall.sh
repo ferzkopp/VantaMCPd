@@ -5,6 +5,7 @@ set -euo pipefail
 : "${VANTA_MODULE_CURRENT_LINK:?VANTA_MODULE_CURRENT_LINK is required}"
 
 rm -f -- /run/vantamcpd-browser/browser.sock /etc/vantamcpd/browser-retrieval.env
+rm -rf -- /etc/systemd/system/vantamcpd-browser-retrieval.service.d
 if [ -L "$VANTA_MODULE_CURRENT_LINK" ] && [ "$(readlink "$VANTA_MODULE_CURRENT_LINK")" = "$(basename "$VANTA_MODULE_INSTALL_DIR")" ]; then
 	rm -f "$VANTA_MODULE_CURRENT_LINK"
 fi

@@ -181,7 +181,7 @@ version, then places the tool's structured result in `output`:
 	"ok": true,
 	"node": "worker-a",
 	"moduleId": "text-tools",
-	"moduleVersion": "0.5.3",
+	"moduleVersion": "0.5.5",
 	"toolName": "developer_text",
 	"deployment": { "mode": "replicated", "routing": "round-robin" },
 	"selection": "automatic",

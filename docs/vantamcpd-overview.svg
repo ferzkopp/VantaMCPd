@@ -67,57 +67,86 @@
       <circle cx="32" cy="32" r="3" fill="#e6edf3"/>
     </g>
     <text x="482" y="199" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="22" font-weight="700">VantaMCPd</text>
-    <text x="516" y="225" text-anchor="middle" fill="#3fb950" font-family="Consolas, monospace" font-size="12">CONTROL PLANE</text>
-    <text x="516" y="249" text-anchor="middle" fill="#8b949e" font-family="Segoe UI, sans-serif" font-size="12">policy · routing · audit</text>
+    <text x="516" y="222" text-anchor="middle" fill="#3fb950" font-family="Consolas, monospace" font-size="12">CONTROL PLANE</text>
+    <text x="516" y="240" text-anchor="middle" fill="#8b949e" font-family="Segoe UI, sans-serif" font-size="12">policy · routing · audit</text>
+    <g aria-label="Core cluster tools">
+      <rect x="459" y="251" width="114" height="22" rx="4" fill="#163322" stroke="#238636"/>
+      <g fill="none" stroke="#7ee787">
+        <rect x="470" y="255.5" width="5.5" height="5.5" rx="1"/>
+        <rect x="478.5" y="255.5" width="5.5" height="5.5" rx="1"/>
+        <rect x="470" y="263" width="5.5" height="5.5" rx="1"/>
+        <rect x="478.5" y="263" width="5.5" height="5.5" rx="1"/>
+      </g>
+      <text x="493" y="265.5" fill="#7ee787" font-family="Consolas, monospace" font-size="10">CORE TOOLS</text>
+    </g>
     <g aria-label="Web monitoring interface">
-      <rect x="459" y="265" width="114" height="28" rx="4" fill="#172a3a" stroke="#1f6feb"/>
-      <rect x="467" y="272" width="20" height="14" rx="2" fill="none" stroke="#79c0ff"/>
-      <line x1="467" y1="276" x2="487" y2="276" stroke="#79c0ff"/>
-      <circle cx="470.5" cy="274" r="1" fill="#79c0ff"/>
-      <circle cx="474" cy="274" r="1" fill="#79c0ff"/>
-      <text x="493" y="283" fill="#79c0ff" font-family="Consolas, monospace" font-size="10">WEB MONITOR</text>
+      <rect x="459" y="278" width="114" height="22" rx="4" fill="#172a3a" stroke="#1f6feb"/>
+      <rect x="467" y="282" width="20" height="14" rx="2" fill="none" stroke="#79c0ff"/>
+      <line x1="467" y1="286" x2="487" y2="286" stroke="#79c0ff"/>
+      <circle cx="470.5" cy="284" r="1" fill="#79c0ff"/>
+      <circle cx="474" cy="284" r="1" fill="#79c0ff"/>
+      <text x="493" y="292.5" fill="#79c0ff" font-family="Consolas, monospace" font-size="10">WEB MONITOR</text>
     </g>
   </g>
 
   <path d="M634 230H698" fill="none" stroke="#3fb950" stroke-width="3" stroke-linecap="round"/>
-  <path d="M698 230C724 230 720 152 758 152" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round"/>
+  <path d="M698 230C724 230 720 144 758 144" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round"/>
   <path d="M698 230C724 230 720 243 758 243" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round"/>
-  <path d="M698 230C724 230 720 334 758 334" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round"/>
+  <path d="M698 230C724 230 720 342 758 342" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round"/>
   <text x="642" y="213" fill="#56d364" font-family="Consolas, monospace" font-size="12">SSH</text>
 
   <g filter="url(#shadow)">
-    <rect x="758" y="111" width="394" height="82" rx="7" fill="url(#panel)" stroke="#30363d"/>
-    <circle cx="786" cy="137" r="7" fill="#3fb950"/>
-    <text x="804" y="142" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="16" font-weight="650">Older ARM node</text>
-    <text x="1118" y="142" text-anchor="end" fill="#8b949e" font-family="Consolas, monospace" font-size="12">2 cores · 1 GB</text>
-    <rect x="780" y="159" width="80" height="22" rx="4" fill="#172a3a" stroke="#1f6feb"/>
-    <text x="820" y="174" text-anchor="middle" fill="#79c0ff" font-family="Consolas, monospace" font-size="10.5">text-tools</text>
-    <rect x="880" y="159" width="102" height="22" rx="4" fill="#163322" stroke="#238636"/>
-    <text x="931" y="174" text-anchor="middle" fill="#7ee787" font-family="Consolas, monospace" font-size="10.5">corpus-search</text>
-    <rect x="1002" y="159" width="94" height="22" rx="4" fill="#2d2412" stroke="#9e6a03"/>
-    <text x="1049" y="174" text-anchor="middle" fill="#e3b341" font-family="Consolas, monospace" font-size="10.5">job-runner</text>
+    <rect x="758" y="99" width="394" height="90" rx="7" fill="url(#panel)" stroke="#30363d"/>
+    <g transform="translate(772.6 115.4) scale(1.15)" aria-label="low capacity, node-local storage">
+      <polygon points="1.21,12.8 16.79,12.8 16.79,15.5 9,20 1.21,15.5" fill="#7f9a88"/>
+      <polygon points="9,2 16.79,6.5 16.79,15.5 9,20 1.21,15.5 1.21,6.5" fill="none" stroke="#d7dde5" stroke-width="1.3" stroke-linejoin="round"/>
+      <g fill="#39c5cf" stroke="#161b22" stroke-width="2" stroke-linejoin="round" paint-order="stroke fill">
+        <path d="M14.2 13.4a4.6 1.7 0 0 1 9.2 0v5.2a4.6 1.7 0 0 1-9.2 0z"/>
+        <ellipse cx="18.8" cy="13.4" rx="4.6" ry="1.7" fill="#161b22" fill-opacity=".35"/>
+      </g>
+    </g>
+    <text x="804" y="133" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="16" font-weight="650">Older ARM node</text>
+    <text x="1118" y="133" text-anchor="end" fill="#8b949e" font-family="Consolas, monospace" font-size="12">2 cores · 1 GB</text>
+    <rect x="780" y="153" width="112" height="22" rx="4" fill="#172a3a" stroke="#1f6feb"/>
+    <text x="836" y="168" text-anchor="middle" fill="#79c0ff" font-family="Consolas, monospace" font-size="10.5">artifact-storage</text>
+    <rect x="900" y="153" width="96" height="22" rx="4" fill="#163322" stroke="#238636"/>
+    <text x="948" y="168" text-anchor="middle" fill="#7ee787" font-family="Consolas, monospace" font-size="10.5">corpus-search</text>
+    <rect x="1004" y="153" width="78" height="22" rx="4" fill="#2d2412" stroke="#9e6a03"/>
+    <text x="1043" y="168" text-anchor="middle" fill="#e3b341" font-family="Consolas, monospace" font-size="10.5">text-tools</text>
 
-    <rect x="758" y="202" width="394" height="82" rx="7" fill="url(#panel)" stroke="#30363d"/>
-    <circle cx="786" cy="231" r="7" fill="#3fb950"/>
-    <text x="804" y="236" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="16" font-weight="650">General-purpose x86 node</text>
-    <text x="1118" y="236" text-anchor="end" fill="#8b949e" font-family="Consolas, monospace" font-size="12">more capacity</text>
-    <rect x="780" y="250" width="104" height="22" rx="4" fill="#172a3a" stroke="#1f6feb"/>
-    <text x="832" y="265" text-anchor="middle" fill="#79c0ff" font-family="Consolas, monospace" font-size="10.5">python-kernel</text>
-    <rect x="892" y="250" width="105" height="22" rx="4" fill="#163322" stroke="#238636"/>
-    <text x="944.5" y="265" text-anchor="middle" fill="#7ee787" font-family="Consolas, monospace" font-size="10.5">numpy-scipy</text>
-    <rect x="1005" y="250" width="124" height="22" rx="4" fill="#2d2412" stroke="#9e6a03"/>
-    <text x="1067" y="265" text-anchor="middle" fill="#e3b341" font-family="Consolas, monospace" font-size="10.5">browser-retrieval</text>
+    <rect x="758" y="198" width="394" height="90" rx="7" fill="url(#panel)" stroke="#30363d"/>
+    <g transform="translate(772.6 214.4) scale(1.15)" aria-label="medium capacity">
+      <polygon points="1.21,7.4 16.79,7.4 16.79,15.5 9,20 1.21,15.5" fill="#7f9a88"/>
+      <polygon points="9,2 16.79,6.5 16.79,15.5 9,20 1.21,15.5 1.21,6.5" fill="none" stroke="#d7dde5" stroke-width="1.3" stroke-linejoin="round"/>
+    </g>
+    <text x="804" y="232" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="16" font-weight="650">General-purpose x86 node</text>
+    <text x="1118" y="232" text-anchor="end" fill="#8b949e" font-family="Consolas, monospace" font-size="12">more capacity</text>
+    <rect x="780" y="252" width="102" height="22" rx="4" fill="#172a3a" stroke="#1f6feb"/>
+    <text x="831" y="267" text-anchor="middle" fill="#79c0ff" font-family="Consolas, monospace" font-size="10.5">python-compute</text>
+    <rect x="890" y="252" width="112" height="22" rx="4" fill="#163322" stroke="#238636"/>
+    <text x="946" y="267" text-anchor="middle" fill="#7ee787" font-family="Consolas, monospace" font-size="10.5">image-processing</text>
+    <rect x="1010" y="252" width="118" height="22" rx="4" fill="#2d2412" stroke="#9e6a03"/>
+    <text x="1069" y="267" text-anchor="middle" fill="#e3b341" font-family="Consolas, monospace" font-size="10.5">browser-retrieval</text>
 
-    <rect x="758" y="293" width="394" height="82" rx="7" fill="url(#panel)" stroke="#30363d"/>
-    <circle cx="786" cy="321" r="7" fill="#d29922"/>
-    <text x="804" y="326" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="16" font-weight="650">Future accelerator node</text>
-    <text x="1118" y="326" text-anchor="end" fill="#8b949e" font-family="Consolas, monospace" font-size="12">GPU · NPU</text>
-    <rect x="780" y="341" width="96" height="22" rx="4" fill="#172a3a" stroke="#1f6feb"/>
-    <text x="828" y="356" text-anchor="middle" fill="#79c0ff" font-family="Consolas, monospace" font-size="10.5">image-vision</text>
-    <rect x="884" y="341" width="112" height="22" rx="4" fill="#163322" stroke="#238636"/>
-    <text x="940" y="356" text-anchor="middle" fill="#7ee787" font-family="Consolas, monospace" font-size="10.5">model-inference</text>
-    <rect x="1004" y="341" width="126" height="22" rx="4" fill="#2d2412" stroke="#9e6a03"/>
-    <text x="1067" y="356" text-anchor="middle" fill="#e3b341" font-family="Consolas, monospace" font-size="10.5">vector-database</text>
+    <rect x="758" y="297" width="394" height="90" rx="7" fill="url(#panel)" stroke="#30363d"/>
+    <g transform="translate(772.6 313.4) scale(1.15)" aria-label="high capacity, GPU accelerator">
+      <polygon points="9,2 16.79,6.5 16.79,15.5 9,20 1.21,15.5 1.21,6.5" fill="#7f9a88"/>
+      <polygon points="9,2 16.79,6.5 16.79,15.5 9,20 1.21,15.5 1.21,6.5" fill="none" stroke="#d7dde5" stroke-width="1.3" stroke-linejoin="round"/>
+      <g fill="#a371f7" stroke="#161b22" stroke-width="2" stroke-linejoin="round" paint-order="stroke fill">
+        <rect x="16" y="2.7" width="6.5" height="7" rx="1.6"/>
+        <rect x="14.4" y="4.1" width="1.6" height="1.3" rx=".45"/>
+        <rect x="22.5" y="4.1" width="1.6" height="1.3" rx=".45"/>
+        <rect x="14.4" y="6.9" width="1.6" height="1.3" rx=".45"/>
+        <rect x="22.5" y="6.9" width="1.6" height="1.3" rx=".45"/>
+        <rect x="17.8" y="4.7" width="2.9" height="3" rx=".8" fill="#161b22" stroke="none"/>
+      </g>
+    </g>
+    <text x="804" y="331" fill="#f0f6fc" font-family="Segoe UI, sans-serif" font-size="16" font-weight="650">GPU accelerator node</text>
+    <text x="1118" y="331" text-anchor="end" fill="#8b949e" font-family="Consolas, monospace" font-size="12">NVIDIA · CUDA</text>
+    <rect x="780" y="351" width="90" height="22" rx="4" fill="#172a3a" stroke="#1f6feb"/>
+    <text x="825" y="366" text-anchor="middle" fill="#79c0ff" font-family="Consolas, monospace" font-size="10.5">document-ocr</text>
+    <rect x="878" y="351" width="118" height="22" rx="4" fill="#163322" stroke="#238636"/>
+    <text x="937" y="366" text-anchor="middle" fill="#7ee787" font-family="Consolas, monospace" font-size="10.5">browser-retrieval</text>
   </g>
 
   <g font-family="Consolas, monospace" font-size="11" font-weight="600">

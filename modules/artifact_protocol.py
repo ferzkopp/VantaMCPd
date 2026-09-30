@@ -326,8 +326,12 @@ def _publish_locked(root: str, producer: str, items: list[dict[str, str]], reten
             _atomic_json(os.path.join(staging, "metadata.json"), metadata)
             target = object_dir(root, artifact_id)
             parent = os.path.dirname(target)
-            os.makedirs(parent, mode=0o2770, exist_ok=True)
-            os.chmod(parent, 0o2770)
+            try:
+                os.mkdir(parent, mode=0o2770)
+            except FileExistsError:
+                pass  # Shared prefix directories may belong to another producer; only the owner may chmod.
+            else:
+                os.chmod(parent, 0o2770)
             os.replace(staging, target)
             staging_directories.remove(staging)
             published_directories.append(target)

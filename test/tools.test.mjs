@@ -212,11 +212,24 @@ test("module capabilities are advertised on the proxy tools so the agent can rou
   assert.match(proxy, /search scientific paper metadata/);
 });
 
+test("module tool discovery is compact by default and supports one targeted schema", () => {
+  const { tools } = buildContext();
+  const discovery = tools.get("cluster_list_module_tools").config;
+  assert.equal(parse(tools, "cluster_list_module_tools", { moduleId: "text-tools" }).data.includeSchemas, false);
+  assert.equal(parse(tools, "cluster_list_module_tools", { moduleId: "text-tools", toolName: "data_convert" }).success, true);
+  assert.match(discovery.description, /compact names and descriptions without JSON Schemas/);
+  assert.match(discovery.description, /Pass toolName to return one operation's full argument schema/);
+
+  const proxy = tools.get("cluster_call_module_tool").config.description;
+  assert.match(proxy, /pass toolName there when you need one exact argument schema/);
+});
+
 test("agent instructions prefer artifact uploads over SFTP staging", () => {
   const instructions = serverInstructions("- artifact-storage: upload files");
   assert.match(instructions, /prefer it for transferring local attachments or files/);
   assert.match(instructions, /call cluster_upload_artifact/);
   assert.match(instructions, /streams the existing bytes through artifact_upload/);
+  assert.match(instructions, /toolName="artifact_upload" to get only that schema/);
   assert.match(instructions, /supplies raw base64 but no path/);
   assert.match(instructions, /attachment export, download, or materialization capability/);
   assert.match(instructions, /save the exact bytes to a local temporary file/);
@@ -224,6 +237,8 @@ test("agent instructions prefer artifact uploads over SFTP staging", () => {
   assert.match(instructions, /client exposes neither the original bytes, a local path, nor a way to materialize them/);
   assert.match(instructions, /Do not locally compress, convert, summarize, inspect, or otherwise preprocess it/);
   assert.match(instructions, /Do not use cluster_upload\/SFTP, cluster_run, direct node filesystem paths, or the artifact broker socket/);
+  assert.match(instructions, /returns compact operation summaries by default/);
+  assert.match(instructions, /Do not request every schema unless needed/);
 
   const { tools } = buildContext();
   const uploadDescription = tools.get("cluster_upload").config.description;

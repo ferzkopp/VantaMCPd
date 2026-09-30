@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from schemas import TOOLS, self_test as schemas_self_test
 
 PROTOCOL_VERSION = "2025-06-18"
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 SOCKET_PATH = "/run/vantamcpd-image/image.sock"
 MAX_BROKER_MESSAGE = 2_400_000
 MAX_RESPONSE_BYTES = 3_900_000

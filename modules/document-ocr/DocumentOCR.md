@@ -91,9 +91,10 @@ Korean text.
 
 > Find a typewritten business letter on Wikimedia Commons and transcribe it.
 
-The agent uses browser-retrieval to search the site and choose an image link. Browser-retrieval does not
-download files, so the agent saves the image locally, uploads it, and runs OCR. For a 1961 letter
-photographed on top of its envelope, the typed body comes back cleanly:
+The agent uses browser-retrieval to search the site and find the original image URL, then stores the
+image in artifact storage with `web_download` and runs OCR on the returned artifact ID. The image never
+passes through the agent's machine. For a 1961 letter photographed on top of its envelope, the typed body
+comes back cleanly:
 
 ```text
 DEAR MR. WALSER:

@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "image-processing",
   "name": "Image Processing",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Inspect, edit, compose, convert, and compare bounded raster images with isolated Debian image tooling.",
   "capabilities": [
     "inspect image dimensions, formats, orientation, metadata and colors",

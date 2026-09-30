@@ -168,18 +168,27 @@ export function registerModuleTools(server: ToolServer, ctx: ToolContext): void 
     {
       title: "List tools from an installed node MCP module",
       description:
-        "Launch one installed module on demand over SSH stdio and return its MCP tools/list response. " +
-        "Call this to discover the exact operations and argument schemas a module provides before using it. " +
+        "Launch one installed module and discover its operations. By default this returns compact names and descriptions " +
+        "without JSON Schemas. Pass toolName to return one operation's full argument schema; use includeSchemas=true only " +
+        "when every schema is genuinely needed. " +
         "When target is omitted, selects a reachable installation automatically." +
         offered,
       inputSchema: {
         moduleId: z.string().describe("Installed module ID."),
         target: z.string().optional().describe("Optional explicit node name; omit to select an installed instance."),
+        toolName: z.string().optional().describe("Optional exact operation name; returns only that tool with its full argument schema."),
+        includeSchemas: z.boolean().default(false)
+          .describe("Include full schemas for every tool. Leave false for compact discovery; toolName always includes its schema."),
       },
     },
-    async ({ moduleId, target }) => {
+    async ({ moduleId, target, toolName, includeSchemas }) => {
       try {
-        return json(await ctx.modules.listTools(moduleId, target === undefined ? undefined : resolveSingleTarget(ctx, target)));
+        return json(await ctx.modules.listTools(
+          moduleId,
+          target === undefined ? undefined : resolveSingleTarget(ctx, target),
+          toolName,
+          includeSchemas,
+        ));
       } catch (err) {
         return errorText(err);
       }
@@ -196,15 +205,15 @@ export function registerModuleTools(server: ToolServer, ctx: ToolContext): void 
         "When target is omitted, replicated modules use round-robin routing across reachable installations. " +
         "Inputs are sent as MCP data and are never interpolated into a shell command." +
         offered +
-        "Use cluster_list_module_tools for the exact operation names and argument schemas. Call it before " +
-        "retrying whenever a module tool rejects an argument or returns an empty result, because module tools " +
+        "Use cluster_list_module_tools for compact operation discovery, then pass toolName there when you need one " +
+        "exact argument schema. Do this before retrying whenever a module tool rejects an argument or returns an empty result, because module tools " +
         "accept options and query syntax that this description does not repeat. " +
         "Tools listed with execution \"optional\" or \"required\" can run as a durable background job with " +
         "execution=\"background\": use it for long computations, then poll cluster_get_job and read the output with includeResult.",
       inputSchema: {
         moduleId: z.string().describe("Installed module ID."),
         target: z.string().optional().describe("Optional explicit node name; omit to use module routing."),
-        toolName: z.string().describe("Tool name advertised by cluster_list_module_tools."),
+        toolName: z.string().describe("Module operation name; use compact cluster_list_module_tools discovery if unknown."),
         arguments: z.record(z.unknown()).default({}).describe("Arguments passed to the remote module tool."),
         execution: z
           .enum(["immediate", "background"])

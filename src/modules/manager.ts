@@ -14,7 +14,7 @@ import { nfsClientMountScript } from "../storage.js";
 import { mapLimit, type ExecResult, type SshPool } from "../ssh.js";
 import { loadModuleCatalog, type ModuleCatalog, type ModulePackage } from "./catalog.js";
 import { evaluateCompatibility, type CompatibilityResult } from "./compatibility.js";
-import { toolExecutionPolicy } from "./manifest.js";
+import { MAX_STRING_INSTALL_OPTION_LENGTH, toolExecutionPolicy } from "./manifest.js";
 import { SshMcpTransport } from "./ssh-transport.js";
 
 export interface ModuleNodeCheck {
@@ -120,6 +120,7 @@ type ModuleInventoryChangeListener = () => void;
 const ARTIFACT_RELATIVE_PATH = "vantamcpd/artifacts";
 const ARTIFACT_PROTOCOL_VERSION = "1";
 const BACKGROUND_GRACE_MS = 60_000;
+const UPDATE_JOB_POLL_MS = 5_000;
 const MAX_JOB_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1_000;
 
 /** One durable job per module per node; install and background calls share this key so they exclude each other. */
@@ -192,8 +193,17 @@ function installOptionEnvironment(modulePackage: ModulePackage, provided: Record
       continue;
     }
     if (definition.type === "string") {
-      if (typeof value !== "string" || !definition.values.includes(value)) {
-        throw new Error(`Install option ${name} must be one of: ${definition.values.join(", ")}.`);
+      if (definition.values) {
+        if (typeof value !== "string" || !definition.values.includes(value)) {
+          throw new Error(`Install option ${name} must be one of: ${definition.values.join(", ")}.`);
+        }
+      } else if (
+        typeof value !== "string" ||
+        value.length === 0 ||
+        value.length > MAX_STRING_INSTALL_OPTION_LENGTH ||
+        !new RegExp(definition.pattern ?? "$^").test(value)
+      ) {
+        throw new Error(`Install option ${name} must be 1 to ${MAX_STRING_INSTALL_OPTION_LENGTH} characters matching ${definition.pattern}.`);
       }
       environment[variable(name)] = value;
       continue;
@@ -550,7 +560,12 @@ export class ModuleManager {
     });
   }
 
-  async listTools(moduleId: string, node?: ResolvedNode): Promise<ModuleToolListResult> {
+  async listTools(
+    moduleId: string,
+    node?: ResolvedNode,
+    toolName?: string,
+    includeSchemas = false,
+  ): Promise<ModuleToolListResult> {
     const modulePackage = this.get(moduleId);
     const selection = node === undefined ? "automatic" : "explicit";
     await this.waitForModuleMutation(moduleId);
@@ -558,6 +573,13 @@ export class ModuleManager {
     return this.withClient(modulePackage, selectedNode, async (client, timeout) => {
       const result = await client.listTools({}, { timeout, maxTotalTimeout: timeout });
       const { background } = modulePackage.manifest;
+      const tools = result.tools.map((tool) => ({ ...tool, execution: toolExecutionPolicy(modulePackage.manifest, tool.name) }));
+      const selectedTools = toolName === undefined ? tools : tools.filter((tool) => tool.name === toolName);
+      if (toolName !== undefined && selectedTools.length === 0) {
+        throw new Error(
+          `Module ${moduleId} does not advertise tool ${toolName}. Available tools: ${tools.map((tool) => tool.name).sort().join(", ")}.`,
+        );
+      }
       return {
         node: selectedNode.name,
         moduleId,
@@ -566,7 +588,9 @@ export class ModuleManager {
         selection,
         server: client.getServerVersion(),
         ...(background ? { background: { maxRuntimeMs: background.maxTimeoutMs, minFreeMemoryMb: background.minFreeMemoryMb } } : {}),
-        tools: result.tools.map((tool) => ({ ...tool, execution: toolExecutionPolicy(modulePackage.manifest, tool.name) })),
+        tools: toolName !== undefined || includeSchemas
+          ? selectedTools
+          : selectedTools.map(({ name, title, description, execution }) => ({ name, title, description, execution })),
       };
     });
   }
@@ -632,6 +656,8 @@ export class ModuleManager {
       if (targets.length === 0) continue;
 
       const installs = await this.install(modulePackage.manifest.id, targets, timeoutMs);
+      // Updates of different modules on one node must not overlap: their installers share apt and systemd.
+      const jobTimeoutMs = (modulePackage.manifest.lifecycle.execution?.timeoutMs ?? timeoutMs) + BACKGROUND_GRACE_MS;
       for (const install of installs) {
         const fromVersion = previousVersions.get(install.node) as string;
         if (!install.ok) {
@@ -646,17 +672,34 @@ export class ModuleManager {
           continue;
         }
 
+        let jobId: string | undefined;
         if (install.state === "provisioning") {
-          results.push({
-            node: install.node,
-            moduleId: install.moduleId,
-            fromVersion,
-            toVersion: install.version,
-            updated: false,
-            provisioning: true,
-            jobId: install.jobId,
-          });
-          continue;
+          jobId = install.jobId as string;
+          const job = await this.waitForJob(jobId, jobTimeoutMs);
+          if (!job || !isTerminalJobStatus(job.status)) {
+            results.push({
+              node: install.node,
+              moduleId: install.moduleId,
+              fromVersion,
+              toVersion: install.version,
+              updated: false,
+              provisioning: true,
+              jobId,
+            });
+            continue;
+          }
+          if (job.status !== "succeeded") {
+            results.push({
+              node: install.node,
+              moduleId: install.moduleId,
+              fromVersion,
+              toVersion: install.version,
+              updated: false,
+              jobId,
+              error: `update job ${job.status}: ${job.error ?? "unknown error"}`,
+            });
+            continue;
+          }
         }
 
         const node = targets.find((candidate) => candidate.name === install.node) as ResolvedNode;
@@ -673,12 +716,29 @@ export class ModuleManager {
           fromVersion,
           toVersion: install.version,
           updated: true,
+          ...(jobId ? { jobId } : {}),
           oldVersionRemoved: cleanup.ok,
           ...(!cleanup.ok ? { error: `updated, but old version cleanup failed: ${resultError(cleanup)}` } : {}),
         });
       }
     }
     return results;
+  }
+
+  /** Poll a durable job until it settles; transient read failures are retried until the deadline. */
+  private async waitForJob(jobId: string, timeoutMs: number): Promise<JobState | undefined> {
+    if (!this.jobs) return undefined;
+    const deadline = Date.now() + timeoutMs;
+    let last: JobState | undefined;
+    for (;;) {
+      try {
+        last = await this.jobs.get(jobId);
+      } catch {
+        // Keep the previous state; the node may be briefly unreachable.
+      }
+      if ((last && isTerminalJobStatus(last.status)) || Date.now() >= deadline) return last;
+      await new Promise((resolve) => setTimeout(resolve, UPDATE_JOB_POLL_MS));
+    }
   }
 
   async callTool(

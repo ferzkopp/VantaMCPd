@@ -1,17 +1,19 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "browser-retrieval",
   "name": "Browser Retrieval",
-  "version": "0.5.1",
-  "description": "Retrieve node-reachable JavaScript-rendered webpages as bounded, untrusted text and structured data.",
+  "version": "0.7.0",
+  "description": "Retrieve node-reachable JavaScript-rendered webpages as bounded, untrusted text and structured data, and download files into shared artifact storage.",
   "capabilities": [
     "read JavaScript-rendered webpages as Markdown or plain text",
     "inspect headings and links on rendered webpages",
     "discover repeated link patterns and candidate CSS selectors",
     "extract selected fields from rendered webpage elements",
-    "extract structured tables from rendered webpages"
+    "extract structured tables from rendered webpages",
+    "download a PDF or image from a URL into shared artifact storage"
   ],
   "entrypoint": ["python3", "server.py"],
+  "sharedFiles": ["artifact_protocol.py"],
   "compatibility": {
     "os": ["debian", "ubuntu"],
     "architectures": ["amd64"],
@@ -26,12 +28,26 @@
   },
   "lifecycle": {
     "install": "install.sh",
-    "uninstall": "uninstall.sh"
+    "uninstall": "uninstall.sh",
+    "execution": {"mode": "job", "timeoutMs": 900000}
+  },
+  "artifactAccess": {"write": true},
+  "installOptions": {
+    "downloadContact": {
+      "type": "string",
+      "description": "Operator contact URL or email appended to the web_download User-Agent, as sites such as Wikimedia request for automated clients.",
+      "pattern": "^[A-Za-z0-9._%+@:/?#=&~-]{3,200}$"
+    }
   },
   "deployment": { "mode": "replicated", "routing": "round-robin" },
   "runtime": {
     "mode": "service",
     "systemdUnit": "browser-retrieval.service"
+  },
+  "background": {
+    "tools": { "web_download": "optional" },
+    "maxTimeoutMs": 720000,
+    "minFreeMemoryMb": 128
   },
   "limits": {
     "startupMs": 10000,

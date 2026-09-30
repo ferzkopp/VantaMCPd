@@ -25,7 +25,7 @@ data lifecycle, and troubleshooting instructions.
 | `text-tools` | Bounded text, data, document, security, and developer operations | Replicated, on demand | [Text Tools](../modules/text-tools/TextTools.md) |
 | `corpus-search` | Provenance-aware multi-source metadata search with SQLite FTS5/BM25 | Singleton, on demand | [Corpus Search](../modules/corpus-search/CorpusSearch.md) |
 | `document-ocr` | CUDA-assisted OCR for bounded image and scanned-PDF artifacts | Replicated, on demand | [Document OCR](../modules/document-ocr/DocumentOCR.md) |
-| `browser-retrieval` | JavaScript-rendered page retrieval and structured extraction | Replicated service | [Browser Retrieval](../modules/browser-retrieval/BrowserRetrieval.md) |
+| `browser-retrieval` | JavaScript-rendered page retrieval, structured extraction, and file downloads into artifact storage | Replicated service | [Browser Retrieval](../modules/browser-retrieval/BrowserRetrieval.md) |
 | `python-compute` | Sandboxed Python calculation, analysis, and rendered artifacts | Replicated service | [Python Compute](../modules/python-compute/PythonCompute.md) |
 | `image-processing` | Isolated raster inspection, editing, composition, conversion, and comparison | Replicated service | [Image Processing](../modules/image-processing/ImageProcessing.md) |
 
@@ -38,7 +38,7 @@ data lifecycle, and troubleshooting instructions.
 | `cluster_install_module` | Install a compatible package on explicit targets after confirmation |
 | `cluster_uninstall_module` | Remove a package and receipt from explicit targets after confirmation |
 | `cluster_purge_module_data` | Permanently remove declared retained data after uninstall and confirmation |
-| `cluster_list_module_tools` | Discover tools on an explicit or automatically selected installation |
+| `cluster_list_module_tools` | Discover compact tool summaries, one named tool's schema, or all schemas on an explicit or automatically selected installation |
 | `cluster_call_module_tool` | Call a tool on an explicit installation or use manifest-defined routing |
 | `cluster_list_jobs` | List durable jobs and their progress |
 | `cluster_get_job` | Refresh one durable job by ID; `includeResult` returns a background call's output |
@@ -101,7 +101,9 @@ the job tools to follow phases, logs, completion, or cancellation.
 
 At startup, `defaults.autoUpdateModules` defaults to `true`. VantaMCPd updates older validated receipts
 to the local catalog version after hardware discovery. It does not create installations, reinstall an
-equal version, or downgrade a newer remote version. Set the option to `false` to disable reconciliation.
+equal version, or downgrade a newer remote version. Modules are updated one at a time: when an update
+runs as a durable job, VantaMCPd waits for the job to finish before updating the next module, so two
+installers never compete for apt on the same node. Set the option to `false` to disable reconciliation.
 
 ### Discover and Call Tools
 
@@ -160,6 +162,65 @@ node that cannot accept the job rejects it rather than queueing it.
 ```
 
 `maxTimeoutMs` bounds the job and should exceed the module's own longest background run.
+
+### Example: Download, Clean Up, and Read a Scanned Letter
+
+![End-to-end pipeline demonstration running browser retrieval, image processing, and document OCR](mcp-module-demo.png)
+
+Artifact-aware modules can be chained so that a file moves from the web to OCR entirely inside the
+cluster. Each step passes an artifact ID to the next; the bytes never reach the agent's machine. This
+request uses browser-retrieval, image-processing, and document-ocr together with artifact storage:
+
+> Demo the VantaMCPd pipeline end to end, entirely on the cluster, with no files passing through this
+> machine:
+>
+> 1. Use browser-retrieval to search Wikimedia Commons for a scanned typewritten letter in German, open
+>    its file page, and take the URL of the original upload (not a thumbnail). Download it into
+>    artifact storage with `web_download`. Only accept an image, and keep it for 1 day.
+> 2. With image-processing, inspect the downloaded image and report its size and format. Then make a
+>    grayscale copy saved as a PNG artifact, also kept for 1 day.
+> 3. Run document-ocr on the grayscale artifact using the English model.
+> 4. Show me:
+>    - a table of each step with the node it ran on, the artifact ID it produced, and the duration
+>    - the transcribed letter text in reading order, leaving out lines with confidence below 0.8
+>    - a two-sentence English summary of the letter
+
+Before you run it, set the browser-retrieval `downloadContact` install option (see
+[BrowserRetrieval.md](../modules/browser-retrieval/BrowserRetrieval.md)). Without a contact in the
+User-Agent, `upload.wikimedia.org` can refuse original files with `429 Too Many Requests`.
+
+The agent calls `web_retrieve` or `web_query` to find the file page and its original image link, then
+`web_download` with `expectedTypes` limited to image formats and `retentionDays: 1`, `image_inspect`
+and `image_edit` (`grayscale`, artifact output as PNG), and `ocr_extract` with `language: "en"`. OCR
+can also run as a background job; the agent then polls it and reads the result. For a 1975 letter from
+the Anglo-American Fur Merchants Corporation in New York, one run produced:
+
+| Step | Tool | Node | Artifact produced | Duration |
+| --- | --- | --- | --- | --- |
+| Download | `web_download` | cluster5 | `ad7d9468…` (JPEG, 249,585 bytes) | 477 ms |
+| Inspect | `image_inspect` | cluster2 | none (1007 × 1252 px, JPEG, RGB) | 494 ms |
+| Grayscale | `image_edit` | cluster5 | `86b7b51c…` (PNG, 564,610 bytes) | 980 ms |
+| OCR | `ocr_extract` | cluster6 | none (inline, 30 lines) | 6,346 ms |
+
+Round-robin routing sent the two image-processing calls to different replicas. Both read the same
+artifact from shared storage. All 30 OCR lines scored above 0.8, so none were dropped. The text
+keeps the letter's own transliterations (`Wuensche`, `Geschaeft`) and some misreadings such as
+`Breif` and `rahiger`:
+
+```text
+Dezember 26,1975
+Richard Franke
+Murrhardt,Germany.
+Lieber Franke:
+Zuerst meine besten Wuensche fuer die Feiertage und ein gutes Neues Jahr bei guter
+Gesundheit und Wohlbefinden.
+Dein Breif vom 22. Oktober ist so lange nicht beantwortet worden,weil ich die letzte
+Zeit garnicht gut auf dem Posten war und ausserdem ist das Geschaeft so verrueckt ...
+```
+
+The English model worked here because the letter spells out its umlauts (`ue`, `ae`). For
+documents with `ä`, `ö`, `ü`, or `ß`, prefer `language: "auto"`. Artifacts expire after their retention
+period, so a one-day demo leaves nothing behind.
 
 ### Deactivate a Module
 

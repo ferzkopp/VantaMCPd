@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "document-ocr",
   "name": "Document OCR",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Extract bounded, page-referenced text from images and scanned PDFs using a CUDA OCR worker.",
   "capabilities": [
     "extract printed text and coordinates from scanned PDFs and images",

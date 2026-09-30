@@ -13,7 +13,7 @@ from typing import Any
 from extraction import truncate_text, validate_discover_links, validate_query, validate_retrieve, validate_tables
 from network_policy import sanitize_url, validate_browser_url
 
-VERSION = "0.5.1"
+VERSION = "0.7.0"
 MAX_TRANSFER_BYTES = 12 * 1024 * 1024
 MAX_DOM_ELEMENTS = 50_000
 TOTAL_TIMEOUT_SECONDS = 45
