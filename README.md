@@ -49,6 +49,7 @@ module on compatible nodes, then invoke its tools according to the module's depl
 | **Browser Retrieval** (`browser-retrieval`) | JavaScript-rendered page retrieval, selector queries, table extraction, and PDF or image downloads into artifact storage across node-reachable HTTP(S) sites | Replicated; isolated service broker; stateless calls | Debian/Ubuntu `amd64`; 2 cores; 3 GiB RAM; 2 GiB root disk; Chromium | [Browser Retrieval](modules/browser-retrieval/BrowserRetrieval.md) |
 | **Python Compute** (`python-compute`) | Sandboxed Python execution with values, charts, and optional shared artifact inputs and outputs | Replicated; isolated service broker; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 2 cores; 900 MB RAM; 2.5 GB root disk; bubblewrap | [Python Compute](modules/python-compute/PythonCompute.md) |
 | **Image Processing** (`image-processing`) | Isolated raster inspection, editing, composition, conversion, and visual comparison with inline or artifact transport | Replicated; isolated service broker; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 768 MB RAM; 512 MB root disk; ImageMagick and/or Pillow | [Image Processing](modules/image-processing/ImageProcessing.md) |
+| **Document OCR** (`document-ocr`) | CUDA-assisted extraction of page-referenced text, confidence, and coordinates from image and scanned-PDF artifacts | Replicated; on-demand CUDA container; durable installation job | Debian 13 `amd64`; 2 cores; 8 GiB RAM; 12 GiB root disk; NVIDIA CUDA GPU with 8 GiB VRAM; rootless Podman | [Document OCR](modules/document-ocr/DocumentOCR.md) |
 
 Use `cluster_list_modules` to see packaged versions, install options, compatibility, deployment
 policies, and live installation state. See [Node modules](docs/Modules.md) for architecture and lifecycle details.
@@ -162,6 +163,9 @@ for Claude Code, Hermes Agent, OpenClaw, and generic MCP clients are in [MCP cli
 >
 > Install image-processing on the ARM workers, then inspect an uploaded image artifact and create a
 > metadata-free WebP thumbnail.
+>
+> Check whether document-ocr is compatible with gpu-worker, install it there, then extract the text
+> from an uploaded scanned PDF.
 
 Module installation requires approval and explicit target nodes or tags. See [Node modules](docs/Modules.md)
 for deployment, routing, durable jobs, and update behavior, the
@@ -169,11 +173,14 @@ for deployment, routing, durable jobs, and update behavior, the
 [Corpus Search quickstart](modules/corpus-search/CorpusSearch.md#quickstart) for profiles, storage,
 installation, and recovery. See the
 [Browser Retrieval quickstart](modules/browser-retrieval/BrowserRetrieval.md#quickstart) for public
-network policy, rendered extraction, and service isolation, and the
+network policy, rendered extraction, direct PDF and image downloads into artifact storage, and service
+isolation, and the
 [Python Compute quickstart](modules/python-compute/PythonCompute.md#quickstart) for package bundles,
 sandbox behavior, and returning rendered content. The
 [Image Processing quickstart](modules/image-processing/ImageProcessing.md#quickstart) covers raster
-formats, inline and artifact transport, ordered edit pipelines, and image-specific isolation.
+formats, inline and artifact transport, ordered edit pipelines, and image-specific isolation. The
+[Document OCR guide](modules/document-ocr/DocumentOCR.md) covers artifact inputs, page selection,
+background extraction, CUDA isolation, and structured OCR results.
 
 **Re-running the whole block on a working cluster is safe.** Every step is idempotent: an existing SSH
 key is reused, `authorized_keys` and `/etc/sudoers.d/99-vanta` are left alone once correct (so you are
