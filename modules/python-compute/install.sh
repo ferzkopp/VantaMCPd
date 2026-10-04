@@ -19,13 +19,25 @@ progress() {
 	printf 'VANTA_PROGRESS {"phase":"%s","current":%s,"total":%s,"unit":"steps","message":"%s"}\n' "$1" "$2" "$3" "$4"
 }
 
-for file in module.json server.py service.py sandbox.py runner.py schemas.py inventory.py artifact_io.py artifact_protocol.py python-compute.service; do
+for file in module.json server.py service.py sandbox.py runner.py checker.py install_pyright.py schemas.py inventory.py artifact_io.py artifact_protocol.py python-compute.service; do
 	test -f "$VANTA_MODULE_STAGE/$file"
 done
-for command in bash python3 bwrap prlimit systemctl runuser useradd apt-get; do
+for command in bash python3 node bwrap prlimit systemctl runuser useradd apt-get; do
 	command -v "$command" >/dev/null 2>&1
 done
 id "$VANTA_MODULE_RUN_AS" >/dev/null 2>&1
+
+mem_total_mb=$(awk '/^MemTotal:/ {printf "%d", $2 / 1024}' /proc/meminfo)
+swap_total_mb=$(awk '/^SwapTotal:/ {printf "%d", $2 / 1024}' /proc/meminfo)
+ram_plus_swap_mb=$((mem_total_mb + swap_total_mb))
+if [ "$mem_total_mb" -lt 900 ]; then
+	printf 'python-compute requires at least 900 MB physical RAM; this node has %s MB\n' "$mem_total_mb" >&2
+	exit 1
+fi
+if [ "$ram_plus_swap_mb" -lt 2048 ]; then
+	printf 'python-compute requires at least 2048 MB RAM plus active swap; this node has %s MB RAM + %s MB swap\n' "$mem_total_mb" "$swap_total_mb" >&2
+	exit 1
+fi
 
 export PYTHONDONTWRITEBYTECODE=1
 export DEBIAN_FRONTEND=noninteractive
@@ -67,7 +79,6 @@ trap 'rm -f "$env_tmp" "$dropin_tmp"; rm -rf "$tmp"' EXIT
 
 # Limits are sized from this node so a larger worker is not held to a 1 GB board's budget. The cgroup
 # caps must move with the per-call limits, or the service is killed long before a call reaches its own.
-mem_total_mb=$(awk '/^MemTotal:/ {printf "%d", $2 / 1024}' /proc/meminfo)
 cores=$(nproc)
 cgroup_high_mb=$(clamp $((mem_total_mb * 60 / 100)) 256 65536)
 cgroup_max_mb=$(clamp $((mem_total_mb * 75 / 100)) 320 65536)
@@ -75,6 +86,11 @@ if [ "$cores" -ge 4 ]; then derived_concurrency=2; else derived_concurrency=1; f
 concurrent_calls=$(clamp "${VANTA_MODULE_OPTION_CONCURRENT_CALLS:-$derived_concurrency}" 1 4)
 max_memory_mb=$(clamp "${VANTA_MODULE_OPTION_MAX_MEMORY_MB:-$((cgroup_high_mb / concurrent_calls))}" 128 4096)
 memory_mb=$(clamp "${VANTA_MODULE_OPTION_MEMORY_MB:-$((max_memory_mb * 2 / 3))}" 128 "$max_memory_mb")
+# Pyright runs under Node.js, whose 64-bit V8 startup reserves more address space than ordinary Python.
+# Swap-backed nodes may grant that virtual address space without raising python_run's physical-RAM-derived limits.
+max_check_memory_mb=$max_memory_mb
+if [ "$ram_plus_swap_mb" -ge 2048 ] && [ "$max_check_memory_mb" -lt 1024 ]; then max_check_memory_mb=1024; fi
+check_memory_mb=$(clamp 1024 128 "$max_check_memory_mb")
 max_timeout_ms=$(clamp "${VANTA_MODULE_OPTION_MAX_TIMEOUT_MS:-600000}" 1000 600000)
 default_timeout_ms=$(clamp 60000 1000 "$max_timeout_ms")
 max_background_timeout_ms=$(clamp "${VANTA_MODULE_OPTION_MAX_BACKGROUND_TIMEOUT_MS:-3600000}" 60000 21600000)
@@ -83,7 +99,7 @@ cpu_quota=$(( (cores - 1) * 100 ))
 if [ "$cpu_quota" -lt 100 ]; then cpu_quota=100; fi
 # One extra slot's worth of tasks for the background call that runs beside interactive calls.
 tasks_max=$(( 64 * (concurrent_calls + 1) + 32 ))
-progress environment "$step" "$total" "Sizing limits for ${mem_total_mb} MB RAM and ${cores} cores: ${memory_mb}/${max_memory_mb} MB per call, ${concurrent_calls} concurrent"
+progress environment "$step" "$total" "Sizing limits for ${mem_total_mb} MB RAM + ${swap_total_mb} MB swap and ${cores} cores: ${memory_mb}/${max_memory_mb} MB per run, ${check_memory_mb}/${max_check_memory_mb} MB per check, ${concurrent_calls} concurrent"
 
 {
 	printf 'VANTA_PYTHON_CALLER_UID=%s\n' "$caller_uid"
@@ -91,6 +107,8 @@ progress environment "$step" "$total" "Sizing limits for ${mem_total_mb} MB RAM 
 	printf 'VANTA_PYTHON_BUNDLE=%s\n' "$bundle"
 	printf 'VANTA_PYTHON_DEFAULT_MEMORY_MB=%s\n' "$memory_mb"
 	printf 'VANTA_PYTHON_MAX_MEMORY_MB=%s\n' "$max_memory_mb"
+	printf 'VANTA_PYTHON_DEFAULT_CHECK_MEMORY_MB=%s\n' "$check_memory_mb"
+	printf 'VANTA_PYTHON_MAX_CHECK_MEMORY_MB=%s\n' "$max_check_memory_mb"
 	printf 'VANTA_PYTHON_DEFAULT_TIMEOUT_MS=%s\n' "$default_timeout_ms"
 	printf 'VANTA_PYTHON_MAX_TIMEOUT_MS=%s\n' "$max_timeout_ms"
 	printf 'VANTA_PYTHON_MAX_BACKGROUND_TIMEOUT_MS=%s\n' "$max_background_timeout_ms"
@@ -121,6 +139,7 @@ mkdir -p "$parent"
 rm -rf "$tmp"
 mkdir -p "$tmp"
 cp -a "$VANTA_MODULE_STAGE/." "$tmp/"
+python3 "$tmp/install_pyright.py" "$tmp/pyright"
 
 step=$((step + 1))
 progress environment "$step" "$total" "Recording the package inventory"
@@ -138,6 +157,8 @@ python3 "$tmp/artifact_protocol.py"
 python3 "$tmp/artifact_io.py"
 python3 "$tmp/inventory.py" --self-test
 python3 "$tmp/runner.py" --self-test
+python3 "$tmp/checker.py" --self-test
+python3 "$tmp/install_pyright.py" --self-test
 python3 "$tmp/sandbox.py"
 python3 "$tmp/server.py" --self-test
 

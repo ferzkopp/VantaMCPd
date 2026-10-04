@@ -41,6 +41,8 @@ LIMITS = schemas.resolve_limits(
     concurrent_calls=os.environ.get("VANTA_PYTHON_CONCURRENT_CALLS"),
     calls_per_minute=os.environ.get("VANTA_PYTHON_CALLS_PER_MINUTE"),
     max_background_timeout_ms=os.environ.get("VANTA_PYTHON_MAX_BACKGROUND_TIMEOUT_MS"),
+    max_check_memory_mb=os.environ.get("VANTA_PYTHON_MAX_CHECK_MEMORY_MB"),
+    default_check_memory_mb=os.environ.get("VANTA_PYTHON_DEFAULT_CHECK_MEMORY_MB"),
 )
 ACTIVE_CALLS = threading.BoundedSemaphore(LIMITS["concurrentCalls"])
 # Durable background jobs get their own slot so a long run never blocks interactive calls.
@@ -120,6 +122,12 @@ def _limits() -> dict[str, Any]:
         "backgroundTimeoutMs": {"minimum": schemas.MIN_TIMEOUT_MS, "maximum": LIMITS["maxBackgroundTimeoutMs"], "default": LIMITS["maxBackgroundTimeoutMs"]},
         "backgroundCalls": 1,
         "memoryMb": {"minimum": schemas.MIN_MEMORY_MB, "maximum": LIMITS["maxMemoryMb"], "default": LIMITS["defaultMemoryMb"]},
+        "checkMemoryMb": {
+            "minimum": schemas.MIN_MEMORY_MB,
+            "maximum": LIMITS["maxCheckMemoryMb"],
+            "default": LIMITS["defaultCheckMemoryMb"],
+            "sizedFrom": "the node's RAM plus swap at installation",
+        },
         "codeCharacters": schemas.MAX_CODE_CHARACTERS,
         "inputBytes": schemas.MAX_INPUT_BYTES,
         "files": {"maximum": schemas.MAX_FILES, "totalCharacters": schemas.MAX_FILE_TOTAL_CHARACTERS},
@@ -141,8 +149,9 @@ def _describe(refresh: bool) -> dict[str, Any]:
         "limits": _limits(),
         "helpers": HELPERS,
         "usage": (
-            "Submit code with python_run. Each call starts a fresh interpreter with no network access, an empty "
-            "working directory, and no state from earlier calls. Import only the modules listed here."
+            "Use python_check to analyze source without executing it, or submit code with python_run. Each call "
+            "starts in a fresh sandbox with no network access, an empty working directory, and no state from earlier "
+            "calls. Import only the modules listed here when executing code."
         ),
     }
 
@@ -176,6 +185,9 @@ def execute(action: str, arguments: dict[str, Any], background: bool = False, ab
         if operation == "packages":
             return _packages(request.get("query"), request.get("group"), request["refresh"])
         return SANDBOX.check(request["imports"])
+    if action == "python_check":
+        request = schemas.validate_check(arguments, LIMITS)
+        return SANDBOX.analyze(request, abandoned)
     if action == "python_run":
         request = schemas.validate_run(arguments, LIMITS, background=background)
         result = SANDBOX.run(request, abandoned)
@@ -189,6 +201,11 @@ def execute(action: str, arguments: dict[str, Any], background: bool = False, ab
 
 def _summary(action: str, arguments: Any) -> str:
     """Submitted code can contain sensitive data, so only its digest and length are logged."""
+    if action == "python_check" and isinstance(arguments, dict):
+        files = arguments.get("files")
+        if isinstance(files, list):
+            payload = "".join(str(entry.get("text", "")) for entry in files if isinstance(entry, dict)).encode("utf-8")
+            return f"sha256:{sha256(payload).hexdigest()[:12]} bytes={len(payload)} files={len(files)}"
     if action != "python_run" or not isinstance(arguments, dict) or not isinstance(arguments.get("code"), str):
         return "-"
     code = arguments["code"].encode("utf-8")
@@ -212,7 +229,7 @@ class RequestHandler(socketserver.BaseRequestHandler):
             action = message.get("action")
             arguments = message.get("arguments", {})
             execution = message.get("execution", "immediate")
-            if action not in ("ping", "python_env", "python_run"):
+            if action not in ("ping", "python_env", "python_check", "python_run"):
                 raise ValueError("unknown broker action")
             if not isinstance(arguments, dict):
                 raise ValueError("arguments must be an object")

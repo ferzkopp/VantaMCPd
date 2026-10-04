@@ -52,7 +52,7 @@ def build_limited_argv(memory_mb: int, timeout_seconds: float) -> list[str]:
     ]
 
 
-def build_bwrap_argv(call_dir: str, runner_path: str, system_paths=SYSTEM_PATHS, extra_read_only=EXTRA_READ_ONLY, exists=os.path.exists, islink=os.path.islink, readlink=os.readlink, has_inputs: bool = False) -> list[str]:
+def build_bwrap_argv(call_dir: str, runner_path: str, system_paths=SYSTEM_PATHS, extra_read_only=EXTRA_READ_ONLY, exists=os.path.exists, islink=os.path.islink, readlink=os.readlink, has_inputs: bool = False, read_only_binds: tuple[tuple[str, str], ...] = ()) -> list[str]:
     """Argument vector for one sandboxed interpreter. Injectable probes keep this unit-testable."""
     argv = [BWRAP, "--unshare-all", "--unshare-user", "--unshare-net", "--unshare-pid", "--die-with-parent", "--new-session"]
     for path in system_paths:
@@ -90,6 +90,8 @@ def build_bwrap_argv(call_dir: str, runner_path: str, system_paths=SYSTEM_PATHS,
     ]
     if has_inputs:
         argv += ["--ro-bind", posixpath.join(call_dir, "inputs"), "/inputs"]
+    for source, target in read_only_binds:
+        argv += ["--ro-bind", source, target]
     argv += [PYTHON, "-I", "-B", "/vanta-runner.py"]
     return argv
 
@@ -107,6 +109,14 @@ class Sandbox:
     @property
     def runner_path(self) -> str:
         return os.path.join(self.install_dir, "runner.py")
+
+    @property
+    def checker_path(self) -> str:
+        return os.path.join(self.install_dir, "checker.py")
+
+    @property
+    def pyright_path(self) -> str:
+        return os.path.join(self.install_dir, "pyright")
 
     def purge_stale_calls(self) -> None:
         for name in os.listdir(self.calls_dir):
@@ -146,7 +156,23 @@ class Sandbox:
             raise ValueError(outcome.get("error", {}).get("message") or "import check failed")
         return {"imports": outcome.get("imports", []), "durationMs": outcome["durationMs"]}
 
-    def run(self, request: dict[str, Any], abandoned: Callable[[], bool] | None = None) -> dict[str, Any]:
+    def analyze(self, request: dict[str, Any], abandoned: Callable[[], bool] | None = None) -> dict[str, Any]:
+        outcome = self.run(
+            request,
+            abandoned,
+            runner_path=self.checker_path,
+            read_only_binds=((self.pyright_path, "/vanta-pyright"),),
+        )
+        if outcome["exitReason"] != "completed":
+            return outcome
+        result = outcome.get("result")
+        if not isinstance(result, dict):
+            raise ValueError("Pyright returned an invalid result")
+        result["durationMs"] = outcome["totalDurationMs"]
+        result["isolation"] = outcome["isolation"]
+        return result
+
+    def run(self, request: dict[str, Any], abandoned: Callable[[], bool] | None = None, runner_path: str | None = None, read_only_binds: tuple[tuple[str, str], ...] = ()) -> dict[str, Any]:
         call_dir = os.path.join(self.calls_dir, uuid.uuid4().hex)
         workspace = os.path.join(call_dir, "workspace")
         os.makedirs(workspace, mode=0o700)
@@ -167,7 +193,7 @@ class Sandbox:
                 reservation_id = artifact_io.reserve(self.artifact_root, "python-compute", request["artifactBudgetBytes"])
             with open(os.path.join(call_dir, "request.json"), "w", encoding="utf-8") as handle:
                 json.dump(request, handle, ensure_ascii=False)
-            outcome = self._execute(call_dir, workspace, request, abandoned)
+            outcome = self._execute(call_dir, workspace, request, abandoned, runner_path, read_only_binds)
             if request.get("artifactMode") == "store":
                 outcome["artifacts"] = artifact_io.publish(self.artifact_root, reservation_id, "python-compute", outcome.pop("artifactFiles", []), workspace, request["artifactRetentionDays"])
                 reservation_id = None
@@ -184,9 +210,14 @@ class Sandbox:
         else:
             os.makedirs(target, mode=0o700)
 
-    def _execute(self, call_dir: str, workspace: str, request: dict[str, Any], abandoned: Callable[[], bool] | None = None) -> dict[str, Any]:
+    def _execute(self, call_dir: str, workspace: str, request: dict[str, Any], abandoned: Callable[[], bool] | None = None, runner_path: str | None = None, read_only_binds: tuple[tuple[str, str], ...] = ()) -> dict[str, Any]:
         timeout_seconds = request["timeoutMs"] / 1000
-        argv = build_limited_argv(request["memoryMb"], timeout_seconds) + build_bwrap_argv(call_dir, self.runner_path, has_inputs=bool(request.get("artifactInputs")))
+        argv = build_limited_argv(request["memoryMb"], timeout_seconds) + build_bwrap_argv(
+            call_dir,
+            runner_path or self.runner_path,
+            has_inputs=bool(request.get("artifactInputs")),
+            read_only_binds=read_only_binds,
+        )
         started = time.monotonic()
         deadline = started + timeout_seconds + GRACE_SECONDS
         killed = False

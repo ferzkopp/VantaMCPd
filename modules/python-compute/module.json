@@ -2,19 +2,21 @@
   "schemaVersion": 2,
   "id": "python-compute",
   "name": "Python Compute",
-  "version": "0.3.3",
-  "description": "Run bounded Python 3 code in a sandboxed process with a curated scientific package set.",
+  "version": "0.4.4",
+  "description": "Run bounded Python 3 code and check Python source with the Pyright engine used by Pylance.",
   "capabilities": [
     "calculate, solve equations and simulate instead of estimating an answer",
     "fit curves, run regressions, correlations and statistical tests on data",
-    "do exact, symbolic or arbitrary-precision math with SymPy",
-    "analyze CSV or JSON datasets: aggregate, pivot, join and summarize",
-    "plot data as PNG chart images and return tables as CSV",
+    "solve symbolic, arbitrary-precision and constraint problems with SymPy and Z3",
+    "analyze datasets and convert CSV, JSON, ODF, MessagePack and CBOR formats",
+    "plot statistical data with Seaborn and return PNG charts and CSV tables",
+    "calculate with physical units and convert measurements safely with Pint",
     "read shared artifacts and publish large compute outputs without base64",
     "analyze graphs and networks: paths, centrality and connectivity",
     "resize, convert and inspect images",
-    "run supplied Python code and return values, output and errors",
-    "report which Python packages and versions a node provides"
+    "encrypt, decrypt, sign and inspect certificates with cryptography",
+    "check Python syntax and types with Pyright, the engine that powers Pylance",
+    "run Python and report the node's packages, returned values, output and errors"
   ],
   "entrypoint": ["python3", "server.py"],
   "sharedFiles": ["artifact_protocol.py"],
@@ -23,11 +25,12 @@
     "architectures": ["armhf", "arm64", "amd64"],
     "minCores": 2,
     "minRamMb": 900,
+    "minRamPlusSwapMb": 2048,
     "minDiskMb": 2560,
     "requiredCommands": ["bash", "python3", "bwrap", "prlimit", "systemctl", "apt-get"],
     "accelerators": []
   },
-  "packages": { "apt": ["python3", "bubblewrap", "passwd", "util-linux"] },
+  "packages": { "apt": ["python3", "bubblewrap", "passwd", "util-linux", "nodejs"] },
   "lifecycle": {
     "install": "install.sh",
     "uninstall": "uninstall.sh",
@@ -37,7 +40,7 @@
   "installOptions": {
     "bundle": {
       "type": "string",
-      "description": "Package set provisioned on the node. core is NumPy only, science adds SciPy, pandas, matplotlib and SymPy, full adds scikit-learn, statsmodels, Shapely and document parsers.",
+      "description": "Package set provisioned on the node. core provides NumPy and data utilities; science adds SciPy, pandas, plotting, Pint, SymPy and GMPY2; full adds machine learning, Z3, binary/document formats and cryptography.",
       "values": ["core", "science", "full"],
       "default": "science"
     },

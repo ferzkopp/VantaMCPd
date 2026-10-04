@@ -56,6 +56,35 @@ exit 0
 
 export function registerSystemTools(server: ToolServer, ctx: ToolContext): void {
   server.registerTool(
+    "cluster_monitor",
+    {
+      title: "Open the Vanta monitoring console",
+      description:
+        "Return the live local Vanta monitoring-console URL and its current state. Call this when the user asks to open, view, watch, or inspect the Vanta dashboard, then use the MCP client's browser-opening capability if it has one. The daemon only returns the verified loopback URL; it never launches a GUI process itself.",
+      inputSchema: {},
+    },
+    async () => {
+      const monitoring = ctx.config.monitoring;
+      if (ctx.monitor) {
+        return {
+          content: [{
+            type: "text" as const,
+            text:
+              `Vanta monitoring console: [Open ${ctx.monitor.url}](${ctx.monitor.url})\n\n` +
+              "The console is running and bound to loopback on the Vanta host. Open this URL with the client's browser capability.",
+          }],
+        };
+      }
+      const detail = !monitoring.enabled
+        ? "Monitoring is disabled. Set monitoring.enabled to true and restart VantaMCPd."
+        : !monitoring.web
+          ? "Web monitoring is disabled. Set monitoring.web to true and restart VantaMCPd."
+          : `The dashboard is configured for http://127.0.0.1:${monitoring.port} but is not listening. Check VantaMCPd stderr for a port conflict or missing dist/web assets.`;
+      return json({ running: false, url: undefined, detail }, true);
+    },
+  );
+
+  server.registerTool(
     "cluster_list_nodes",
     {
       title: "List cluster nodes",

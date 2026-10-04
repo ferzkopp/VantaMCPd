@@ -52,6 +52,7 @@ const EXPECTED_TOOLS = [
   "cluster_list_modules",
   "cluster_list_nodes",
   "cluster_logs",
+  "cluster_monitor",
   "cluster_packages",
   "cluster_ping",
   "cluster_power",
@@ -244,6 +245,30 @@ test("agent instructions prefer artifact uploads over SFTP staging", () => {
   const uploadDescription = tools.get("cluster_upload").config.description;
   assert.match(uploadDescription, /only for intentional node filesystem deployment/);
   assert.match(uploadDescription, /do not use this tool to stage local files for artifact-aware modules/);
+});
+
+test("monitor tool returns only a verified live console URL", async () => {
+  const { ctx, tools } = buildContext();
+  ctx.config.monitoring = { ...ctx.config.monitoring, enabled: true, web: true };
+  ctx.monitor = { url: "http://127.0.0.1:7420", logDir: "/tmp" };
+
+  const running = await call(tools, "cluster_monitor", {});
+  assert.equal(running.isError, undefined);
+  assert.match(body(running), /\[Open http:\/\/127\.0\.0\.1:7420\]\(http:\/\/127\.0\.0\.1:7420\)/);
+  assert.match(body(running), /client's browser capability/);
+
+  delete ctx.monitor;
+  const stopped = await call(tools, "cluster_monitor", {});
+  assert.equal(stopped.isError, true);
+  assert.match(body(stopped), /configured for http:\/\/127\.0\.0\.1:7420 but is not listening/);
+});
+
+test("monitor tool explains when web monitoring is disabled", async () => {
+  const { ctx, tools } = buildContext();
+  ctx.config.monitoring = { ...ctx.config.monitoring, enabled: true, web: false };
+  const result = await call(tools, "cluster_monitor", {});
+  assert.equal(result.isError, true);
+  assert.match(body(result), /Web monitoring is disabled/);
 });
 
 test("uploads a local file through artifact-storage with bounded verified chunks", async () => {

@@ -180,6 +180,8 @@ export const ModuleManifestSchema = z
         architectures: z.array(z.string().min(1).max(50)).min(1).optional(),
         minCores: z.number().int().positive().optional(),
         minRamMb: z.number().int().positive().optional(),
+        /** Installed physical RAM plus active swap. Use with minRamMb when both a RAM floor and backing total matter. */
+        minRamPlusSwapMb: z.number().int().positive().optional(),
         /** Free space on the root filesystem. Persistent data is sized separately by persistentData.minFreeMb. */
         minDiskMb: z.number().int().positive().optional(),
         requiredCommands: z.array(z.string().regex(COMMAND)).max(100).default([]),

@@ -2,9 +2,10 @@
 
 ## Purpose
 
-Python Compute lets an MCP agent run real Python on a cluster node. It provides a curated scientific
-package set and a sandboxed interpreter, so an agent can inspect what the node can do, submit code, and
-receive values, printed output, tables, and rendered charts.
+Python Compute lets an MCP agent run real Python or statically check Python source on a cluster node. It
+provides a curated scientific package set, a sandboxed interpreter, and the Pyright analysis engine used
+by Pylance, so an agent can inspect what the node can do, check source, submit code, and receive values,
+printed output, tables, and rendered charts.
 
 ![Python Compute graph and clustering analysis alongside the VantaMCPd monitor](python-compute-sample.png)
 
@@ -16,9 +17,15 @@ not a hostile-code security boundary.
 
 ## Requirements
 
-Debian or Ubuntu on `armhf`, `arm64`, or `amd64` with at least two CPU cores, 900 MB RAM, and 2.5 GB
-free on the root filesystem. It requires Python 3, bubblewrap, `prlimit`, and systemd, plus working
-unprivileged user namespaces. It does not require a GPU or configured node storage.
+Debian or Ubuntu on `armhf`, `arm64`, or `amd64` with at least two CPU cores, 900 MB physical RAM,
+2 GB combined RAM and active swap, and 2.5 GB free on the root filesystem. It requires Python 3,
+Node.js, bubblewrap, `prlimit`, and systemd, plus working unprivileged user namespaces. It does not
+require a GPU or configured node storage.
+
+Pylance itself is a closed-source Visual Studio Code extension rather than a supported standalone
+checker. The module therefore installs the pinned, MIT-licensed Pyright CLI: Microsoft documents
+Pyright as the static type checker that powers Pylance. This supplies the requested headless syntax and
+type diagnostics without copying or trying to launch the editor extension on a server.
 
 The manifest expresses hardware requirements rather than a node name. In the examples below,
 `compute-worker` is any inventory node that satisfies them.
@@ -46,12 +53,48 @@ Discover what the node provides before writing any code:
 
 > Ask python-compute what Python packages are available on compute-worker.
 
+Check source without executing it:
+
+> Use python-compute on compute-worker to check `value: int = "wrong"` as Python 3.12 in standard mode.
+
 ## Worked Examples
 
 Each request below is self-contained: paste it into an agent connected to VantaMCPd. Every timing is a
 measured range across two very different nodes with the `full` bundle, from a four-core AMD64 worker at
 the fast end to a 960 MHz dual-core ARMv7 board at the slow end. All of them include interpreter start
 and imports, which dominate the short examples.
+
+**Pylance-compatible syntax and type diagnostics** (1-18 s, Pyright 1.1.414)
+
+> Check these files as Python 3.12 in strict mode without executing them:
+>
+> `models.py`
+> ```python
+> def label(value: int) -> str:
+>     return value
+> ```
+>
+> `main.py`
+> ```python
+> from models import label
+>
+> result: int = label("three")
+> ```
+
+The agent sends both files to `python_check`. On both ARMv7 and AMD64, the measured result is three
+errors with no warnings:
+
+```text
+main.py:2:14 reportAssignmentType  Type "str" is not assignable to declared type "int"
+main.py:2:20 reportArgumentType    Literal["three"] cannot be assigned to parameter "value" of type "int"
+models.py:1:11 reportReturnType    Type "int" is not assignable to return type "str"
+```
+
+The returned ranges are zero-based; the display above uses `line:character` from each range's start.
+The full result also reports Pyright `1.1.414`, `filesAnalyzed: 2`, summary counts, duration, and sandbox
+isolation. The files are analyzed together, so `from models import label` resolves, but none of the
+submitted source is imported or executed. The same check measured about 1 second on four-core AMD64 and
+17.5 seconds on the 960 MHz dual-core ARMv7 worker.
 
 **Regression and confidence intervals** (1-5 s, SciPy)
 
@@ -96,6 +139,34 @@ artifact alongside the ranked totals.
 Returns a 62-66 KB PNG captured automatically from the open figure, plus any values the code reports.
 This is the example where node choice matters most: the 172,800-pixel escape-time loop is the work,
 not the imports.
+
+**Statistical visualization and physical units** (Seaborn and Pint)
+
+> Convert 35 miles per US gallon to liters per 100 kilometers, then plot a Seaborn bar chart comparing
+> that consumption with vehicles using 6.5 and 8.0 liters per 100 kilometers.
+
+Pint performs the dimensional conversion rather than relying on a hand-written constant, and Seaborn
+renders the comparison through the same automatically captured matplotlib figure path.
+
+**Constraint solving** (Z3)
+
+> Use Z3 to find positive integer values for x, y, and z where x + y + z = 30, x is twice y, and z is
+> greater than y. Return one satisfying model and verify every constraint.
+
+Z3 is part of the `full` bundle. Keep models within the node's reported memory and timeout limits;
+advanced APIs added after the ARM node's distribution version are not portable across every worker.
+
+**Binary formats and cryptography** (`full` bundle)
+
+> Encode this JSON-compatible object as MessagePack and CBOR, compress each result with Zstandard, and
+> return their sizes and SHA-256 hashes.
+
+> Generate a temporary Fernet key, encrypt a supplied message, decrypt it immediately, and return the
+> ciphertext plus a boolean showing that the plaintext round trip succeeded.
+
+The full bundle also reads and writes OpenDocument files through odfpy and converts Markdown to HTML.
+Cryptographic key material must be supplied or generated within the call; Python Compute is not a
+persistent key-management system.
 
 **Graphs and clustering** (1-8 s, NetworkX and scikit-learn)
 
@@ -184,8 +255,39 @@ code, so the inventory is the contract.
 `describe` answers from the inventory recorded at installation. Pass `refresh: true` to re-scan the node,
 for example after packages were changed outside the module.
 
-Capability groups are `numeric`, `dataframe`, `plotting`, `imaging`, `symbolic`, `statistics`, `graph`,
-`geometry`, `text`, `serialization`, and `standard-library`.
+Capability groups are `numeric`, `dataframe`, `plotting`, `units`, `imaging`, `symbolic`, `statistics`,
+`graph`, `geometry`, `text`, `serialization`, `formats`, `cryptography`, and `standard-library`.
+
+### `python_check`
+
+Checks Python source without executing it. Pyright runs in the same fresh network-free, read-only-system
+sandbox used by `python_run`; the submitted files exist only for the duration of the call.
+
+| Field | Default | Bounds and behavior |
+| --- | --- | --- |
+| `files` | Required | 1-10 `.py` or `.pyi` files, each up to 65,536 characters and 131,072 characters total |
+| `pythonVersion` | `3.11` | Language version from `3.8` through `3.15` |
+| `typeCheckingMode` | `standard` | `off`, `basic`, `standard`, or `strict`, matching Pyright/Pylance rule sets |
+| `timeoutMs` | node-sized | 1000 ms to the node's interactive ceiling |
+| `memoryMb` | checker-sized | 1024 MB on nodes meeting the RAM-plus-swap requirement; explicit values may use 128 MB through the checker ceiling |
+
+The checker uses a larger address-space default than `python_run` because Node.js/V8 reserves more
+virtual address space during startup. On a small swap-backed ARM node this may be slower under memory
+pressure, but it avoids rejecting Pyright during V8 startup. Ordinary Python execution keeps its
+physical-RAM-derived limits. `python_env` reports the checker minimum, maximum, default, and sizing
+basis under `limits.checkMemoryMb`.
+
+The result reports the Pyright version, files analyzed, error/warning/information counts, and up to
+1,000 structured diagnostics. Each diagnostic includes `file`, zero-based `range`, `severity`, `rule`,
+and `message`. `ok` is true when no error-severity diagnostics were found; warnings do not make the
+check fail.
+
+For syntax checking with minimal type analysis:
+
+> Check `main.py` as Python 3.12 with `typeCheckingMode` set to `off`.
+
+Use `basic`, `standard`, or `strict` when the request also needs type errors. Files supplied in one call
+are analyzed as one workspace, so imports between them resolve.
 
 ### `python_run`
 
@@ -260,12 +362,18 @@ dependencies may pull in additional modules, which the inventory reports accurat
 | Bundle | Adds | Approximate root-filesystem cost |
 | --- | --- | --- |
 | `core` | NumPy, PyYAML, python-dateutil, tabulate | ~100 MB |
-| `science` (default) | SciPy, pandas, matplotlib, Pillow, SymPy, NetworkX, DejaVu fonts | ~450 MB |
-| `full` | scikit-learn, statsmodels, Shapely, lxml, BeautifulSoup, Jinja2, regex, openpyxl | ~800 MB |
+| `science` (default) | SciPy, pandas, matplotlib, Seaborn, Pint, Pillow, SymPy, GMPY2, NetworkX, DejaVu fonts | ~450 MB |
+| `full` | scikit-learn, statsmodels, Z3, cryptography, Markdown, MessagePack, CBOR2, ODF, Zstandard, Shapely, document parsers, openpyxl | Distribution-dependent; covered by the 2.5 GB free-disk requirement |
 
-Packages come from the node's distribution, which is what makes a full scientific stack practical on
-ARMv7 where prebuilt wheels are unavailable. Submitted code cannot install packages, and `pip` is not
-used. To change the bundle on a node, uninstall and reinstall with the new option.
+Python packages and Node.js come from the node's distribution, which is what makes the stack practical
+on ARMv7 where prebuilt wheels are unavailable. The installer downloads a pinned Pyright npm tarball,
+verifies its SHA-512 integrity, and extracts it without running package scripts or installing npm.
+Submitted code cannot install packages, and `pip` is not used. To change the bundle on a node, uninstall
+and reinstall with the new option.
+
+The cryptography package supports bounded encryption, decryption, signatures, key serialization, and
+certificate inspection. The sandbox has no secret-store integration or persistent private state, so
+callers must supply key material explicitly and should not treat the module as a key-management system.
 
 ### Node-sized execution limits
 
@@ -278,8 +386,10 @@ the service cgroup stops the process first.
 | --- | --- |
 | Service memory | `MemoryHigh` at 60% and `MemoryMax` at 75% of node RAM |
 | Concurrent calls | 2 on four cores or more, otherwise 1 |
-| Per-call ceiling | `MemoryHigh` divided by the concurrency, capped at 4096 MB |
-| Per-call default | Two thirds of that ceiling |
+| `python_run` ceiling | `MemoryHigh` divided by the concurrency, capped at 4096 MB |
+| `python_run` default | Two thirds of that ceiling |
+| `python_check` ceiling | The `python_run` ceiling, raised to 1024 MB when RAM plus active swap is at least 2 GB |
+| `python_check` default | 1024 MB, capped by the checker ceiling |
 | Calls per minute | 12 per concurrent call |
 | CPU and tasks | `CPUQuota` of `(cores - 1) x 100%`, minimum 100%; `TasksMax` of `64 x (concurrency + 1) + 32`, which leaves room for the background slot |
 
@@ -345,6 +455,9 @@ connection.
 This is defense in depth for trusted agent-authored code. It does not claim to contain a deliberate
 exploit of the kernel or of the interpreter.
 
+`python_check` uses the same isolation and limits but starts the bundled Pyright CLI through Node.js.
+The checked source is read as data and is never imported or executed.
+
 ## Resource Limits
 
 A broker runs one call at a time on a small node, and two on a node with four or more cores. A call that
@@ -352,7 +465,7 @@ arrives when every slot is busy waits about five seconds and is then rejected ra
 call is additionally limited to:
 
 - 10 minutes of wall-clock time at most for an interactive call (background calls use the background
-  ceiling), and the node's per-call memory ceiling;
+  ceiling), and the selected tool's node-sized memory ceiling;
 - 32 MB of files written inside the working directory;
 - 8 inline artifacts, 1 MB each and 1.5 MB total, or stored artifacts up to 32 MiB each and a 64 MiB reserved total;
 - 256 KiB of retained stdout and stderr; and
@@ -409,6 +522,8 @@ artifacts are never written to the node's logs.
 | Error | Meaning |
 | --- | --- |
 | `code must be a non-empty string` | No code was supplied |
+| `files must be a non-empty array` | `python_check` received no source files |
+| `invalid Python file name` | A checked file was not a flat `.py` or `.pyi` name |
 | `unknown argument: ...` | An unsupported field was passed; check `python_env` for the accepted limits |
 | `exitReason: timeout` | The code exceeded `timeoutMs` and its process group was terminated |
 | `exitReason: memory` | The code reached the `memoryMb` address-space limit |

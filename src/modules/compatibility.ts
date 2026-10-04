@@ -76,6 +76,18 @@ export function evaluateCompatibility(manifest: ModuleManifest, node: ResolvedNo
     else if (actual < requirements.minRamMb) reasons.push(`requires ${requirements.minRamMb} MB RAM; node has ${actual} MB`);
   }
 
+  if (requirements.minRamPlusSwapMb !== undefined) {
+    const ram = hardware.memory?.totalMb;
+    const swap = hardware.memory?.swapTotalMb;
+    if (ram === undefined || swap === undefined) {
+      unknown.push("total RAM or swap is not recorded");
+    } else if (ram + swap < requirements.minRamPlusSwapMb) {
+      reasons.push(
+        `requires ${requirements.minRamPlusSwapMb} MB RAM plus swap; node has ${ram + swap} MB (${ram} MB RAM + ${swap} MB swap)`,
+      );
+    }
+  }
+
   if (manifest.persistentData?.storage === "node") {
     if (!node.storage) {
       reasons.push("requires configured node-local storage");

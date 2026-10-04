@@ -462,9 +462,13 @@ Get-Content ~\.vanta\logs\vanta-2026-09-13.jsonl | ConvertFrom-Json |
 
 ### Telling the agent about it
 
-The daemon advertises the dashboard in two places, so an MCP-capable agent can point you at it unprompted:
+The daemon advertises the dashboard in three places, so an MCP-capable agent can point you at it or open
+it through a client-provided browser capability:
 
 - The MCP server **instructions** carry the URL, so the agent knows about it from the first message.
+- `cluster_monitor` returns the verified live URL as a clickable link. Ask an agent *"Open the Vanta
+  monitoring console"* to use it; the tool reports an error instead of returning a configured-but-stale
+  URL when the dashboard is not listening.
 - `cluster_list_nodes` returns a `monitoring` block reporting the **live** state, not just the intent:
 
 ```jsonc

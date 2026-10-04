@@ -21,6 +21,7 @@ DEFAULT_BACKGROUND_TIMEOUT_MS = 3_600_000
 MIN_MEMORY_MB = 128
 MAX_MEMORY_MB = 4_096
 DEFAULT_MEMORY_MB = 384
+DEFAULT_CHECK_MEMORY_MB = 1_024
 MAX_CONCURRENT_CALLS = 4
 MAX_CALLS_PER_MINUTE = 120
 MIN_STDOUT_BYTES = 1_024
@@ -34,6 +35,7 @@ MAX_STORED_ARTIFACT_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_ARTIFACT_INPUTS = 8
 MAX_ARTIFACT_INPUT_BYTES = 64 * 1024 * 1024
 MAX_IMPORTS = 20
+PYTHON_VERSION = re.compile(r"^3\.(?:[8-9]|1[0-5])$")
 
 
 def _clamp(value: Any, minimum: int, maximum: int, fallback: int) -> int:
@@ -52,15 +54,29 @@ def resolve_limits(
     concurrent_calls: Any = None,
     calls_per_minute: Any = None,
     max_background_timeout_ms: Any = None,
+    max_check_memory_mb: Any = None,
+    default_check_memory_mb: Any = None,
 ) -> dict[str, int]:
     """Clamp installation-derived limits into the absolute bounds the tool schema advertises."""
     resolved_max_timeout = _clamp(max_timeout_ms, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS, MAX_TIMEOUT_MS)
     resolved_max_memory = _clamp(max_memory_mb, MIN_MEMORY_MB, MAX_MEMORY_MB, MAX_MEMORY_MB)
+    resolved_max_check_memory = _clamp(max_check_memory_mb, MIN_MEMORY_MB, MAX_MEMORY_MB, resolved_max_memory)
+    resolved_default_memory = min(_clamp(default_memory_mb, MIN_MEMORY_MB, MAX_MEMORY_MB, DEFAULT_MEMORY_MB), resolved_max_memory)
     return {
         "maxTimeoutMs": resolved_max_timeout,
         "defaultTimeoutMs": min(_clamp(default_timeout_ms, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS, DEFAULT_TIMEOUT_MS), resolved_max_timeout),
         "maxMemoryMb": resolved_max_memory,
-        "defaultMemoryMb": min(_clamp(default_memory_mb, MIN_MEMORY_MB, MAX_MEMORY_MB, DEFAULT_MEMORY_MB), resolved_max_memory),
+        "defaultMemoryMb": resolved_default_memory,
+        "maxCheckMemoryMb": resolved_max_check_memory,
+        "defaultCheckMemoryMb": min(
+            _clamp(
+                default_check_memory_mb,
+                MIN_MEMORY_MB,
+                MAX_MEMORY_MB,
+                max(resolved_default_memory, DEFAULT_CHECK_MEMORY_MB),
+            ),
+            resolved_max_check_memory,
+        ),
         "concurrentCalls": _clamp(concurrent_calls, 1, MAX_CONCURRENT_CALLS, 1),
         "callsPerMinute": _clamp(calls_per_minute, 1, MAX_CALLS_PER_MINUTE, 12),
         "maxBackgroundTimeoutMs": _clamp(max_background_timeout_ms, MIN_BACKGROUND_TIMEOUT_MS, MAX_BACKGROUND_TIMEOUT_MS, DEFAULT_BACKGROUND_TIMEOUT_MS),
@@ -102,6 +118,51 @@ TOOLS: dict[str, dict[str, Any]] = {
                 },
                 "refresh": {"type": "boolean", "default": False, "description": "Re-scan installed modules instead of using the inventory recorded at installation."},
             },
+            "additionalProperties": False,
+        },
+    },
+    "python_check": {
+        "description": (
+            "Check one or more Python source files with Pyright, the open-source static-analysis engine that powers "
+            "Pylance diagnostics. Returns structured syntax, import, type, and warning diagnostics with file, range, "
+            "severity, rule, and message. Analysis runs in a fresh network-free sandbox and does not execute the "
+            "submitted source. Use typeCheckingMode 'off' for syntax and unresolved-name/import checks only, or "
+            "'basic', 'standard', and 'strict' for progressively stronger type checking."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "files": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": MAX_FILES,
+                    "description": "Python source files analyzed together as one workspace.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": FILE_NAME.pattern},
+                            "text": {"type": "string", "maxLength": MAX_FILE_CHARACTERS},
+                        },
+                        "required": ["name", "text"],
+                        "additionalProperties": False,
+                    },
+                },
+                "pythonVersion": {
+                    "type": "string",
+                    "pattern": PYTHON_VERSION.pattern,
+                    "default": "3.11",
+                    "description": "Python language version used for syntax and type analysis, from 3.8 through 3.15.",
+                },
+                "typeCheckingMode": {
+                    "type": "string",
+                    "enum": ["off", "basic", "standard", "strict"],
+                    "default": "standard",
+                    "description": "Pyright/Pylance diagnostic rule set.",
+                },
+                "timeoutMs": {"type": "integer", "minimum": MIN_TIMEOUT_MS, "maximum": MAX_TIMEOUT_MS, "default": 60_000},
+                "memoryMb": {"type": "integer", "minimum": MIN_MEMORY_MB, "maximum": MAX_MEMORY_MB},
+            },
+            "required": ["files"],
             "additionalProperties": False,
         },
     },
@@ -215,6 +276,65 @@ def validate_env(arguments: dict[str, Any]) -> dict[str, Any]:
     return request
 
 
+def _source_files(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("files must be a non-empty array")
+    if len(value) > MAX_FILES:
+        raise ValueError(f"files accepts at most {MAX_FILES} entries")
+    files = []
+    seen: set[str] = set()
+    total_characters = 0
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ValueError("each file must be an object")
+        _reject_unknown(entry, {"name", "text"})
+        name, text = entry.get("name"), entry.get("text")
+        if not isinstance(name, str) or not FILE_NAME.match(name) or not name.endswith((".py", ".pyi")):
+            raise ValueError(f"invalid Python file name: {name!r}")
+        if name in seen:
+            raise ValueError(f"duplicate file name: {name}")
+        if not isinstance(text, str):
+            raise ValueError(f"file {name} must provide text")
+        if len(text) > MAX_FILE_CHARACTERS:
+            raise ValueError(f"file {name} exceeds {MAX_FILE_CHARACTERS} characters")
+        total_characters += len(text)
+        if total_characters > MAX_FILE_TOTAL_CHARACTERS:
+            raise ValueError(f"files exceed {MAX_FILE_TOTAL_CHARACTERS} characters in total")
+        seen.add(name)
+        files.append({"name": name, "text": text})
+    return files
+
+
+def validate_check(arguments: dict[str, Any], limits: dict[str, int]) -> dict[str, Any]:
+    _reject_unknown(arguments, {"files", "pythonVersion", "typeCheckingMode", "timeoutMs", "memoryMb"})
+    python_version = arguments.get("pythonVersion", "3.11")
+    if not isinstance(python_version, str) or not PYTHON_VERSION.fullmatch(python_version):
+        raise ValueError("pythonVersion must be between 3.8 and 3.15")
+    type_checking_mode = arguments.get("typeCheckingMode", "standard")
+    if type_checking_mode not in ("off", "basic", "standard", "strict"):
+        raise ValueError("typeCheckingMode must be off, basic, standard or strict")
+    return {
+        "mode": "pyright",
+        "files": _source_files(arguments.get("files")),
+        "pythonVersion": python_version,
+        "typeCheckingMode": type_checking_mode,
+        "timeoutMs": _integer(arguments, "timeoutMs", MIN_TIMEOUT_MS, limits["maxTimeoutMs"], limits["defaultTimeoutMs"]),
+        "memoryMb": _integer(
+            arguments,
+            "memoryMb",
+            MIN_MEMORY_MB,
+            limits["maxCheckMemoryMb"],
+            limits["defaultCheckMemoryMb"],
+        ),
+        "maxStdoutBytes": DEFAULT_STDOUT_BYTES,
+        "artifacts": False,
+        "inputs": {},
+        "maxArtifacts": 0,
+        "maxArtifactBytes": 0,
+        "maxArtifactTotalBytes": 0,
+    }
+
+
 def validate_run(arguments: dict[str, Any], limits: dict[str, int], background: bool = False) -> dict[str, Any]:
     _reject_unknown(arguments, {"code", "inputs", "files", "artifactInputs", "artifactMode", "artifactBudgetBytes", "artifactRetentionDays", "timeoutMs", "memoryMb", "artifacts", "maxStdoutBytes"})
     code = arguments.get("code")
@@ -306,14 +426,32 @@ def validate_run(arguments: dict[str, Any], limits: dict[str, int], background: 
 
 
 def self_test() -> None:
-    assert list(TOOLS) == ["python_env", "python_run"]
+    assert list(TOOLS) == ["python_env", "python_check", "python_run"]
     for tool in TOOLS.values():
         assert tool["inputSchema"]["additionalProperties"] is False
 
     node = resolve_limits(max_memory_mb=1176, default_memory_mb=784, concurrent_calls=2, calls_per_minute=24)
-    assert node == {"maxTimeoutMs": MAX_TIMEOUT_MS, "defaultTimeoutMs": DEFAULT_TIMEOUT_MS, "maxMemoryMb": 1176, "defaultMemoryMb": 784, "concurrentCalls": 2, "callsPerMinute": 24, "maxBackgroundTimeoutMs": DEFAULT_BACKGROUND_TIMEOUT_MS}
+    assert node == {
+        "maxTimeoutMs": MAX_TIMEOUT_MS,
+        "defaultTimeoutMs": DEFAULT_TIMEOUT_MS,
+        "maxMemoryMb": 1176,
+        "defaultMemoryMb": 784,
+        "maxCheckMemoryMb": 1176,
+        "defaultCheckMemoryMb": 1024,
+        "concurrentCalls": 2,
+        "callsPerMinute": 24,
+        "maxBackgroundTimeoutMs": DEFAULT_BACKGROUND_TIMEOUT_MS,
+    }
     small = resolve_limits(max_memory_mb=600, default_memory_mb=400)
     assert small["concurrentCalls"] == 1 and small["callsPerMinute"] == 12
+    swap_backed_small = resolve_limits(
+        max_memory_mb=600,
+        default_memory_mb=400,
+        max_check_memory_mb=1024,
+        default_check_memory_mb=1024,
+    )
+    assert swap_backed_small["maxMemoryMb"] == 600
+    assert swap_backed_small["maxCheckMemoryMb"] == swap_backed_small["defaultCheckMemoryMb"] == 1024
     # Out-of-range, missing and malformed installation values must clamp instead of failing open.
     assert resolve_limits(max_memory_mb=99_999)["maxMemoryMb"] == MAX_MEMORY_MB
     assert resolve_limits(max_memory_mb=1, default_memory_mb=1)["maxMemoryMb"] == MIN_MEMORY_MB
@@ -365,6 +503,19 @@ def self_test() -> None:
 
     assert validate_env({})["operation"] == "describe"
     assert validate_env({"operation": "check", "imports": ["scipy.signal"]})["imports"] == ["scipy.signal"]
+    checked = validate_check({"files": [{"name": "main.py", "text": "x: int = 'bad'"}]}, resolve_limits())
+    assert checked["pythonVersion"] == "3.11" and checked["typeCheckingMode"] == "standard"
+    assert validate_check({"files": [{"name": "main.py", "text": "x = 1"}]}, node)["memoryMb"] == 1_024
+    assert validate_check({"files": [{"name": "main.py", "text": "x = 1"}]}, small)["memoryMb"] == 600
+    assert validate_check({"files": [{"name": "main.py", "text": "x = 1"}]}, swap_backed_small)["memoryMb"] == 1_024
+    assert validate_check({"files": [{"name": "main.py", "text": "x = 1"}], "memoryMb": 512}, node)["memoryMb"] == 512
+    for invalid in ({"files": []}, {"files": [{"name": "../x.py", "text": ""}]}, {"files": [{"name": "x.txt", "text": ""}]}):
+        try:
+            validate_check(invalid, resolve_limits())
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"accepted invalid check request: {invalid}")
     for invalid in [
         {"operation": "eval"},
         {"operation": "check"},

@@ -726,6 +726,7 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
     kv(requirements.dl, "architectures", module.compatibility.architectures?.join(", "));
     kv(requirements.dl, "minimum cores", module.compatibility.minCores);
     kv(requirements.dl, "minimum RAM", module.compatibility.minRamMb ? `${module.compatibility.minRamMb} MB` : undefined);
+    kv(requirements.dl, "minimum RAM + swap", module.compatibility.minRamPlusSwapMb ? `${module.compatibility.minRamPlusSwapMb} MB` : undefined);
     kv(requirements.dl, "minimum disk", module.compatibility.minDiskMb ? `${module.compatibility.minDiskMb} MB` : undefined);
     kv(requirements.dl, "commands", module.compatibility.requiredCommands?.join(", "));
     dlgBody.appendChild(requirements);

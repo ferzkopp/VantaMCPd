@@ -47,7 +47,7 @@ module on compatible nodes, then invoke its tools according to the module's depl
 | **Text Tools** (`text-tools`) | 113 bounded text, data, date/time, document, security, and developer operations across twelve category tools | Replicated; on demand; round-robin routing | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 40 MB disk | [Text Tools](modules/text-tools/TextTools.md) |
 | **Corpus Search** (`corpus-search`) | Provenance-aware multi-source metadata search using SQLite FTS5/BM25, with phrase, exclusion, and field query syntax, and background refresh | Singleton; on demand; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 256 MB RAM; 10 GiB free node storage | [Corpus Search](modules/corpus-search/CorpusSearch.md) |
 | **Browser Retrieval** (`browser-retrieval`) | JavaScript-rendered page retrieval, selector queries, table extraction, and PDF or image downloads into artifact storage across node-reachable HTTP(S) sites | Replicated; isolated service broker; stateless calls | Debian/Ubuntu `amd64`; 2 cores; 3 GiB RAM; 2 GiB root disk; Chromium | [Browser Retrieval](modules/browser-retrieval/BrowserRetrieval.md) |
-| **Python Compute** (`python-compute`) | Sandboxed Python execution with values, charts, and optional shared artifact inputs and outputs | Replicated; isolated service broker; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 2 cores; 900 MB RAM; 2.5 GB root disk; bubblewrap | [Python Compute](modules/python-compute/PythonCompute.md) |
+| **Python Compute** (`python-compute`) | Sandboxed Python and Pyright diagnostics with scientific computing, Seaborn, Pint, Z3, binary/document formats, cryptography, and optional shared artifacts | Replicated; isolated service broker; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 2 cores; 900 MB RAM and 2 GB RAM plus active swap; 2.5 GB root disk; Python 3, Node.js, and bubblewrap | [Python Compute](modules/python-compute/PythonCompute.md) |
 | **Image Processing** (`image-processing`) | Isolated raster inspection, editing, composition, conversion, and visual comparison with inline or artifact transport | Replicated; isolated service broker; durable installation job | Debian/Ubuntu; `armhf`, `arm64`, or `amd64`; 768 MB RAM; 512 MB root disk; ImageMagick and/or Pillow | [Image Processing](modules/image-processing/ImageProcessing.md) |
 | **Document OCR** (`document-ocr`) | CUDA-assisted extraction of page-referenced text, confidence, and coordinates from image and scanned-PDF artifacts | Replicated; on-demand CUDA container; durable installation job | Debian 13 `amd64`; 2 cores; 8 GiB RAM; 12 GiB root disk; NVIDIA CUDA GPU with 8 GiB VRAM; rootless Podman | [Document OCR](modules/document-ocr/DocumentOCR.md) |
 
@@ -56,7 +56,7 @@ policies, and live installation state. See [Node modules](docs/Modules.md) for a
 
 ## Test coverage
 
-`npm test` builds the project and runs 117 automated tests covering schemas, security boundaries,
+`npm test` builds the project and runs 184 automated tests covering schemas, security boundaries,
 artifact integrity, module packaging and lifecycle, SSH/MCP transport, jobs, routing, and the monitoring
 dashboard. The current end-to-end matrix also calls every installed module through its public MCP API,
 one operation and explicit node at a time; internal module self-tests are not counted as integration coverage.
@@ -67,7 +67,7 @@ one operation and explicit node at a time; internal module self-tests are not co
 | Browser Retrieval | All four tools on `amd64`/Chromium |
 | Corpus Search | Corpus status, category resolution, filtered search, and exact record retrieval on ARM |
 | Image Processing | All five tools, 23 edits, three composition modes, four encoders, and both comparison modes on ARM/ImageMagick 6 and `amd64`/ImageMagick 7, including Pillow fallbacks |
-| Python Compute | Environment discovery plus successful, artifact-producing, error, and timeout executions on ARM/Python 3.11 and `amd64`/Python 3.13 |
+| Python Compute | Environment discovery plus successful, artifact-producing, error, and timeout executions on ARM/Python 3.11 and `amd64`/Python 3.13; Pyright checker schema and diagnostic normalization are covered locally |
 | Text Tools | All 113 operation variants on both ARM and `amd64`, including artifact-backed CSV workflows and command wrappers |
 
 ## Quickstart
@@ -181,6 +181,17 @@ sandbox behavior, and returning rendered content. The
 formats, inline and artifact transport, ordered edit pipelines, and image-specific isolation. The
 [Document OCR guide](modules/document-ocr/DocumentOCR.md) covers artifact inputs, page selection,
 background extraction, CUDA isolation, and structured OCR results.
+
+**Python Compute image example:**
+
+> Use python-compute on the fastest compatible node to render a high-resolution generative image named
+> "Vanta Orbital Bloom." Use NumPy, Seaborn, and matplotlib with deterministic seed 7420, a dark navy
+> background, 28 luminous parametric orbital curves, a central glow, and 900 star-like particles. Add a
+> subtle title and return the 1500x1125 result as a PNG.
+
+The full-bundle AMD64 worker rendered this image in 1.78 seconds:
+
+![Vanta Orbital Bloom generated by Python Compute](docs/python-compute-orbital-bloom.png)
 
 **Re-running the whole block on a working cluster is safe.** Every step is idempotent: an existing SSH
 key is reused, `authorized_keys` and `/etc/sudoers.d/99-vanta` are left alone once correct (so you are
@@ -394,6 +405,10 @@ usage details.
 ## Monitoring
 
 The daemon records every SSH interaction and serves a live dashboard at **<http://127.0.0.1:7420>**.
+
+An MCP-connected agent can resolve the verified live URL with `cluster_monitor`. You can ask it
+*"Open the Vanta monitoring console"*; clients with a browser-opening capability can open the returned
+link directly, while other clients will present the clickable loopback URL.
 
 > **Multiple launches:** Each stdio client starts its own VantaMCPd process, and only one process can
 > bind the default dashboard port `7420`. Use a different `monitoring.port` in each client's inventory,

@@ -333,6 +333,31 @@ test("evaluates an x86-64 node through the same manifest", () => {
   assert.equal(result.status, "compatible");
 });
 
+test("evaluates combined RAM and swap separately from the physical RAM floor", () => {
+  const base = textToolsPackage().manifest;
+  const manifest = parseModuleManifest({
+    ...base,
+    compatibility: { ...base.compatibility, minRamMb: 900, minRamPlusSwapMb: 2048 },
+  });
+  const hardware = {
+    cpu: { packageArch: "armhf", cores: 2 },
+    memory: { totalMb: 1000, swapTotalMb: 7900 },
+    os: { id: "debian" },
+    accelerators: [],
+  };
+  assert.equal(evaluateCompatibility(manifest, node(hardware)).status, "compatible");
+
+  hardware.memory.swapTotalMb = 500;
+  const insufficient = evaluateCompatibility(manifest, node(hardware));
+  assert.equal(insufficient.status, "incompatible");
+  assert.match(insufficient.reasons.join("; "), /requires 2048 MB RAM plus swap; node has 1500 MB/);
+
+  delete hardware.memory.swapTotalMb;
+  const unknown = evaluateCompatibility(manifest, node(hardware));
+  assert.equal(unknown.status, "unknown");
+  assert.match(unknown.unknown.join("; "), /total RAM or swap is not recorded/);
+});
+
 test("browser-retrieval targets the CPU-only AMD64 VM and rejects ARM workers", () => {
   const catalog = loadModuleCatalog(path.join(root, "modules"));
   const manifest = catalog.modules.find((item) => item.manifest.id === "browser-retrieval").manifest;

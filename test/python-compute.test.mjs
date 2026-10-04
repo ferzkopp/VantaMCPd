@@ -7,6 +7,7 @@ import test from "node:test";
 
 const moduleDirectory = path.resolve(import.meta.dirname, "..", "modules", "python-compute");
 const pythonCommand = ["python3", "python"].find((command) => spawnSync(command, ["--version"], { encoding: "utf8" }).status === 0);
+const pythonEnv = { ...process.env, PYTHONDONTWRITEBYTECODE: "1", PYTHONPATH: path.dirname(moduleDirectory) };
 
 function runPython(file, args = []) {
   assert.ok(pythonCommand, "Python 3 is required to test python-compute");
@@ -14,7 +15,7 @@ function runPython(file, args = []) {
     cwd: moduleDirectory,
     encoding: "utf8",
     timeout: 60_000,
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    env: pythonEnv,
   });
 }
 
@@ -23,6 +24,8 @@ test("Python Compute validates its schemas, inventory, harness, and sandbox argv
     ["schemas.py", []],
     ["inventory.py", ["--self-test"]],
     ["runner.py", ["--self-test"]],
+    ["checker.py", ["--self-test"]],
+    ["install_pyright.py", ["--self-test"]],
     ["sandbox.py", []],
     ["server.py", ["--self-test"]],
   ]) {
@@ -30,6 +33,21 @@ test("Python Compute validates its schemas, inventory, harness, and sandbox argv
     assert.equal(result.status, 0, result.stderr || result.error?.message);
     assert.equal(result.stderr, "");
   }
+});
+
+test("Python Compute advertises a read-only Pyright checker powered by the Pylance engine", () => {
+  const generated = spawnSync(pythonCommand, ["-B", "-c", [
+    "import json, schemas, server",
+    "request = schemas.validate_check({'files': [{'name': 'main.py', 'text': \"value: int = 'bad'\"}], 'pythonVersion': '3.12', 'typeCheckingMode': 'strict'}, schemas.resolve_limits())",
+    "tool = next(tool for tool in server.listed_tools() if tool['name'] == 'python_check')",
+    "print(json.dumps({'request': request, 'tool': tool}))",
+  ].join("\n")], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000, env: pythonEnv });
+  assert.equal(generated.status, 0, generated.stderr || generated.error?.message);
+  const { request, tool } = JSON.parse(generated.stdout);
+  assert.equal(request.pythonVersion, "3.12");
+  assert.equal(request.typeCheckingMode, "strict");
+  assert.equal(tool.annotations.readOnlyHint, true);
+  assert.match(tool.description, /Pyright.*Pylance/);
 });
 
 test("Python Compute confines every submitted call to a network-free sandbox", () => {
@@ -40,7 +58,7 @@ test("Python Compute confines every submitted call to a network-free sandbox", (
     "present = {'/usr', '/bin', '/lib'}",
     "argv = build_bwrap_argv('/state/calls/x', '/opt/runner.py', exists=lambda p: p in present, islink=lambda p: p == '/bin', readlink=lambda p: 'usr/bin')",
     "print(json.dumps({'sandbox': argv, 'limits': build_limited_argv(256, 10)}))",
-  ].join("\n")], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
+  ].join("\n")], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000, env: pythonEnv });
   assert.equal(generated.status, 0, generated.stderr || generated.error?.message);
   const { sandbox, limits } = JSON.parse(generated.stdout);
 
@@ -64,7 +82,7 @@ test("Python Compute forwards background execution to the broker only when the d
     "call({'_meta': {'vantamcpd/execution': 'background'}})",
     "call({'_meta': {'vantamcpd/execution': 'something-else'}})",
     "print(json.dumps(seen))",
-  ].join("\n")], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
+  ].join("\n")], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000, env: pythonEnv });
   assert.equal(generated.status, 0, generated.stderr || generated.error?.message);
   const seen = JSON.parse(generated.stdout);
   assert.deepEqual(seen.map((call) => call.execution), ["immediate", "background", "immediate"]);
@@ -92,7 +110,7 @@ test("Python Compute stops a sandbox as soon as its caller disconnects", () => {
     cwd: moduleDirectory,
     encoding: "utf8",
     timeout: 30_000,
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", PYTHONPATH: path.dirname(moduleDirectory) },
+    env: pythonEnv,
   });
   assert.equal(generated.status, 0, generated.stderr || generated.error?.message);
   const outcome = JSON.parse(generated.stdout);
@@ -109,7 +127,7 @@ test("Python Compute mounts only selected artifact inputs read-only", () => {
     "present = {'/usr', '/bin', '/lib'}",
     "argv = build_bwrap_argv('/state/calls/x', '/opt/runner.py', exists=lambda p: p in present, islink=lambda p: False, readlink=lambda p: '', has_inputs=True)",
     "print(json.dumps(argv))",
-  ].join("\n")], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
+  ].join("\n")], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000, env: pythonEnv });
   assert.equal(generated.status, 0, generated.stderr || generated.error?.message);
   const argv = JSON.parse(generated.stdout);
   const inputBind = argv.indexOf("/inputs");
@@ -145,7 +163,7 @@ test("Python Compute publishes and stages integrity-checked shared artifacts", (
       cwd: moduleDirectory,
       encoding: "utf8",
       timeout: 30_000,
-      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", TEST_STORE_ROOT: storeRoot },
+      env: { ...pythonEnv, TEST_STORE_ROOT: storeRoot },
     });
     assert.equal(result.status, 0, result.stderr || result.error?.message);
     const output = JSON.parse(result.stdout);
@@ -163,8 +181,10 @@ test("Python Compute sizes its limits on the node and applies matching cgroup ca
   const uninstaller = readFileSync(path.join(moduleDirectory, "uninstall.sh"), "utf8");
 
   assert.match(installer, /MemTotal.*\/proc\/meminfo/s, "limits must be derived from the node's memory");
+  assert.match(installer, /SwapTotal.*\/proc\/meminfo/s, "checker limits must include active swap");
+  assert.match(installer, /ram_plus_swap_mb.*-lt 2048/s, "the installer must enforce the live combined-memory requirement");
   assert.match(installer, /cores=\$\(nproc\)/);
-  for (const variable of ["VANTA_PYTHON_MAX_MEMORY_MB", "VANTA_PYTHON_DEFAULT_MEMORY_MB", "VANTA_PYTHON_MAX_TIMEOUT_MS", "VANTA_PYTHON_CONCURRENT_CALLS", "VANTA_PYTHON_CALLS_PER_MINUTE"]) {
+  for (const variable of ["VANTA_PYTHON_MAX_MEMORY_MB", "VANTA_PYTHON_DEFAULT_MEMORY_MB", "VANTA_PYTHON_MAX_CHECK_MEMORY_MB", "VANTA_PYTHON_DEFAULT_CHECK_MEMORY_MB", "VANTA_PYTHON_MAX_TIMEOUT_MS", "VANTA_PYTHON_CONCURRENT_CALLS", "VANTA_PYTHON_CALLS_PER_MINUTE"]) {
     assert.ok(installer.includes(variable), `the installer must record ${variable}`);
   }
   for (const override of ["VANTA_MODULE_OPTION_MAX_MEMORY_MB", "VANTA_MODULE_OPTION_CONCURRENT_CALLS", "VANTA_MODULE_OPTION_MAX_TIMEOUT_MS", "VANTA_MODULE_OPTION_CALLS_PER_MINUTE"]) {
@@ -188,7 +208,7 @@ test("Python Compute sizes its limits on the node and applies matching cgroup ca
 
 test("Python Compute declares a job-backed service manifest with bundle options", () => {
   const manifest = JSON.parse(readFileSync(path.join(moduleDirectory, "module.json"), "utf8"));
-  assert.equal(manifest.version, "0.3.3");
+  assert.equal(manifest.version, "0.4.4");
   assert.equal(manifest.schemaVersion, 2);
   assert.equal(manifest.lifecycle.execution.mode, "job");
   assert.equal(manifest.runtime.mode, "service");
@@ -201,12 +221,17 @@ test("Python Compute declares a job-backed service manifest with bundle options"
   assert.equal(manifest.persistentData, undefined, "submitted code must not keep state between calls");
   assert.deepEqual(manifest.installOptions.bundle.values, ["core", "science", "full"]);
   assert.equal(manifest.installOptions.bundle.default, "science");
+  assert.ok(manifest.capabilities.every((capability) => capability.length <= 80), "capabilities must fit the catalog schema");
   for (const option of ["memoryMb", "maxMemoryMb", "maxTimeoutMs", "concurrentCalls", "callsPerMinute"]) {
     // A declared default is always sent to the installer, which would suppress the node-sized derivation.
     assert.equal(manifest.installOptions[option].default, undefined, `${option} must not declare a default`);
     assert.equal(manifest.installOptions[option].type, "integer");
   }
   assert.ok(manifest.compatibility.architectures.includes("armhf"));
+  assert.equal(manifest.compatibility.minRamMb, 900);
+  assert.equal(manifest.compatibility.minRamPlusSwapMb, 2048);
+  assert.ok(manifest.packages.apt.includes("nodejs"));
+  assert.ok(!manifest.packages.apt.includes("npm"), "Pyright must not pull the full npm toolchain onto small nodes");
   for (const command of ["bwrap", "prlimit", "systemctl"]) {
     assert.ok(manifest.compatibility.requiredCommands.includes(command), `missing required command ${command}`);
   }

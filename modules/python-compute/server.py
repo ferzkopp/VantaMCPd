@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from schemas import MAX_BACKGROUND_TIMEOUT_MS, TOOLS, self_test as schemas_self_test
 
 PROTOCOL_VERSION = "2025-06-18"
-VERSION = "0.3.3"
+VERSION = "0.4.4"
 SOCKET_PATH = "/run/vantamcpd-python/python.sock"
 MAX_BROKER_MESSAGE = 2_000_000
 MAX_RESPONSE_BYTES = 2_000_000
@@ -26,8 +26,8 @@ RESPONSE_ENVELOPE_RESERVE = 256
 BACKGROUND_SOCKET_TIMEOUT = MAX_BACKGROUND_TIMEOUT_MS / 1000 + 120
 
 INSTRUCTIONS = (
-    "Call python_env before writing code to learn which modules the node provides. Submitted code runs in a "
-    "sandbox without network access and keeps no state between calls."
+    "Use python_check for Pylance-compatible static diagnostics from the Pyright engine. Call python_env before "
+    "writing executable code to learn which modules the node provides. Every call runs without network access."
 )
 
 
@@ -95,6 +95,7 @@ def tool_result(value: dict[str, Any]) -> dict[str, Any]:
 def listed_tools() -> list[dict[str, Any]]:
     annotations = {
         "python_env": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+        "python_check": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
         "python_run": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
     }
     return [{"name": name, "description": tool["description"], "inputSchema": tool["inputSchema"], "annotations": annotations[name]} for name, tool in TOOLS.items()]
@@ -145,13 +146,14 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
 
 def self_test() -> None:
     schemas_self_test()
-    assert list(TOOLS) == ["python_env", "python_run"]
+    assert list(TOOLS) == ["python_env", "python_check", "python_run"]
     for tool in listed_tools():
         assert tool["inputSchema"]["additionalProperties"] is False
         assert tool["annotations"]["openWorldHint"] is False
         assert len(tool["description"]) > 100
     assert listed_tools()[0]["annotations"]["readOnlyHint"] is True
-    assert listed_tools()[1]["annotations"]["readOnlyHint"] is False
+    assert listed_tools()[1]["annotations"]["readOnlyHint"] is True
+    assert listed_tools()[2]["annotations"]["readOnlyHint"] is False
     sized = json.loads(tool_result({"ok": True})["content"][0]["text"])
     assert sized["responseBytes"] > 0
     assert sized["responseLimitBytes"] == MAX_RESPONSE_BYTES

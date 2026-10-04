@@ -36,8 +36,16 @@ GROUPS: list[dict[str, Any]] = [
     },
     {
         "name": "plotting",
-        "summary": "Chart rendering to PNG and SVG with the non-interactive Agg backend",
-        "members": [("matplotlib", "python3-matplotlib", "matplotlib", "science")],
+        "summary": "Chart rendering and statistical visualization with the non-interactive Agg backend",
+        "members": [
+            ("matplotlib", "python3-matplotlib", "matplotlib", "science"),
+            ("seaborn", "python3-seaborn", "seaborn", "science"),
+        ],
+    },
+    {
+        "name": "units",
+        "summary": "Unit-aware quantities, dimensional analysis and measurement conversion",
+        "members": [("pint", "python3-pint", "Pint", "science")],
     },
     {
         "name": "imaging",
@@ -46,8 +54,12 @@ GROUPS: list[dict[str, Any]] = [
     },
     {
         "name": "symbolic",
-        "summary": "Symbolic algebra, calculus, equation solving and exact arithmetic",
-        "members": [("sympy", "python3-sympy", "sympy", "science")],
+        "summary": "Symbolic algebra, constraint solving and arbitrary-precision arithmetic",
+        "members": [
+            ("sympy", "python3-sympy", "sympy", "science"),
+            ("gmpy2", "python3-gmpy2", "gmpy2", "science"),
+            ("z3", "python3-z3", "z3-solver", "full"),
+        ],
     },
     {
         "name": "statistics",
@@ -84,6 +96,22 @@ GROUPS: list[dict[str, Any]] = [
             ("yaml", "python3-yaml", "PyYAML", "core"),
             ("dateutil", "python3-dateutil", "python-dateutil", "core"),
         ],
+    },
+    {
+        "name": "formats",
+        "summary": "Document, binary serialization and compressed artifact formats",
+        "members": [
+            ("markdown", "python3-markdown", "Markdown", "full"),
+            ("msgpack", "python3-msgpack", "msgpack", "full"),
+            ("cbor2", "python3-cbor2", "cbor2", "full"),
+            ("odf", "python3-odf", "odfpy", "full"),
+            ("zstandard", "python3-zstandard", "zstandard", "full"),
+        ],
+    },
+    {
+        "name": "cryptography",
+        "summary": "Encryption, signatures, key serialization and certificate inspection",
+        "members": [("cryptography", "python3-cryptography", "cryptography", "full")],
     },
 ]
 
@@ -187,8 +215,22 @@ def self_test() -> None:
     science = dict(apt_plan("science"))
     assert "python3-numpy" in science["core"]
     assert "python3-scipy" in science["science"]
+    assert "python3-seaborn" in science["science"]
+    assert "python3-pint" in science["science"]
+    assert "python3-gmpy2" in science["science"]
     assert "fonts-dejavu-core" in science["science"]
     assert "python3-sklearn" not in science["core"] + science["science"]
+    full = dict(apt_plan("full"))
+    for package in [
+        "python3-z3",
+        "python3-markdown",
+        "python3-msgpack",
+        "python3-cbor2",
+        "python3-odf",
+        "python3-zstandard",
+        "python3-cryptography",
+    ]:
+        assert package in full["full"]
     modules = [member[0] for group in GROUPS for member in group["members"]]
     assert len(modules) == len(set(modules)), "module names must be unique across groups"
     for group in GROUPS:

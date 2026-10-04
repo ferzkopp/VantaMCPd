@@ -7,6 +7,7 @@ import test from "node:test";
 
 const moduleDirectory = path.resolve(import.meta.dirname, "..", "modules", "image-processing");
 const pythonCommand = ["python3", "python"].find((command) => spawnSync(command, ["--version"], { encoding: "utf8" }).status === 0);
+const pythonEnv = { ...process.env, PYTHONDONTWRITEBYTECODE: "1", PYTHONPATH: path.dirname(moduleDirectory) };
 
 function runPython(file, args = [], extraEnv = {}) {
   assert.ok(pythonCommand, "Python 3 is required to test image-processing");
@@ -14,7 +15,7 @@ function runPython(file, args = [], extraEnv = {}) {
     cwd: moduleDirectory,
     encoding: "utf8",
     timeout: 60_000,
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", ...extraEnv },
+    env: { ...pythonEnv, ...extraEnv },
   });
 }
 
@@ -55,7 +56,7 @@ test("Image Processing advertises five strict semantic tools", () => {
     input: `${request}\n`,
     encoding: "utf8",
     timeout: 30_000,
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    env: pythonEnv,
   });
   assert.equal(result.status, 0, result.stderr || result.error?.message);
   assert.equal(result.stderr, "");
@@ -98,7 +99,7 @@ test("Image Processing rejects disguised and oversized inline sources", () => {
     "except ValueError as error: assert 'decoded bytes' in str(error)",
     "else: raise AssertionError('oversized inline source was accepted')",
   ].join("\n");
-  const result = spawnSync(pythonCommand, ["-B", "-c", script], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000 });
+  const result = spawnSync(pythonCommand, ["-B", "-c", script], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000, env: pythonEnv });
   assert.equal(result.status, 0, result.stderr || result.error?.message);
 });
 
@@ -111,7 +112,7 @@ test("Image Processing confines workers and keeps artifact storage outside the s
     "argv = build_bwrap_argv('/state/calls/x', '/opt/image', exists=lambda p: p in present, islink=lambda p: p in {'/bin', '/lib'}, readlink=lambda p: 'usr/' + p.rsplit('/', 1)[-1])",
     "print(json.dumps({'sandbox': argv, 'limits': build_limited_argv(256, 10)}))",
   ].join("\n");
-  const result = spawnSync(pythonCommand, ["-B", "-c", script], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000 });
+  const result = spawnSync(pythonCommand, ["-B", "-c", script], { cwd: moduleDirectory, encoding: "utf8", timeout: 30_000, env: pythonEnv });
   assert.equal(result.status, 0, result.stderr || result.error?.message);
   const { sandbox, limits } = JSON.parse(result.stdout);
   for (const flag of ["--unshare-net", "--unshare-user", "--unshare-pid", "--die-with-parent", "--clearenv"]) {
@@ -148,7 +149,7 @@ test("Image Processing stages and publishes integrity-checked shared artifacts",
       cwd: moduleDirectory,
       encoding: "utf8",
       timeout: 30_000,
-      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", TEST_STORE_ROOT: storeRoot },
+      env: { ...pythonEnv, TEST_STORE_ROOT: storeRoot },
     });
     assert.equal(result.status, 0, result.stderr || result.error?.message);
     const output = JSON.parse(result.stdout);
@@ -183,7 +184,7 @@ test("Image Processing performs a real Pillow edit when the Debian API is availa
       cwd: moduleDirectory,
       encoding: "utf8",
       timeout: 30_000,
-      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", TEST_IMAGE_ROOT: directory },
+      env: { ...pythonEnv, TEST_IMAGE_ROOT: directory },
     });
     assert.equal(result.status, 0, result.stderr || result.error?.message);
     assert.deepEqual(JSON.parse(result.stdout), { backend: "pillow", size: [4, 4], format: "WEBP" });
@@ -235,7 +236,7 @@ test("Image Processing preserves alpha across portable color edits", (context) =
       cwd: moduleDirectory,
       encoding: "utf8",
       timeout: 30_000,
-      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", TEST_IMAGE_ROOT: directory },
+      env: { ...pythonEnv, TEST_IMAGE_ROOT: directory },
     });
     assert.equal(result.status, 0, result.stderr || result.error?.message);
     const output = JSON.parse(result.stdout);
@@ -274,7 +275,7 @@ test("Image Processing creates montages through the portable Pillow path", (cont
       cwd: moduleDirectory,
       encoding: "utf8",
       timeout: 30_000,
-      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", TEST_IMAGE_ROOT: directory },
+      env: { ...pythonEnv, TEST_IMAGE_ROOT: directory },
     });
     assert.equal(result.status, 0, result.stderr || result.error?.message);
     assert.deepEqual(JSON.parse(result.stdout), { backend: "pillow", size: [40, 20], format: "PNG" });

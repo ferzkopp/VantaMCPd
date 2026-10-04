@@ -244,6 +244,8 @@ Compatibility combines stable inventory facts with a live preflight:
 | Live preflight | Reachability, free root and data-volume space, required commands, devices, drivers, and runtime versions |
 
 Missing or stale required facts produce `unknown`, not `compatible`; refresh hardware and check again.
+`minRamMb` is physical RAM, while `minRamPlusSwapMb` is installed physical RAM plus active swap;
+modules may declare both when they need a physical floor but can use swap as additional backing.
 `minDiskMb` refers to free space on the root filesystem. Modules with persistent data declare its
 separate storage requirement through `persistentData.minFreeMb`.
 

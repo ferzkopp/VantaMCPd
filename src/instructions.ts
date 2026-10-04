@@ -38,9 +38,10 @@ export function serverInstructions(capabilities: string, dashboardUrl?: string):
         "summaries by default; pass toolName to fetch one exact argument schema. Do not request every schema unless needed.\n"
       : "") +
     (dashboardUrl
-      ? `Every SSH interaction is logged and shown live on a local dashboard at ${dashboardUrl} - mention it when the ` +
-        "user asks what you did, wants to watch progress, or is debugging. cluster_list_nodes reports whether it is " +
-        "actually running."
+      ? `Every SSH interaction is logged and shown live on a local dashboard at ${dashboardUrl}. When the user asks ` +
+        "to open, view or watch the Vanta monitoring console, call cluster_monitor and then use the MCP client's " +
+        "browser-opening capability with the returned URL when one is available. Do not claim the browser was opened " +
+        "if the client has no such capability. cluster_list_nodes also reports whether the dashboard is actually running."
       : "")
   );
 }

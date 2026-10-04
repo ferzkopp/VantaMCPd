@@ -7,6 +7,7 @@ import test from "node:test";
 
 const moduleDirectory = path.resolve(import.meta.dirname, "..", "modules", "text-tools");
 const pythonCommand = ["python3", "python"].find((command) => spawnSync(command, ["--version"], { encoding: "utf8" }).status === 0);
+const pythonEnv = { ...process.env, PYTHONDONTWRITEBYTECODE: "1", PYTHONPATH: path.dirname(moduleDirectory) };
 
 function runProtocol(calls, extraEnv = {}) {
   assert.ok(pythonCommand, "Python 3 is required to test text-tools");
@@ -20,7 +21,7 @@ function runProtocol(calls, extraEnv = {}) {
     input: `${requests.map((request) => JSON.stringify(request)).join("\n")}\n`,
     encoding: "utf8",
     timeout: 30_000,
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", ...extraEnv },
+    env: { ...pythonEnv, ...extraEnv },
   });
   assert.equal(result.status, 0, result.stderr || result.error?.message);
   assert.equal(result.stderr, "");
@@ -238,7 +239,7 @@ test("artifact CSV operations stream files larger than the inline MCP limit", ()
     ].join("\n")], {
       encoding: "utf8",
       timeout: 30_000,
-      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", TEST_STORE_ROOT: storeRoot, ARTIFACT_MODULE: artifactModule },
+      env: { ...pythonEnv, TEST_STORE_ROOT: storeRoot, ARTIFACT_MODULE: artifactModule },
     });
     assert.equal(setup.status, 0, setup.stderr || setup.error?.message);
     const source = JSON.parse(setup.stdout);
