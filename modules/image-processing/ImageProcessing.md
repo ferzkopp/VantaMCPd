@@ -215,7 +215,8 @@ default; preserving it can retain private EXIF or ICC content.
 | Inline result | 1 MiB before base64 encoding |
 | Artifact inputs | 32 MiB combined |
 | Stored output | 32 MiB |
-| Width or height | 4096 pixels |
+| Width or height | 32768 pixels |
+| Montage cell width or height | 32768 pixels, subject to the complete canvas area limit |
 | Decoded area | 16 MiPixels |
 | Sources per composition | 8 |
 | Edits per pipeline | 8 |
@@ -225,6 +226,12 @@ default; preserving it can retain private EXIF or ICC content.
 
 The MCP request itself is capped at 10 MB, so artifacts are preferable when several inline inputs
 would approach that transport ceiling.
+
+Version 0.2.7 removes the former 4096-pixel side limit and 2048-pixel montage-cell limit. Wide layouts
+such as three 1920-by-1080 cells now fit without downscaling. The 16 MiPixel total area cap, encoded-byte
+limits, and node-derived memory/time limits still apply; native decoders may impose stricter limits.
+Pillow montage canvas dimensions are checked before allocating cells or output. Update existing module
+installations to apply both the schema change and the matching ImageMagick policy.
 
 ## Installation Options
 

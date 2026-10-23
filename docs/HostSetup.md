@@ -29,12 +29,14 @@ not a reduced feature mode.
 | Host | Daemon | Initial node enrollment | Status |
 | --- | --- | --- | --- |
 | Windows 10/11 | Node.js 20.11+ | Automated PowerShell helpers | Validated |
-| Linux x86-64 / ARM64 | Node.js 20.11+ | Standard SSH commands documented below | Compatible |
+| Linux x86-64 / ARM64 | Node.js 20.11+ | Native setup helpers or standard SSH commands | Compatible; not live-validated yet |
 | macOS | Portable Node.js code path | Not documented or tested | Future |
 
-The TypeScript daemon has no Windows shell dependency. Configuration, home-directory expansion, SSH,
-stdio MCP, and the loopback dashboard use cross-platform Node.js APIs. The `.ps1` files are Windows
-convenience scripts, not daemon dependencies. Native Bash equivalents remain future work.
+Core configuration, home-directory expansion, SSH, stdio MCP, and the loopback dashboard use
+cross-platform Node.js APIs. Optional [SMB file sources](Sources.md) use Windows PowerShell/SmbShare
+with DPAPI credentials on Windows, or an administrator-mounted encrypted CIFS share on Linux.
+The [setup script reference](../scripts/README.md) covers platform-aware npm commands and native
+`.ps1`/`.sh` entry points. Linux setup and CIFS behavior have local tests but are not live-validated.
 
 ### MCP agents
 
@@ -86,6 +88,17 @@ runs the build:
 powershell -ExecutionPolicy Bypass -File .\scripts\install-prereqs.ps1
 ```
 
+On Linux, install Node.js/npm and the OpenSSH client (including `ssh-copy-id`) using your host's
+package manager first. Then use the native helper; it checks prerequisites and installs/builds the
+Node.js project, but does not install host OS packages:
+
+```bash
+sh scripts/install-prereqs.sh --check
+sh scripts/install-prereqs.sh
+```
+
+`npm run prereqs:check` and `npm run prereqs` select the appropriate host implementation automatically.
+
 ## Create The Inventory
 
 Create the private inventory once, then edit it with the real node addresses, user, roles, and storage.
@@ -126,8 +139,17 @@ Passwords are entered directly into `ssh` and `sudo`; the script does not read o
 
 ## Linux Node Enrollment
 
-The current Linux path uses standard OpenSSH tools. Run it once per managed node, substituting the user,
-host, and port from the inventory.
+The Linux helper reads the same inventory, uses standard interactive OpenSSH prompts, installs a
+validated passwordless-sudo rule, and records hardware. Verify each fingerprint before accepting it:
+
+```bash
+sh scripts/bootstrap.sh --nodes worker-a,storage-a
+sh scripts/bootstrap.sh --nodes worker-a --verify
+```
+
+Use `--config /absolute/path/inventory.json` for another inventory. Passwords go directly to SSH/sudo,
+not Vanta or the agent. Existing keys are retained. Linux helpers have not been live-validated; the
+following manual alternative remains available. Substitute the inventory's user, host and port.
 
 Create the cluster key if it does not exist:
 
@@ -192,7 +214,17 @@ On Windows, install only missing packages with:
 powershell -ExecutionPolicy Bypass -File .\scripts\prepare-nodes.ps1
 ```
 
-From Linux, run the following once per ordinary node after enrollment:
+From Linux, use the matching helper after enrollment:
+
+```bash
+sh scripts/prepare-nodes.sh --check
+sh scripts/prepare-nodes.sh
+sh scripts/prepare-nodes.sh --nodes storage-a --extra-packages tmux,htop
+```
+
+It reports host/kernel/free disk/memory and missing packages, installing only the missing packages
+unless `--check` is set. `npm run prepare-nodes:check` and `npm run prepare-nodes` select the host backend.
+The following manual command is an alternative for each ordinary node:
 
 ```bash
 ssh -p 22 -i "$KEY" configure@192.0.2.11 \

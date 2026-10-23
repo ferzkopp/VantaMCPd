@@ -488,10 +488,12 @@ def compose_pillow(request: dict[str, Any], sources: list[str], output: str) -> 
         size = (box[2] - box[0], box[3] - box[1])
         draw.text(_position(result.size, size, request["position"], 16), request["text"], fill=request["color"], font=font)
     else:
+        columns = min(request["columns"], len(sources))
+        rows = math.ceil(len(sources) / columns)
+        size = (columns * request["cellWidth"], rows * request["cellHeight"])
+        _check_dimensions(*size)
         cells = [ImageOps.pad(_open_pillow(path).convert("RGBA"), (request["cellWidth"], request["cellHeight"]), color=request["background"]) for path in sources]
-        columns = min(request["columns"], len(cells))
-        rows = math.ceil(len(cells) / columns)
-        result = Image.new("RGBA", (columns * request["cellWidth"], rows * request["cellHeight"]), request["background"])
+        result = Image.new("RGBA", size, request["background"])
         for index, cell in enumerate(cells):
             result.alpha_composite(cell, ((index % columns) * request["cellWidth"], (index // columns) * request["cellHeight"]))
     _check_dimensions(result.width, result.height)

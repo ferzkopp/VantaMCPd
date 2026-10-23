@@ -14,6 +14,19 @@ export function serverInstructions(capabilities: string, dashboardUrl?: string):
     "Destructive operations (formatting, reboots, rm -rf, partitioning) require explicit user approval and a confirm flag.\n" +
     "A node with an NVIDIA GPU is enrolled like any other node and then promoted for CUDA separately: use cluster_gpu " +
     "(check, enable, test) rather than installing drivers by hand with cluster_run or cluster_packages.\n" +
+    "For approved SMB shares use cluster_list_sources, cluster_check_source, cluster_browse_source, " +
+    "cluster_search_source and cluster_stat_source with configured IDs and relative paths. Import selected " +
+    "files with cluster_import_source, or use cluster_import_sources with source-relative glob patterns such as " +
+    "Screenshot*.png or **/*.jpg for multiple files. Batch results report individual successes and failures; " +
+    "pass each successful result.artifact.artifactId to compute modules. To publish a result " +
+    "use cluster_export_source with the result artifact ID and a new destination filename. Export is exposed " +
+    "only after a configured read-write source passes a write probe; cluster_check_source with writeProbe=true " +
+    "refreshes this capability. It never overwrites files. Source transfers are foreground, not durable jobs. " +
+    "Never ask for passwords in chat, read credential files, mount SMB on nodes, or bypass source/artifact tools " +
+    "with shell commands. On Windows, missing credentials require the user to run scripts/bootstrap.ps1 " +
+    "-ConfigureSources under the identity running MCP. On Linux, an administrator must configure an encrypted " +
+    "CIFS mount matching sources[].mountPath; verify with npm run sources:check. Never read mount credentials " +
+    "or mount shares automatically. Never change firewall rules automatically.\n" +
     (capabilities
       ? "The cluster also runs node modules that do real work for you. Route a request to cluster_call_module_tool " +
         "whenever it matches one of these capabilities, even if the user does not name the module or the node:\n" +

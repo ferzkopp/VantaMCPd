@@ -24,6 +24,26 @@ const storage = {
   nfs: { enabled: true, network: "10.0.0.0/24" },
 };
 
+test("SMB sources default safely and reject credentials, unsafe roots and duplicate IDs", () => {
+  withConfig([{ name: "a", host: "10.0.0.1", role: "worker" }], (file) => {
+    assert.deepEqual(loadConfig(file).sources, []);
+    const source = { id: "images", type: "smb", server: "192.168.42.32", share: "VantaShare", credentialRef: "images" };
+    const save = (sources) => writeFileSync(file, JSON.stringify({ nodes: [{ name: "a", host: "10.0.0.1" }], sources }));
+    save([source]);
+    assert.equal(loadConfig(file).sources[0].access, "read-only");
+    assert.equal(loadConfig(file).sources[0].maxImportMb, 128);
+    save([{ ...source, mountPath: "/mnt/vanta-share" }]);
+    assert.equal(loadConfig(file).sources[0].mountPath, "/mnt/vanta-share");
+    for (const patch of [{ root: "../secret" }, { root: "folder\\escape" }, { password: "never-store-me" },
+      { mountPath: "relative" }, { mountPath: "/mnt/../secret" }, { mountPath: "/mnt/share\n" }, { mountPath: "/mnt//share" }]) {
+      save([{ ...source, ...patch }]);
+      assert.throws(() => loadConfig(file), /Invalid cluster config/);
+    }
+    save([source, source]);
+    assert.throws(() => loadConfig(file), /Duplicate source ID/);
+  });
+});
+
 test("every role token becomes a tag, so gpu nodes are targetable like storage nodes", () => {
   withConfig(
     [

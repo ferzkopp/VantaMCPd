@@ -35,10 +35,15 @@ param(
     [switch]   $SkipKeyInstall,
     [switch]   $SkipSudoSetup,
     [switch]   $ResetHostKey,
-    [switch]   $Verify
+    [switch]   $Verify,
+    [switch]   $ConfigureSources,
+    [switch]   $VerifySources,
+    [string[]] $SourceIds
 )
 
 $ErrorActionPreference = 'Stop'
+$Nodes = @($Nodes | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$SourceIds = @($SourceIds | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 # $PSScriptRoot is empty inside param() defaults of an advanced script on PS 5.1.
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'common.ps1')
@@ -59,9 +64,11 @@ function Invoke-Ssh {
     }
 }
 
-foreach ($tool in 'ssh', 'ssh-keygen') {
-    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
-        throw "$tool not found. Install the Windows OpenSSH Client feature (Settings > System > Optional features)."
+if (-not ($ConfigureSources -or $VerifySources)) {
+    foreach ($tool in 'ssh', 'ssh-keygen') {
+        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+            throw "$tool not found. Install the Windows OpenSSH Client feature (Settings > System > Optional features)."
+        }
     }
 }
 
@@ -184,6 +191,17 @@ if (-not $ConfigPath) {
 if (-not (Test-Path $ConfigPath)) { throw "Config not found: $ConfigPath" }
 $config = Get-Content -Raw -Path $ConfigPath | ConvertFrom-Json
 Write-Step "Inventory: $ConfigPath"
+
+$sourceHelper = Join-Path $PSScriptRoot 'smb-source.ps1'
+if ($ConfigureSources -or $VerifySources) {
+    & $sourceHelper -ConfigPath $ConfigPath -Configure:$ConfigureSources -Verify:$VerifySources -SourceIds $SourceIds
+    exit $LASTEXITCODE
+}
+if (@($config.sources | Where-Object { $_.enabled -ne $false -and $_.id }).Count -gt 0) {
+    Write-Step 'Checking SMB access from the MCP host (advisory)'
+    & $sourceHelper -ConfigPath $ConfigPath -Verify
+    if ($LASTEXITCODE -ne 0) { Write-Warn2 'SMB sources need attention; node bootstrap will continue.' }
+}
 
 $defaultUser = if ($config.defaults.user) { $config.defaults.user } else { 'configure' }
 $defaultPort = if ($config.defaults.port) { [int]$config.defaults.port } else { 22 }

@@ -21,6 +21,7 @@ import { registerModuleTools } from "./tools/modules.js";
 import { registerPackageTools } from "./tools/packages.js";
 import { registerServiceTools } from "./tools/services.js";
 import { registerStorageTools } from "./tools/storage.js";
+import { registerSourceTools } from "./tools/sources.js";
 import { registerSwapTools } from "./tools/swap.js";
 import { registerSystemTools } from "./tools/system.js";
 import { startWebServer } from "./web.js";
@@ -96,6 +97,7 @@ async function main(): Promise<void> {
   registerGpuTools(tools, ctx);
   registerJobTools(tools, ctx);
   registerModuleTools(tools, ctx);
+  const sourceTools = registerSourceTools(tools, ctx);
   const web = audit && config.monitoring.web ? startWebServer(config, audit, modules, jobs) : undefined;
   // Only advertise the dashboard once the socket is genuinely bound - it may lose a port race.
   web?.once("listening", () => {
@@ -114,6 +116,7 @@ async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
   // stdout is the MCP transport - diagnostics must go to stderr only.
   process.stderr.write(`vantamcpd ready: ${config.nodes.length} node(s) from ${config.configPath}\n`);
+  void sourceTools.refresh().catch(() => process.stderr.write("SMB export access check failed; export remains unavailable.\n"));
 
   // Complete discovery and module reconciliation without delaying MCP availability.
   void (async () => {

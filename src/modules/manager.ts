@@ -11,6 +11,7 @@ import { isTerminalJobStatus, type JobState } from "../jobs/types.js";
 import { MODULE_CALL_PATH, type JobManager } from "../jobs/manager.js";
 import { q } from "../security.js";
 import { nfsClientMountScript } from "../storage.js";
+import { SourceClient } from "../sources.js";
 import { mapLimit, type ExecResult, type SshPool } from "../ssh.js";
 import { loadModuleCatalog, type ModuleCatalog, type ModulePackage } from "./catalog.js";
 import { evaluateCompatibility, type CompatibilityResult } from "./compatibility.js";
@@ -43,6 +44,7 @@ export interface ModuleInstallResult {
   state?: "installed" | "provisioning";
   jobId?: string;
   error?: string;
+  sourceChecks?: Awaited<ReturnType<SourceClient["check"]>>[];
 }
 
 export interface ModuleUninstallResult {
@@ -234,6 +236,7 @@ export class ModuleManager {
     private readonly pool: SshPool,
     moduleRoot?: string,
     private readonly jobs?: JobManager,
+    private readonly sources = new SourceClient(config),
   ) {
     this.catalog = loadModuleCatalog(moduleRoot);
   }
@@ -440,6 +443,15 @@ export class ModuleManager {
         }),
       ]));
       await this.assertInstallPlacement(modulePackage, nodes, timeoutMs);
+      const sourceChecks: Awaited<ReturnType<SourceClient["check"]>>[] = [];
+      if (moduleId === "artifact-storage") {
+        for (const source of this.config.sources ?? []) {
+          if (!source.enabled) continue;
+          const result = await this.sources.check(source.id);
+          sourceChecks.push(result);
+          if (!result.ok) process.stderr.write(`SMB source ${source.id}: ${result.message}. ${result.guidance.join(" ")}\n`);
+        }
+      }
       const busyJobs = await this.activeModuleJobs(moduleId, nodes);
       const checks = await this.check(moduleId, nodes, Math.min(timeoutMs, 30_000));
       const results = await mapLimit(nodes, this.config.maxConcurrency, async (node, index) => {
@@ -518,7 +530,7 @@ export class ModuleManager {
       });
       this.routeCursors.delete(moduleId);
       if (results.some((result) => result.ok)) this.notifyInventoryChanged();
-      return results;
+      return sourceChecks.length ? results.map((result) => ({ ...result, sourceChecks })) : results;
     });
   }
 
@@ -776,49 +788,53 @@ export class ModuleManager {
       }
       return this.submitBackgroundCall(modulePackage, node, toolName, args);
     }
+    return this.withToolSession(moduleId, node, [toolName], (call) => call(toolName, args));
+  }
+
+  async withToolSession<T>(moduleId: string, node: ResolvedNode | undefined, toolNames: string[],
+    operation: (call: (name: string, args: Record<string, unknown>) => Promise<ModuleToolCallResult>) => Promise<T>,
+    signal?: AbortSignal): Promise<T> {
+    const modulePackage = this.get(moduleId);
+    for (const name of toolNames) {
+      if (toolExecutionPolicy(modulePackage.manifest, name) === "required") throw new Error(`${moduleId} tool ${name} requires background execution.`);
+    }
+    signal?.throwIfAborted();
     const selection = node === undefined ? "automatic" : "explicit";
     await this.waitForModuleMutation(moduleId);
     const selectedNode = node ?? await this.selectInstalledNode(modulePackage, true);
-    let output: unknown;
-    const result = await this.withClient(modulePackage, selectedNode, async (client, timeout) => {
+    return this.withClient(modulePackage, selectedNode, async (client, timeout) => {
       const listed = await client.listTools({}, { timeout, maxTotalTimeout: timeout });
-      if (!listed.tools.some((tool) => tool.name === toolName)) {
-        // The list is already in hand, so name the alternatives rather than forcing a discovery round trip.
+      for (const name of toolNames) {
+        if (listed.tools.some((tool) => tool.name === name)) continue;
         const advertised = listed.tools.map((tool) => tool.name).sort().join(", ");
         throw new Error(
-          `Module ${moduleId} does not advertise tool ${toolName}. Available tools: ${advertised}. ` +
+          `Module ${moduleId} does not advertise tool ${name}. Available tools: ${advertised}. ` +
           `Call cluster_list_module_tools for their argument schemas.`,
         );
       }
-      const called = await client.callTool(
-        { name: toolName, arguments: args },
-        undefined,
-        { timeout, maxTotalTimeout: timeout },
-      );
-      output = normalizeModuleOutput(called);
-      const outputRecord = typeof output === "object" && output !== null && !Array.isArray(output)
-        ? output as Record<string, unknown>
-        : undefined;
-      const truncationReasons = Array.isArray(outputRecord?.truncationReasons)
-        ? outputRecord.truncationReasons.filter((reason): reason is string => typeof reason === "string")
-        : undefined;
-      setCurrentAuditResult({
-        ...(typeof outputRecord?.complete === "boolean" ? { complete: outputRecord.complete } : {}),
-        ...(truncationReasons === undefined ? {} : { truncationReasons }),
-        responseLimitBytes: modulePackage.manifest.limits.maxOutputBytes,
+      return operation(async (toolName, args) => {
+        signal?.throwIfAborted();
+        if (!toolNames.includes(toolName)) throw new Error(`Tool ${toolName} is not approved for this session.`);
+        const called = await client.callTool(
+          { name: toolName, arguments: args }, undefined, { timeout, maxTotalTimeout: timeout, signal },
+        );
+        const output = normalizeModuleOutput(called);
+        const outputRecord = typeof output === "object" && output !== null && !Array.isArray(output)
+          ? output as Record<string, unknown> : undefined;
+        const truncationReasons = Array.isArray(outputRecord?.truncationReasons)
+          ? outputRecord.truncationReasons.filter((reason): reason is string => typeof reason === "string") : undefined;
+        setCurrentAuditResult({
+          ...(typeof outputRecord?.complete === "boolean" ? { complete: outputRecord.complete } : {}),
+          ...(truncationReasons === undefined ? {} : { truncationReasons }),
+          responseLimitBytes: modulePackage.manifest.limits.maxOutputBytes,
+        });
+        return {
+          ok: called.isError !== true, node: selectedNode.name, moduleId,
+          moduleVersion: modulePackage.manifest.version, toolName,
+          deployment: modulePackage.manifest.deployment, selection, output,
+        };
       });
-      return called;
     });
-    return {
-      ok: result.isError !== true,
-      node: selectedNode.name,
-      moduleId,
-      moduleVersion: modulePackage.manifest.version,
-      toolName,
-      deployment: modulePackage.manifest.deployment,
-      selection,
-      output: output ?? normalizeModuleOutput(result),
-    };
   }
 
   private async submitBackgroundCall(

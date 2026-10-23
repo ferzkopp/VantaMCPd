@@ -14,14 +14,16 @@
     "discover": "node dist/discover.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs",
-    "prereqs": "powershell -ExecutionPolicy Bypass -File scripts/install-prereqs.ps1",
-    "prereqs:check": "powershell -ExecutionPolicy Bypass -File scripts/install-prereqs.ps1 -Check",
-    "bootstrap": "powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1",
-    "prepare-nodes": "powershell -ExecutionPolicy Bypass -File scripts/prepare-nodes.ps1",
-    "prepare-nodes:check": "powershell -ExecutionPolicy Bypass -File scripts/prepare-nodes.ps1 -Check"
+    "prereqs": "node scripts/host-setup.mjs prereqs",
+    "prereqs:check": "node scripts/host-setup.mjs prereqs --check",
+    "bootstrap": "node scripts/host-setup.mjs bootstrap",
+    "prepare-nodes": "node scripts/host-setup.mjs prepare-nodes",
+    "prepare-nodes:check": "node scripts/host-setup.mjs prepare-nodes --check",
+    "sources:check": "node scripts/host-setup.mjs sources --verify"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.18.0",
+    "minimatch": "^10.2.6",
     "ssh2": "^1.16.0",
     "zod": "^3.25.76"
   },

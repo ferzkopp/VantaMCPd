@@ -813,12 +813,18 @@ test("SSH MCP transport frames messages and enforces request limits", async () =
   channel.push('{"jsonrpc":"2.0","id":1,"result":{}}\n');
   assert.equal(writes.length, 1);
   assert.equal(received[0].id, 1);
+  for (let index = 0; index < 20; index++) channel.push(`{"jsonrpc":"2.0","id":${index + 10},"result":{}}\n`);
+  assert.equal(received.length, 21, "the response budget applies per message, not across a reusable session");
   await assert.rejects(
     transport.send({ jsonrpc: "2.0", id: 2, method: "ping", params: { value: "x".repeat(128) } }),
     /exceeds 128 bytes/,
   );
   channel.stderr.write("diagnostic");
   assert.equal(transport.stderr, "diagnostic");
+  let oversized;
+  transport.onerror = (error) => { oversized = error; };
+  channel.push("x".repeat(257));
+  assert.match(oversized.message, /exceeds 256 bytes/);
   channel.close();
 });
 
@@ -1339,8 +1345,53 @@ test("artifact-dependent installs prepare the NFS client before staging and stop
   assert.equal(installed, 2);
 });
 
+test("module tool sessions reuse one client and discovery for all transfer chunks", async () => {
+  const target = node({});
+  const manager = new ModuleManager({ maxConcurrency: 1, nodes: [target] }, {}, path.join(root, "modules"));
+  let connections = 0;
+  let discoveries = 0;
+  let calls = 0;
+  manager.withClient = async (_module, selected, operation) => {
+    connections++;
+    assert.equal(selected, target);
+    return operation({
+      listTools: async () => { discoveries++; return { tools: [{ name: "artifact_upload" }] }; },
+      callTool: async () => { calls++; return { content: [{ type: "text", text: '{"ok":true}' }] }; },
+    }, 1000);
+  };
+  const result = await manager.withToolSession("artifact-storage", target, ["artifact_upload"], async (call) => {
+    for (let index = 0; index < 8; index++) assert.equal((await call("artifact_upload", { operation: "append" })).ok, true);
+    await assert.rejects(call("artifact_delete", {}), /not approved/);
+    return "complete";
+  });
+  assert.equal(result, "complete");
+  assert.equal(connections, 1);
+  assert.equal(discoveries, 1);
+  assert.equal(calls, 8);
+});
+
 test("NFS client script respects an explicit manual mountpoint", () => {
   const script = nfsClientMountScript({ ...node({}), host: "192.168.42.4" }, "/mnt/other");
   assert.match(script, /192\.168\.42\.4:\/mnt\/other/);
   assert.match(script, /mountpoint='\/mnt\/other'/);
+});
+
+test("artifact-storage installation returns advisory source failures without blocking installation", async () => {
+  const target = node({});
+  const checks = [];
+  const diagnostic = { sourceId: "images", ok: false, message: "TCP_UNREACHABLE", guidance: ["Allow scoped TCP 445 on the share server."] };
+  const manager = new ModuleManager({ maxConcurrency: 1, nodes: [target], sources: [{ id: "images", enabled: true }, { id: "disabled", enabled: false }] },
+    {}, path.join(root, "modules"), undefined, { check: async (id) => { checks.push(id); return diagnostic; } });
+  manager.assertInstallPlacement = async () => {};
+  manager.installAptDependencies = async () => ({ ok: true });
+  manager.check = async () => [{ reachable: true, compatibility: { status: "compatible", reasons: [], unknown: [] }, missingCommands: [] }];
+  let installations = 0;
+  manager.installOnNode = async () => { installations++; return { node: target.name, ok: true, moduleId: "artifact-storage", version: "0.1.0" }; };
+  const [result] = await manager.install("artifact-storage", [target]);
+  assert.equal(result.ok, true);
+  assert.equal(installations, 1);
+  assert.deepEqual(checks, ["images"]);
+  assert.deepEqual(result.sourceChecks, [diagnostic]);
+  await manager.install("text-tools", [target]);
+  assert.deepEqual(checks, ["images"], "unrelated module installs should not probe SMB");
 });

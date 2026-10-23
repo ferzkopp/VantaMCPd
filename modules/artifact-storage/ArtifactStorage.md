@@ -12,6 +12,11 @@ accepts a node filesystem path.
 The module is a singleton because one filesystem owns quota accounting, metadata, expiration, and
 garbage collection. Its broker is a persistent systemd service with no TCP listener.
 
+Approved [SMB file sources](../../docs/Sources.md) can import files into this store and publish result
+artifacts back to writable shares through the Windows or Linux MCP host. Nodes need no SMB credentials or
+SMB-to-NFS re-export, and consumer modules are unchanged. Artifact-storage installation returns
+advisory source-access checks with firewall/authentication guidance without blocking the store.
+
 ## Quickstart
 
 1. Configure and mount storage before enabling artifacts. The selected node needs a `storage` block
@@ -226,6 +231,37 @@ again on every invocation; Python Compute's persistent broker records its artifa
 time. Reinstall Python Compute manually only when automatic module updates are disabled, or when the
 artifact storage location changes after the current Python Compute version is already installed.
 
+## SMB Source Architecture
+
+SMB sources are an optional host-side connector, not another storage backend for compute modules.
+The MCP host alone accesses the approved share and bridges selected files into or out of the artifact
+protocol. The storage node remains the owner of immutable artifacts, quotas and expiration; compute
+modules continue using the existing artifact/NFS integration without SMB credentials or mounts.
+
+```mermaid
+flowchart LR
+		Share[Approved SMB share] <-->|Encrypted SMB3| Host[Windows or Linux MCP host]
+		Host <-->|Artifact API over SSH and MCP| Store[Artifact storage node]
+		Store <-->|Existing NFS data plane| Compute[Artifact-aware compute modules]
+```
+
+- **Import:** browse or search by configured source ID and root-relative path, then select one file
+	or a bounded set of glob matches. The host stages each file, computes SHA-256 while copying, and
+	uploads it through the bounded artifact protocol. Compute receives the resulting opaque artifact
+	IDs, not SMB paths. Imports are snapshots, not live links or continuous synchronization.
+- **Export:** the host downloads a result artifact through the same API, verifies chunk and whole-file
+	checksums, and stages it locally. It writes and verifies a uniquely named temporary file beside the
+	share destination, then publishes atomically without replacing an existing file. Export is available
+	only for explicitly read-write sources that pass the create/write/publication/delete probe.
+
+On **Windows**, the connector uses PowerShell/SmbShare with encryption required and user-bound DPAPI
+credentials kept outside the repository. On **Linux**, it uses an administrator-managed CIFS mount;
+the host validates its configured mountpoint, share identity, SMB3 dialect and encryption option before
+access. Vanta never mounts shares or reads mount credential files. Linux publication uses hard links,
+so export additionally requires server/filesystem support for them; Windows uses a no-replace rename.
+Live Linux CIFS operation is not yet validated. Setup, limits and platform-specific behavior are covered
+in [SMB file sources](../../docs/Sources.md) and the [host setup scripts](../../scripts/README.md).
+
 ## Quotas And Expiration
 
 `begin` and compute publication reserve the declared capacity before writing. The request is rejected
@@ -247,12 +283,22 @@ Abandoned uploads and reservations expire after one hour.
 - MCP request and response frames are capped at 800,000 bytes. Files move in bounded chunks or through
 	the trusted NFS data plane rather than one large MCP response.
 - Logs record operation names, status, and error classes, not artifact content.
+- SMB access is confined to configured source IDs and roots on the MCP host. Encryption is mandatory;
+	credentials are host-managed and never forwarded to cluster nodes or compute modules. Traversal and
+	observed symbolic links/reparse points are rejected. Exports require an explicit read-write policy,
+	a successful write probe and verified, atomic no-overwrite publication.
 
 The MVP trusts configured cluster nodes and their service accounts. Producer names are attribution and
 quota labels, not authenticated identities. There are no per-artifact ACLs: any opted-in module on a
 trusted node can read any unexpired artifact whose ID it receives, and write-enabled modules can
 publish. NFS export boundaries, host access, and consistent Unix ownership are therefore part of the
 security boundary.
+
+For SMB sources, the MCP host identity, Linux mount administration, share permissions and approved
+share writers are also trusted. Source path checks are not a race-proof sandbox against hostile
+directory replacement. Windows imports deny concurrent write/delete sharing; Linux imports detect
+size/timestamp changes but cannot exclude all remote writers. Importing a file creates a new immutable
+artifact; it does not make the share itself immutable or grant its files per-artifact access controls.
 
 ## Lifecycle And Recovery
 

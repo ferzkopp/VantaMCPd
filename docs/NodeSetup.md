@@ -141,6 +141,13 @@ Steps](#next-steps) unchanged, giving the node the `gpu` role modifier the way a
 .\scripts\prepare-nodes.ps1 -Nodes cluster-gpu
 ```
 
+Linux MCP host equivalent:
+
+```bash
+sh scripts/bootstrap.sh --nodes cluster-gpu
+sh scripts/prepare-nodes.sh --nodes cluster-gpu
+```
+
 Every role token becomes a tag, so GPU work can then be targeted with `["gpu"]` rather than by node
 name. Restart the MCP server, then confirm the node from the agent:
 
@@ -327,8 +334,8 @@ On Linux, follow [Linux node enrollment](HostSetup.md#linux-node-enrollment) and
 
 Then:
 
-1. Run `npm run discover` to record the node's hardware in the inventory. The Windows `bootstrap.ps1`
-   does this automatically; add `-- --assign` if a disk's purpose is ambiguous.
+1. Run `npm run discover` to record the node's hardware in the inventory. Both host bootstrap helpers
+   do this automatically; add `-- --assign` if a disk's purpose is ambiguous.
 2. **Restart the VantaMCPd MCP server.** It reads the inventory once at start-up, so a node added while
    it is running stays invisible until then.
 3. Confirm the node from the agent:

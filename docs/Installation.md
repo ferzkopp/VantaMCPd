@@ -136,10 +136,17 @@ on the node itself. Use it only when the reinstall is expected: a changed key ot
 
 ### Linux
 
-Use the standard `ssh-keygen`, `ssh-copy-id`, and validated `visudo` flow in
-[Linux node enrollment](HostSetup.md#linux-node-enrollment). It creates the same key and remote sudo
-policy; the daemon itself is identical on both hosts. The Linux instructions also show how to record
-hardware explicitly with `npm run discover`; otherwise, the daemon discovers it when it first connects.
+Use the native helper after installing Node.js/npm and OpenSSH (including `ssh-copy-id`):
+
+```bash
+sh scripts/bootstrap.sh
+sh scripts/bootstrap.sh --nodes worker-a --verify
+```
+
+It creates the same key and validated remote sudo policy and records hardware for the selected nodes.
+`npm run bootstrap` chooses Windows or Linux automatically. Linux helpers are not yet live-validated;
+[Linux node enrollment](HostSetup.md#linux-node-enrollment) retains the manual SSH alternative. See
+the [script reference](../scripts/README.md) for platform flags and prerequisite checks.
 
 ## 4. Install baseline packages on the managed nodes
 
@@ -167,8 +174,17 @@ are left alone and nothing is upgraded. Use `cluster_packages` for upgrades.
 Exit code `0` means all nodes are ready. Exit code `1` means at least one node needs attention; its
 summary reason is `missing-packages`, `no-sudo`, `apt-failed`, or `unreachable`.
 
-Linux hosts use the equivalent idempotent SSH and apt command in
-[Prepare managed nodes](HostSetup.md#prepare-managed-nodes).
+Linux hosts use the native helper, or the manual alternative in
+[Prepare managed nodes](HostSetup.md#prepare-managed-nodes):
+
+```bash
+sh scripts/prepare-nodes.sh --check
+sh scripts/prepare-nodes.sh --nodes storage-a --extra-packages tmux,htop
+```
+
+The portable `npm run prepare-nodes:check` and `npm run prepare-nodes` commands select the backend.
+Linux check mode reports missing packages without installing; its exit status is zero when the check
+succeeds, even when packages are missing. The detailed summary reasons above describe the Windows helper.
 
 ## 5. Register VantaMCPd with an agent
 

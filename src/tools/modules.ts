@@ -1,31 +1,9 @@
-import { createHash } from "node:crypto";
-import { createReadStream, existsSync, openSync, closeSync, readSync, statSync } from "node:fs";
-import path from "node:path";
 import { z } from "zod";
-import { expandHome, resolveTargets } from "../config.js";
+import { uploadLocalArtifact } from "../artifact-upload.js";
+import { resolveTargets } from "../config.js";
 import { errorText, json } from "../format.js";
 import { capabilitySummary } from "../modules/catalog.js";
 import { targetsSchema, timeoutSchema, type ToolContext, type ToolServer } from "./context.js";
-
-const ARTIFACT_CHUNK_BYTES = 512 * 1024;
-
-function localPath(value: string): string {
-  if (value.includes("\u0000")) throw new Error("Local path contains a NUL byte.");
-  return path.resolve(expandHome(value));
-}
-
-function objectResult(value: unknown, operation: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`artifact_upload ${operation} returned an invalid response.`);
-  }
-  return value as Record<string, unknown>;
-}
-
-async function fileSha256(file: string): Promise<string> {
-  const digest = createHash("sha256");
-  for await (const chunk of createReadStream(file)) digest.update(chunk);
-  return digest.digest("hex");
-}
 
 function resolveSingleTarget(ctx: ToolContext, target: string) {
   const nodes = resolveTargets(ctx.config, [target]);
@@ -259,78 +237,10 @@ export function registerModuleTools(server: ToolServer, ctx: ToolContext): void 
           .describe("Optional retention period, bounded by the artifact-storage installation."),
       },
     },
-    async ({ localPath: local, target, name, mimeType, producer, retentionDays }) => {
-      let uploadId: string | undefined;
+    async (args, extra) => {
       try {
-        const resolved = localPath(local);
-        if (!existsSync(resolved) || !statSync(resolved).isFile()) throw new Error(`Local file not found: ${resolved}`);
-        const fileSize = statSync(resolved).size;
-        const digest = await fileSha256(resolved);
-        const selectedNode = target === undefined ? undefined : resolveSingleTarget(ctx, target);
-        const artifactCall = async (arguments_: Record<string, unknown>) => {
-          const result = await ctx.modules.callTool("artifact-storage", selectedNode, "artifact_upload", arguments_);
-          if (!result.ok) {
-            const detail = typeof result.output === "string" ? result.output : JSON.stringify(result.output);
-            throw new Error(detail || `artifact_upload ${String(arguments_.operation)} failed.`);
-          }
-          return objectResult(result.output, String(arguments_.operation));
-        };
-        const begin = await artifactCall({
-          operation: "begin",
-          name: name ?? path.basename(resolved),
-          bytes: fileSize,
-          ...(mimeType === undefined ? {} : { mimeType }),
-          producer: producer ?? "vanta-local",
-          ...(retentionDays === undefined ? {} : { retentionDays }),
-          sha256: digest,
-        });
-        if (typeof begin.uploadId !== "string") throw new Error("artifact_upload begin did not return an uploadId.");
-        uploadId = begin.uploadId;
-        const chunkLimit = typeof begin.chunkLimitBytes === "number"
-          ? Math.min(begin.chunkLimitBytes, ARTIFACT_CHUNK_BYTES)
-          : ARTIFACT_CHUNK_BYTES;
-        if (!Number.isInteger(chunkLimit) || chunkLimit < 1) throw new Error("artifact_upload returned an invalid chunk limit.");
-
-        const handle = openSync(resolved, "r");
-        let offset = 0;
-        let chunks = 0;
-        try {
-          while (offset < fileSize) {
-            const buffer = Buffer.allocUnsafe(Math.min(chunkLimit, fileSize - offset));
-            const bytesRead = readSync(handle, buffer, 0, buffer.length, offset);
-            if (bytesRead === 0) throw new Error(`Local file ended unexpectedly at byte ${offset}.`);
-            const chunk = bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead);
-            const append = await artifactCall({
-              operation: "append",
-              uploadId,
-              offset,
-              data: chunk.toString("base64"),
-              sha256: createHash("sha256").update(chunk).digest("hex"),
-            });
-            const expectedOffset = offset + bytesRead;
-            if (append.nextOffset !== expectedOffset) {
-              throw new Error(`artifact_upload append returned offset ${String(append.nextOffset)}; expected ${expectedOffset}.`);
-            }
-            offset = expectedOffset;
-            chunks += 1;
-          }
-        } finally {
-          closeSync(handle);
-        }
-
-        const committed = await artifactCall({ operation: "commit", uploadId });
-  if (typeof committed.id !== "string") throw new Error("artifact_upload commit did not return an artifact ID.");
-        uploadId = undefined;
-  return json({ ...committed, artifactId: committed.id, chunks });
+        return json(await uploadLocalArtifact(ctx, args, extra.signal));
       } catch (err) {
-        if (uploadId !== undefined) {
-          try {
-            const selectedNode = target === undefined ? undefined : resolveSingleTarget(ctx, target);
-            await ctx.modules.callTool("artifact-storage", selectedNode, "artifact_upload", { operation: "abort", uploadId });
-          } catch {
-            // Preserve the original upload failure; artifact-storage garbage-collects abandoned sessions.
-          }
-        }
         return errorText(err);
       }
     },

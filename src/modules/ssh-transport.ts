@@ -83,14 +83,19 @@ export class SshMcpTransport implements Transport {
   }
 
   private receive(chunk: Buffer): void {
-    this.stdoutBytes += chunk.length;
-    if (!this.enforceOutputLimit()) return;
     try {
-      this.readBuffer.append(chunk);
-      for (;;) {
+      let offset = 0;
+      while (offset < chunk.length) {
+        const newline = chunk.indexOf(10, offset);
+        const end = newline < 0 ? chunk.length : newline + 1;
+        const frame = chunk.subarray(offset, end);
+        this.stdoutBytes += frame.length;
+        if (!this.enforceOutputLimit()) return;
+        this.readBuffer.append(frame);
         const message = this.readBuffer.readMessage();
-        if (message === null) break;
-        this.onmessage?.(message);
+        if (message !== null) this.onmessage?.(message);
+        if (newline >= 0) this.stdoutBytes = 0;
+        offset = end;
       }
     } catch (err) {
       this.fail(err as Error);

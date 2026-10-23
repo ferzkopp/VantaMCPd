@@ -7,8 +7,8 @@
   <policy domain="resource" name="map" value="256MiB"/>
   <policy domain="resource" name="disk" value="512MiB"/>
   <policy domain="resource" name="list-length" value="16"/>
-  <policy domain="resource" name="width" value="4096"/>
-  <policy domain="resource" name="height" value="4096"/>
+  <policy domain="resource" name="width" value="32768"/>
+  <policy domain="resource" name="height" value="32768"/>
   <policy domain="resource" name="area" value="16MP"/>
   <policy domain="delegate" rights="none" pattern="*"/>
   <policy domain="filter" rights="none" pattern="*"/>

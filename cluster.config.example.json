@@ -52,6 +52,19 @@
     "enabled": false,
     "storageNode": "cluster2"
   },
+  "sources": [
+    {
+      "id": "vanta-share",
+      "type": "smb",
+      "server": "10.0.0.50",
+      "share": "VantaShare",
+      "root": "",
+      "credentialRef": "vanta-share",
+      "access": "read-only",
+      "enabled": false,
+      "maxImportMb": 128
+    }
+  ],
   "modules": {
     "corpus-search": {
       "installOptions": {

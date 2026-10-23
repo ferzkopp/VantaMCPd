@@ -17,6 +17,8 @@ import { registerModuleTools } from "../dist/tools/modules.js";
 import { registerPackageTools } from "../dist/tools/packages.js";
 import { registerServiceTools } from "../dist/tools/services.js";
 import { registerStorageTools } from "../dist/tools/storage.js";
+import { registerSourceTools } from "../dist/tools/sources.js";
+import { SourceClient } from "../dist/sources.js";
 import { registerSwapTools } from "../dist/tools/swap.js";
 import { registerSystemTools } from "../dist/tools/system.js";
 
@@ -32,25 +34,31 @@ const REGISTRARS = [
   registerGpuTools,
   registerJobTools,
   registerModuleTools,
+  registerSourceTools,
 ];
 
 /** Every tool the daemon advertises. A change here has to be a deliberate API change. */
 const EXPECTED_TOOLS = [
+  "cluster_browse_source",
   "cluster_call_module_tool",
   "cluster_cancel_job",
   "cluster_check_command",
   "cluster_check_module",
+  "cluster_check_source",
   "cluster_download",
   "cluster_get_job",
   "cluster_get_job_log",
   "cluster_gpu",
   "cluster_hardware",
+  "cluster_import_source",
+  "cluster_import_sources",
   "cluster_install_module",
   "cluster_list_dir",
   "cluster_list_jobs",
   "cluster_list_module_tools",
   "cluster_list_modules",
   "cluster_list_nodes",
+  "cluster_list_sources",
   "cluster_logs",
   "cluster_monitor",
   "cluster_packages",
@@ -59,7 +67,9 @@ const EXPECTED_TOOLS = [
   "cluster_purge_module_data",
   "cluster_read_file",
   "cluster_run",
+  "cluster_search_source",
   "cluster_services",
+  "cluster_stat_source",
   "cluster_status",
   "cluster_storage",
   "cluster_swap",
@@ -306,7 +316,7 @@ test("uploads a local file through artifact-storage with bounded verified chunks
     assert.deepEqual(calls.map(({ args }) => args.operation), ["begin", "append", "append", "commit"]);
     assert.equal(calls[0].moduleId, "artifact-storage");
     assert.equal(calls[0].toolName, "artifact_upload");
-    assert.equal(calls[0].selectedNode, undefined);
+    assert.equal(calls[0].selectedNode, ctx.config.nodes.find((node) => node.storage));
     assert.equal(calls[0].args.bytes, payload.length);
     assert.equal(calls[0].args.sha256, createHash("sha256").update(payload).digest("hex"));
     assert.equal(calls[1].args.offset, 0);
@@ -348,6 +358,91 @@ test("registers exactly the advertised tool surface, each with a title, descript
     assert.ok(config.description && config.description.length > 40, `${name} has no usable description`);
     assert.equal(typeof config.inputSchema, "object", `${name} has no input schema`);
   }
+});
+
+test("SMB tools hide credential references and import through the artifact protocol", async () => {
+  const { ctx, tools } = buildContext();
+  ctx.config.sources = [{ id: "images", type: "smb", server: "192.168.42.32", share: "VantaShare", root: "", enabled: true,
+    credentialRef: "private-credential-reference", access: "read-only", maxImportMb: 1 }];
+  ctx.config.artifacts = { enabled: true };
+  const payload = Buffer.from([0, 255, 12, 34]);
+  const client = new SourceClient(ctx.config, async (request) => {
+    if (request.operation === "stage") {
+      writeFileSync(request.stagePath, payload);
+      return { bytes: payload.length, modifiedAt: "2026-01-01T00:00:00Z" };
+    }
+    return { entries: [{ path: "sub/image.png" }] };
+  });
+  registerSourceTools({ registerTool: (name, config, handler) => tools.set(name, { config, handler }) }, ctx, client);
+  assert.doesNotMatch(body(await call(tools, "cluster_list_sources", {})), /private-credential-reference|credentialRef/);
+  const browse = await call(tools, "cluster_browse_source", { sourceId: "images", path: "sub", limit: 20, offset: 0 });
+  assert.equal(JSON.parse(body(browse)).entries[0].path, "sub/image.png");
+  const invalid = await call(tools, "cluster_stat_source", { sourceId: "images", path: "../outside" });
+  assert.equal(invalid.isError, true);
+  assert.equal(parse(tools, "cluster_search_source", { sourceId: "images", query: "image", limit: 201 }).success, false);
+  const operations = [];
+  ctx.modules.callTool = async (_moduleId, selectedNode, _tool, args) => {
+    operations.push(args.operation);
+    if (args.operation === "begin") return { ok: true, node: ctx.config.nodes[0].name, output: { uploadId: "a".repeat(32) } };
+    assert.equal(selectedNode.name, ctx.config.nodes[0].name, "all upload operations must stay on the selected store");
+    if (args.operation === "append") {
+      assert.deepEqual(Buffer.from(args.data, "base64"), payload);
+      return { ok: true, output: { nextOffset: payload.length } };
+    }
+    return { ok: true, output: { id: "b".repeat(32), bytes: payload.length } };
+  };
+  const imported = await call(tools, "cluster_import_source", { sourceId: "images", path: "sub/image.png" });
+  assert.notEqual(imported.isError, true, body(imported));
+  assert.equal(JSON.parse(body(imported)).artifact.artifactId, "b".repeat(32));
+  assert.equal(JSON.parse(body(imported)).source.path, "sub/image.png");
+  assert.deepEqual(operations, ["begin", "append", "commit"]);
+});
+
+test("export is dynamically exposed only for verified writable sources and withdrawn after permission loss", async () => {
+  const { ctx, tools } = buildContext();
+  ctx.config.sources = [{ id: "images", type: "smb", server: "192.168.42.32", share: "VantaShare", root: "", enabled: true,
+    credentialRef: "private-ref", access: "read-write", maxImportMb: 1 }];
+  ctx.config.artifacts = { enabled: true };
+  const payload = Buffer.from("combined-image");
+  const sha256 = createHash("sha256").update(payload).digest("hex");
+  let allowWrite = true;
+  let published = false;
+  const client = new SourceClient(ctx.config, async (request) => {
+    if (request.operation === "check-write") {
+      if (!allowWrite) throw new Error("write denied");
+      return { writable: true };
+    }
+    if (request.operation === "export") {
+      assert.equal(request.path, "sub/combined.png");
+      assert.equal(request.sha256, sha256);
+      published = true;
+      return { exported: true, path: request.path, bytes: payload.length, sha256 };
+    }
+    return {};
+  });
+  const controller = registerSourceTools({ registerTool: (name, config, handler) => {
+    tools.set(name, { config, handler });
+    return { remove: () => tools.delete(name) };
+  } }, ctx, client);
+  assert.equal(tools.has("cluster_export_source"), false);
+  await controller.refresh();
+  assert.equal(tools.has("cluster_export_source"), true);
+  const sources = JSON.parse(body(await call(tools, "cluster_list_sources", {}))).sources;
+  assert.equal(sources[0].operations.includes("export"), true);
+  const artifactId = "a".repeat(32);
+  ctx.modules.callTool = async (_module, _node, tool, args) => {
+    assert.equal(tool, "artifact_fetch");
+    return { ok: true, node: ctx.config.nodes[0].name, output: args.operation === "info" ? { id: artifactId, bytes: payload.length, sha256 } : {
+      artifactId, encoding: "base64", offset: 0, bytes: payload.length, nextOffset: payload.length, data: payload.toString("base64"), sha256 } };
+  };
+  const result = await call(tools, "cluster_export_source", { sourceId: "images", artifactId, path: "sub/combined.png" });
+  assert.notEqual(result.isError, true, body(result));
+  assert.equal(published, true);
+  allowWrite = false;
+  const denied = await call(tools, "cluster_export_source", { sourceId: "images", artifactId, path: "sub/combined.png" });
+  assert.equal(denied.isError, true);
+  assert.equal(tools.has("cluster_export_source"), false);
+  assert.equal(client.canExport("images"), false);
 });
 
 test("input schemas reject malformed arguments before a handler runs", () => {

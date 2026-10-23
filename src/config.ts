@@ -53,6 +53,23 @@ const ArtifactsSchema = z.object({
   storageNode: z.string().min(1).optional(),
 }).strict();
 
+const SourceSchema = z.object({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+  type: z.literal("smb"),
+  server: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/),
+  share: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._ -]{0,79}$/),
+  root: z.string().max(1024).default("").refine((value) => value === "" || value.split("/").every(
+    (part) => part.length > 0 && !/[\\:\x00-\x1f\x7f<>"|?*]/.test(part) && part !== "." && part !== ".." && !/[. ]$/.test(part) &&
+      !/^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(part),
+  ), "root must be a safe slash-separated relative path"),
+  credentialRef: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+  mountPath: z.string().max(4096).refine((value) => value.startsWith("/") && !/[\\\x00-\x1f\x7f]/.test(value) &&
+    value.split("/").slice(1).every((part) => part && part !== "." && part !== ".."), "mountPath must be an absolute Linux mount directory").optional(),
+  access: z.enum(["read-only", "read-write"]).default("read-only"),
+  enabled: z.boolean().default(true),
+  maxImportMb: z.number().int().min(1).max(512).default(128),
+}).strict();
+
 // Everything below is discovered on the node and written back into the inventory; every field is
 // optional so a hand-written or half-populated block still loads.
 const DiskRoleSchema = z.enum(["system", "swap", "storage", "data", "unassigned"]);
@@ -234,11 +251,13 @@ const ConfigSchema = z.object({
   monitoring: MonitoringSchema.default({}),
   jobs: JobsSchema.default({}),
   artifacts: ArtifactsSchema.default({}),
+  sources: z.array(SourceSchema).max(32).default([]),
   modules: ModuleDefaultsSchema,
   nodes: z.array(NodeSchema).min(1),
 });
 
 export type RawConfig = z.infer<typeof ConfigSchema>;
+export type SourceConfig = z.infer<typeof SourceSchema>;
 export type StorageConfig = z.infer<typeof StorageSchema>;
 export type SecurityConfig = z.infer<typeof SecuritySchema>;
 export type MonitoringConfig = z.infer<typeof MonitoringSchema>;
@@ -276,6 +295,7 @@ export interface ClusterConfig {
   monitoring: MonitoringConfig;
   jobs: JobsConfig;
   artifacts: ArtifactsConfig;
+  sources: SourceConfig[];
   modules: ModuleDefaultsConfig;
   maxConcurrency: number;
   autoDiscoverHardware: boolean;
@@ -366,6 +386,12 @@ export function loadConfig(explicitPath?: string): ClusterConfig {
   const raw = result.data;
   const d = raw.defaults;
 
+  const sourceIds = new Set<string>();
+  for (const source of raw.sources) {
+    if (sourceIds.has(source.id)) throw new Error(`Duplicate source ID in config: ${source.id}`);
+    sourceIds.add(source.id);
+  }
+
   const seen = new Set<string>();
   const nodes: ResolvedNode[] = raw.nodes.map((n) => {
     if (seen.has(n.name)) throw new Error(`Duplicate node name in config: ${n.name}`);
@@ -440,6 +466,7 @@ export function loadConfig(explicitPath?: string): ClusterConfig {
     monitoring: { ...raw.monitoring, logDir: path.resolve(expandHome(raw.monitoring.logDir)) },
     jobs: raw.jobs,
     artifacts: raw.artifacts,
+    sources: raw.sources,
     modules: raw.modules,
     maxConcurrency: d.maxConcurrency,
     autoDiscoverHardware: d.autoDiscoverHardware,

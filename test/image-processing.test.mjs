@@ -75,6 +75,9 @@ test("Image Processing advertises five strict semantic tools", () => {
   }
   assert.equal(response.result.tools.find((tool) => tool.name === "image_inspect").inputSchema.additionalProperties, false);
   const editSchema = response.result.tools.find((tool) => tool.name === "image_edit").inputSchema;
+  const montageSchema = response.result.tools.find((tool) => tool.name === "image_compose").inputSchema.oneOf.find((schema) => schema.properties.operation.const === "montage");
+  assert.equal(montageSchema.properties.cellWidth.maximum, 32768);
+  assert.equal(montageSchema.properties.cellHeight.maximum, 32768);
   assert.equal(editSchema.properties.edits.maxItems, 8);
   assert.ok(editSchema.properties.edits.items.oneOf.every((schema) => schema.additionalProperties === false));
   assert.deepEqual(editSchema.properties.edits.items.oneOf.map((schema) => schema.properties.operation.const), [
@@ -267,8 +270,11 @@ test("Image Processing creates montages through the portable Pillow path", (cont
       "    Image.new('RGB', (16, 8), color).save(source)",
       "    sources.append(source)",
       "output = os.path.join(root, 'montage.png')",
-      "request = {'operation': 'montage', 'columns': 2, 'cellWidth': 20, 'cellHeight': 10, 'background': '#000000FF', 'output': {'format': 'png', 'quality': 85, 'stripMetadata': True}}",
+      "request = {'operation': 'montage', 'columns': 3, 'cellWidth': 1920, 'cellHeight': 1080, 'background': '#000000FF', 'output': {'format': 'png', 'quality': 85, 'stripMetadata': True}}",
       "backend = processing.compose_image(request, sources, output, 'imagemagick', 10)",
+      "try: processing._check_dimensions(8192, 4096)",
+      "except ValueError: pass",
+      "else: raise AssertionError('total pixel safety budget was removed')",
       "with Image.open(output) as image: print(json.dumps({'backend': backend, 'size': image.size, 'format': image.format}))",
     ].join("\n");
     const result = spawnSync(pythonCommand, ["-B", "-c", script], {
@@ -278,7 +284,7 @@ test("Image Processing creates montages through the portable Pillow path", (cont
       env: { ...pythonEnv, TEST_IMAGE_ROOT: directory },
     });
     assert.equal(result.status, 0, result.stderr || result.error?.message);
-    assert.deepEqual(JSON.parse(result.stdout), { backend: "pillow", size: [40, 20], format: "PNG" });
+    assert.deepEqual(JSON.parse(result.stdout), { backend: "pillow", size: [5760, 1080], format: "PNG" });
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -291,7 +297,7 @@ test("Image Processing lifecycle and policy keep the hardened service contract",
   const unit = readFileSync(path.join(moduleDirectory, "image-processing.service"), "utf8");
   const policy = readFileSync(path.join(moduleDirectory, "policy.xml"), "utf8");
 
-  assert.equal(manifest.version, "0.2.6");
+  assert.equal(manifest.version, "0.2.7");
   assert.equal(manifest.schemaVersion, 2);
   assert.deepEqual(manifest.artifactAccess, { read: true, write: true });
   assert.deepEqual(manifest.installOptions.backend.values, ["auto", "imagemagick", "pillow"]);

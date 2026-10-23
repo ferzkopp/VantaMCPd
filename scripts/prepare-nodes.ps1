@@ -29,6 +29,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$Nodes = @($Nodes | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$ExtraPackages = @($ExtraPackages | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 # $PSScriptRoot is empty inside param() defaults of an advanced script on PS 5.1.
 if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot '..\cluster.config.local.json' }
 . (Join-Path $PSScriptRoot 'common.ps1')
@@ -54,6 +56,13 @@ if (-not (Test-Path $keyFile)) { throw "Private key not found: $keyFile. Run scr
 $targets = $config.nodes
 if ($Nodes) { $targets = $config.nodes | Where-Object { $Nodes -contains $_.name } }
 if (-not $targets) { throw "No matching nodes. Available: $(($config.nodes | ForEach-Object name) -join ', ')" }
+
+if (@($targets | Where-Object { $_.role -match '(^|\+)storage(\+|$)' }).Count -gt 0 -and
+  @($config.sources | Where-Object { $_.enabled -ne $false -and $_.id }).Count -gt 0) {
+  Write-Step 'Storage setup: checking host-to-SMB access (advisory; nodes do not need SMB credentials)'
+  & (Join-Path $PSScriptRoot 'smb-source.ps1') -ConfigPath $ConfigPath -Verify
+  if ($LASTEXITCODE -ne 0) { Write-Warn2 'SMB sources need attention; storage node preparation will continue.' }
+}
 
 # Single-quoted here-string: everything below is evaluated by bash on the node, not by PowerShell.
 # argv: <check|install> <package> [package ...]

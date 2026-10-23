@@ -8,7 +8,7 @@ from typing import Any
 MAX_INLINE_BYTES = 1024 * 1024
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
 MAX_OUTPUT_BYTES = 32 * 1024 * 1024
-MAX_DIMENSION = 4096
+MAX_DIMENSION = 32768
 MAX_PIXELS = 16 * 1024 * 1024
 MAX_SOURCES = 8
 MAX_EDITS = 8
@@ -307,8 +307,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                         "operation": {"const": "montage"},
                         "sources": {"type": "array", "minItems": 1, "maxItems": MAX_SOURCES, "items": SOURCE_SCHEMA},
                         "columns": _integer(1, MAX_SOURCES, 2),
-                        "cellWidth": _integer(1, 2048, 512),
-                        "cellHeight": _integer(1, 2048, 512),
+                        "cellWidth": _integer(1, MAX_DIMENSION, 512),
+                        "cellHeight": _integer(1, MAX_DIMENSION, 512),
                         "background": {"type": "string", "pattern": r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$", "default": "#000000FF"},
                         "output": OUTPUT_SCHEMA,
                     },
@@ -547,8 +547,8 @@ def validate(tool: str, arguments: Any) -> dict[str, Any]:
                 "operation": operation,
                 "sources": [validate_source(source, f"sources[{index}]") for index, source in enumerate(sources)],
                 "columns": _bounded_integer(request.get("columns"), "columns", 1, MAX_SOURCES, 2),
-                "cellWidth": _bounded_integer(request.get("cellWidth"), "cellWidth", 1, 2048, 512),
-                "cellHeight": _bounded_integer(request.get("cellHeight"), "cellHeight", 1, 2048, 512),
+                "cellWidth": _bounded_integer(request.get("cellWidth"), "cellWidth", 1, MAX_DIMENSION, 512),
+                "cellHeight": _bounded_integer(request.get("cellHeight"), "cellHeight", 1, MAX_DIMENSION, 512),
                 "background": _color(request.get("background", "#000000FF"), "background"),
                 "output": validate_output(request.get("output")),
             }
