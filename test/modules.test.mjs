@@ -131,7 +131,7 @@ test("startup updates wait for a module's durable update job before updating the
 test("loads the text-tools package deterministically", () => {
   const catalog = loadModuleCatalog(path.join(root, "modules"));
   assert.deepEqual(catalog.errors, []);
-  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["artifact-storage", "browser-retrieval", "corpus-search", "document-ocr", "image-processing", "python-compute", "text-tools"]);
+  assert.deepEqual(catalog.modules.map((item) => item.manifest.id), ["artifact-storage", "browser-retrieval", "corpus-search", "document-ocr", "image-processing", "image-render", "python-compute", "text-tools"]);
   const textTools = catalog.modules.find((item) => item.manifest.id === "text-tools");
   assert.ok(textTools.files.some((file) => file.relativePath === "server.py"));
   assert.deepEqual(textTools.manifest.deployment, { mode: "replicated", routing: "round-robin" });
@@ -154,7 +154,7 @@ test("loads the ARM-first image-processing service contract", () => {
 test("packages manifest-declared shared files into standalone modules", () => {
   const catalog = loadModuleCatalog(path.join(root, "modules"));
   assert.deepEqual(catalog.errors, []);
-  for (const moduleId of ["browser-retrieval", "image-processing", "python-compute", "text-tools"]) {
+  for (const moduleId of ["browser-retrieval", "image-processing", "image-render", "python-compute", "text-tools"]) {
     const modulePackage = catalog.modules.find((item) => item.manifest.id === moduleId);
     assert.deepEqual(modulePackage.manifest.sharedFiles, ["artifact_protocol.py"]);
     assert.equal(modulePackage.files.filter((file) => file.relativePath === "artifact_protocol.py").length, 1);
@@ -1107,6 +1107,29 @@ test("distinguishes a pending version update from a corrupted installation", asy
     () => corrupt.callTool("text-tools", target, "regex_extract", {}),
     /receipt on test-node is inconsistent with the local catalog/,
   );
+});
+
+test("reads display-only module reports for installed modules and ignores invalid or orphaned ones", async () => {
+  const target = node({});
+  const line = (id, value) => `@report:${id}|${Buffer.from(typeof value === "string" ? value : JSON.stringify(value)).toString("base64")}\n`;
+  const valid = { schemaVersion: 1, updatedAt: "2026-10-23T16:00:00Z", summary: { benchmark: "640x480 in 35.6 s" }, details: { threads: 4 } };
+  const manager = new ModuleManager(
+    { maxConcurrency: 1 },
+    {
+      execMany: async () => [{
+        node: target.name, host: target.host, ok: true, code: 0, durationMs: 1, truncated: false, timedOut: false, stderr: "",
+        stdout: receiptLine("text-tools") + receiptLine("science-corpus", "1.4.2") + line("text-tools", valid) +
+          line("science-corpus", { ...valid, summary: { "Bad Label!": "x" } }) + line("orphan-module", valid) + line("../escape", valid),
+      }],
+    },
+    path.join(root, "modules"),
+  );
+  const [inventory] = await manager.installedModules([target]);
+  assert.deepEqual(inventory.moduleReports, { "text-tools": valid });
+  assert.deepEqual(inventory.modules, ["science-corpus", "text-tools"]);
+  assert.equal(inventory.invalidReceipts, undefined);
+  const listing = await manager.list([target]);
+  assert.deepEqual(listing.modules.find((item) => item.id === "text-tools").nodes[0].report, valid);
 });
 
 test("discovers installed module receipt counts per node", async () => {

@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 2,
+  "id": "image-render",
+  "name": "Image Render",
+  "version": "0.3.1",
+  "description": "Ray trace POV-Ray 3.7 scene scripts in an isolated sandbox, resolve staged artifacts referenced by the scene, publish PNG renders, and look up POV-Ray syntax, examples, includes and CC0 assets locally.",
+  "capabilities": [
+    "render 3D scenes and images from POV-Ray scene description scripts",
+    "ray trace photorealistic images with lights, materials, reflection, refraction",
+    "check POV-Ray scene syntax and report parse errors with line context",
+    "search the local POV-Ray 3.7 reference manual and tutorial for syntax",
+    "browse POV-Ray example scenes and standard include files",
+    "look up predefined POV-Ray colors, textures, finishes and macros",
+    "light scenes with CC0 HDRI environments and texture them with CC0 photos",
+    "place CC0 photoscanned props such as a chair, vase, lamp or crate in a scene",
+    "find and import any Poly Haven HDRI, texture or model on demand",
+    "use staged image, height-field and include file artifacts inside a scene",
+    "run long renders as durable background jobs and publish PNG artifacts",
+    "benchmark a node's ray tracing speed with the standard POV-Ray scene"
+  ],
+  "entrypoint": ["python3", "server.py"],
+  "sharedFiles": ["artifact_protocol.py"],
+  "compatibility": {
+    "os": ["debian", "ubuntu"],
+    "architectures": ["armhf", "arm64", "amd64"],
+    "minCores": 1,
+    "minRamMb": 900,
+    "minDiskMb": 768,
+    "requiredCommands": ["bash", "python3", "bwrap", "prlimit", "systemctl", "apt-get"],
+    "accelerators": []
+  },
+  "packages": {
+    "apt": ["python3", "bubblewrap", "passwd", "util-linux"]
+  },
+  "lifecycle": {
+    "install": "install.sh",
+    "uninstall": "uninstall.sh",
+    "execution": {"mode": "job", "timeoutMs": 2700000}
+  },
+  "artifactAccess": {"read": true, "write": true},
+  "installOptions": {
+    "assets": {
+      "type": "string-list",
+      "description": "CC0 Poly Haven asset packs downloaded at installation with pinned SHA-256 hashes: hdri, textures, models, or [\"none\"] alone.",
+      "minItems": 1,
+      "maxItems": 3,
+      "itemPattern": "^(hdri|textures|models|none)$",
+      "values": ["hdri", "textures", "models", "none"],
+      "default": ["hdri", "textures", "models"]
+    },
+    "maxMemoryMb": {
+      "type": "integer",
+      "description": "Highest address-space limit for one render in MB. Omit to size it from node memory.",
+      "minimum": 256,
+      "maximum": 16384
+    },
+    "threads": {
+      "type": "integer",
+      "description": "POV-Ray render threads per render. Omit to use every CPU core.",
+      "minimum": 1,
+      "maximum": 64
+    },
+    "maxTimeoutMs": {
+      "type": "integer",
+      "description": "Highest wall-clock limit for an immediate render. Omit for 10 minutes.",
+      "minimum": 10000,
+      "maximum": 1800000
+    },
+    "maxBackgroundTimeoutMs": {
+      "type": "integer",
+      "description": "Highest wall-clock limit for a render submitted as a background job, and its default. Omit for 4 hours.",
+      "minimum": 60000,
+      "maximum": 86400000,
+      "default": 14400000
+    },
+    "concurrentRenders": {
+      "type": "integer",
+      "description": "Renders this node runs at once, immediate and background combined. Omit for one.",
+      "minimum": 1,
+      "maximum": 4
+    },
+    "callsPerMinute": {
+      "type": "integer",
+      "description": "Render and check calls this installation accepts per minute.",
+      "minimum": 1,
+      "maximum": 120
+    }
+  },
+  "deployment": {"mode": "replicated", "routing": "round-robin"},
+  "background": {
+    "tools": {"render_scene": "optional", "render_benchmark": "required"},
+    "maxTimeoutMs": 86700000,
+    "minFreeMemoryMb": 256
+  },
+  "runtime": {"mode": "service", "systemdUnit": "image-render.service"},
+  "limits": {
+    "startupMs": 15000,
+    "callMs": 1860000,
+    "maxInputBytes": 4000000,
+    "maxOutputBytes": 4000000
+  }
+}

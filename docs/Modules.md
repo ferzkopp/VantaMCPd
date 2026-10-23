@@ -28,6 +28,7 @@ data lifecycle, and troubleshooting instructions.
 | `browser-retrieval` | JavaScript-rendered page retrieval, structured extraction, and file downloads into artifact storage | Replicated service | [Browser Retrieval](../modules/browser-retrieval/BrowserRetrieval.md) |
 | `python-compute` | Sandboxed Python calculation, analysis, and rendered artifacts | Replicated service | [Python Compute](../modules/python-compute/PythonCompute.md) |
 | `image-processing` | Isolated raster inspection, editing, composition, conversion, and comparison | Replicated service | [Image Processing](../modules/image-processing/ImageProcessing.md) |
+| `image-render` | Sandboxed POV-Ray 3.7 rendering with artifact references, background renders, a local manual and examples, CC0 starter assets, and on-demand Poly Haven HDRIs, textures and models | Replicated service | [Image Render](../modules/image-render/ImageRender.md) |
 
 ### Management Tools
 
@@ -252,6 +253,13 @@ separate storage requirement through `persistentData.minFreeMb`.
 `cluster_list_modules` performs a live receipt scan. `inventoryComplete: false` means unreachable nodes
 may still contain installations, so absence from `installedNodes` is not proof that a module is absent
 there. Invalid receipts are reported separately and never count as installations.
+
+A module may also publish a display-only installation report at
+`/var/lib/vantamcpd/module-reports/<module-id>/report.json` (at most 8 KiB): `schemaVersion: 1`, an
+`updatedAt` timestamp, up to eight short `summary` labels and optional `details`. The receipt scan reads
+it for installed modules only and ignores malformed reports. Summaries appear under **Installations** in
+the dashboard's module dialog and as `nodes[].report` in `cluster_list_modules`. `image-render` uses this
+for its `render_benchmark` result.
 
 ## Deployment and Routing
 

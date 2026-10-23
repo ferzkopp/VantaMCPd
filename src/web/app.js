@@ -718,6 +718,10 @@ import { formatDuration, formatRelativeTime, formatUtcTimestamp } from "./time.j
         `${node.version}${node.stale ? " · stale" : node.reachable ? " · reachable" : " · unreachable"}${readAt}`,
       );
       if (options) kv(installations.dl, `${node.node} options`, options);
+      Object.entries(node.report?.summary || {}).forEach(([label, value]) => {
+        const updated = node.report.updatedAt ? ` · ${formatRelativeTime(node.report.updatedAt)}` : "";
+        kv(installations.dl, `${node.node} ${label}`, `${value}${updated}`);
+      });
     });
     dlgBody.appendChild(installations);
 

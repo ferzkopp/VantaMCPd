@@ -101,6 +101,7 @@ export interface NodeModuleInventory {
   modules?: string[];
   moduleVersions?: Record<string, string>;
   moduleOptions?: Record<string, Record<string, unknown>>;
+  moduleReports?: Record<string, ModuleReport>;
   invalidReceipts?: string[];
   error?: string;
 }
@@ -147,6 +148,20 @@ const InstallationReceiptSchema = z.object({
 }).strict();
 
 type InstallationReceipt = z.infer<typeof InstallationReceiptSchema>;
+
+/** Directory where a module's service may publish one small, display-only report per installation. */
+export const MODULE_REPORT_ROOT = "/var/lib/vantamcpd/module-reports";
+const MAX_MODULE_REPORT_BYTES = 8_192;
+
+export const ModuleReportSchema = z.object({
+  schemaVersion: z.literal(1),
+  updatedAt: z.string().max(40),
+  summary: z.record(z.string().regex(/^[a-z][a-z0-9 ._-]{0,39}$/), z.string().max(300))
+    .refine((summary) => Object.keys(summary).length <= 8, "must have at most 8 entries"),
+  details: z.record(z.string(), z.unknown()).optional(),
+});
+
+export type ModuleReport = z.infer<typeof ModuleReportSchema>;
 
 function resultError(result: ExecResult): string {
   return result.error ?? (result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`);
@@ -311,6 +326,7 @@ export class ModuleManager {
             updateAvailable: state?.moduleVersions?.[item.manifest.id] === undefined
               ? undefined
               : compareSemanticVersions(state.moduleVersions[item.manifest.id] as string, item.manifest.version) < 0,
+            report: state?.moduleReports?.[item.manifest.id],
             inventoryError: state?.error,
             provisioningJob: lifecycleJob,
           };
@@ -612,7 +628,11 @@ export class ModuleManager {
       "if [ -d /var/lib/vantamcpd/modules ]; then " +
       "for receipt in /var/lib/vantamcpd/modules/*.json; do " +
       "[ -f \"$receipt\" ] || continue; " +
-      "printf '%s|' \"$(basename \"$receipt\" .json)\"; base64 -w 0 \"$receipt\"; printf '\\n'; done; fi";
+      "printf '%s|' \"$(basename \"$receipt\" .json)\"; base64 -w 0 \"$receipt\"; printf '\\n'; done; fi; " +
+      `for report in ${MODULE_REPORT_ROOT}/*/report.json; do ` +
+      "[ -f \"$report\" ] && [ ! -L \"$report\" ] || continue; " +
+      "printf '@report:%s|' \"$(basename \"$(dirname \"$report\")\")\"; " +
+      `head -c ${MAX_MODULE_REPORT_BYTES + 1} "$report" | base64 -w 0; printf '\\n'; done`;
     const results = await this.pool.execMany(nodes, command, { timeoutMs, maxOutputBytes: 64 * 1024 });
     return results.map((result, index) => {
       const node = nodes[index] as ResolvedNode;
@@ -621,9 +641,21 @@ export class ModuleManager {
       }
       const moduleVersions: Record<string, string> = {};
       const moduleOptions: Record<string, Record<string, unknown>> = {};
+      const moduleReports: Record<string, ModuleReport> = {};
       const invalidReceipts: string[] = [];
       for (const line of result.stdout.split(/\r?\n/).filter(Boolean)) {
         const separator = line.indexOf("|");
+        if (line.startsWith("@report:") && separator > 0) {
+          const reportId = line.slice("@report:".length, separator);
+          const payload = Buffer.from(line.slice(separator + 1), "base64");
+          if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(reportId) || payload.length > MAX_MODULE_REPORT_BYTES) continue;
+          try {
+            moduleReports[reportId] = ModuleReportSchema.parse(JSON.parse(payload.toString("utf8")));
+          } catch {
+            // A malformed report is display-only data; ignore it rather than fail the inventory.
+          }
+          continue;
+        }
         const id = separator < 0 ? line.trim() : line.slice(0, separator);
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) continue;
         if (separator < 0) {
@@ -642,6 +674,7 @@ export class ModuleManager {
         }
       }
       const modules = Object.keys(moduleVersions).sort();
+      const installedReports = Object.fromEntries(Object.entries(moduleReports).filter(([id]) => moduleVersions[id] !== undefined));
       return {
         node: node.name,
         reachable: true,
@@ -649,6 +682,7 @@ export class ModuleManager {
         modules,
         moduleVersions,
         ...(Object.keys(moduleOptions).length > 0 ? { moduleOptions } : {}),
+        ...(Object.keys(installedReports).length > 0 ? { moduleReports: installedReports } : {}),
         ...(invalidReceipts.length > 0 ? { invalidReceipts: invalidReceipts.sort() } : {}),
       };
     });

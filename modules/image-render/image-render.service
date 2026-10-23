@@ -1,0 +1,48 @@
+[Unit]
+Description=VantaMCPd Image Render broker
+After=local-fs.target
+
+[Service]
+Type=simple
+User=vantamcpd-render
+Group=vantamcpd-render
+EnvironmentFile=/etc/vantamcpd/image-render.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/vantamcpd/modules/image-render/current/service.py
+Restart=on-failure
+RestartSec=3s
+RuntimeDirectory=vantamcpd-render
+RuntimeDirectoryMode=0755
+StateDirectory=vantamcpd-render
+StateDirectoryMode=0700
+UMask=0077
+# The dashboard reads the benchmark report here; the leading '-' tolerates its absence.
+ReadWritePaths=-/var/lib/vantamcpd/module-reports/image-render
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# Bubblewrap needs mount/clone/openat2 and AF_NETLINK to create the per-call namespaces.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+
+MemoryHigh=600M
+MemoryMax=700M
+CPUQuota=100%
+CPUWeight=20
+Nice=10
+TasksMax=160
+TimeoutStopSec=8s
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
