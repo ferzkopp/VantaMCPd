@@ -14,14 +14,24 @@ export function serverInstructions(capabilities: string, dashboardUrl?: string):
     "Destructive operations (formatting, reboots, rm -rf, partitioning) require explicit user approval and a confirm flag.\n" +
     "A node with an NVIDIA GPU is enrolled like any other node and then promoted for CUDA separately: use cluster_gpu " +
     "(check, enable, test) rather than installing drivers by hand with cluster_run or cluster_packages.\n" +
+    "SMB source discovery and access checks run on the MCP host and do not require node hardware discovery. " +
     "For approved SMB shares use cluster_list_sources, cluster_check_source, cluster_browse_source, " +
     "cluster_search_source and cluster_stat_source with configured IDs and relative paths. Import selected " +
     "files with cluster_import_source, or use cluster_import_sources with source-relative glob patterns such as " +
-    "Screenshot*.png or **/*.jpg for multiple files. Batch results report individual successes and failures; " +
-    "pass each successful result.artifact.artifactId to compute modules. To publish a result " +
+    "Screenshot*.png (root only) or **/*.jpg (including subfolders) for multiple files. Paths and globs are " +
+    "slash-separated and relative to the configured source root, never UNC, local paths or node paths. " +
+    "Search query is a filename substring, not a glob or content search; check truncated before assuming discovery is complete. " +
+    "Imports require artifacts enabled. Single imports return artifact.artifactId; batch imports return complete and " +
+    "individual results[].ok values with successful IDs at results[].result.artifact.artifactId. " +
+    "Pass only successful IDs to compute modules. Successful batch imports are not rolled back; retry only failed paths " +
+    "to avoid duplicate artifacts. To publish a result " +
     "use cluster_export_source with the result artifact ID and a new destination filename. Export is exposed " +
     "only after a configured read-write source passes a write probe; cluster_check_source with writeProbe=true " +
-    "refreshes this capability. It never overwrites files. Source transfers are foreground, not durable jobs. " +
+    "refreshes this capability. Consult cluster_list_sources for per-source operations; if export is absent, check " +
+    "artifacts configuration and probe the intended read-write source rather than bypassing the tools. " +
+    "Export requires an existing parent directory and never overwrites files. After cancellation around publication, " +
+    "inspect the destination before retrying. maxImportMb bounds each imported or exported file; batch limits also apply. " +
+    "Source transfers are foreground, not durable jobs. " +
     "Never ask for passwords in chat, read credential files, mount SMB on nodes, or bypass source/artifact tools " +
     "with shell commands. On Windows, missing credentials require the user to run scripts/bootstrap.ps1 " +
     "-ConfigureSources under the identity running MCP. On Linux, an administrator must configure an encrypted " +

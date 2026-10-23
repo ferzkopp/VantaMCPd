@@ -257,6 +257,46 @@ test("agent instructions prefer artifact uploads over SFTP staging", () => {
   assert.match(uploadDescription, /do not use this tool to stage local files for artifact-aware modules/);
 });
 
+test("agent instructions explain SMB selection, result IDs and safe retries", () => {
+  const instructions = serverInstructions("");
+  assert.match(instructions, /do not require node hardware discovery/);
+  assert.match(instructions, /filename substring, not a glob or content search/);
+  assert.match(instructions, /check truncated/);
+  assert.match(instructions, /Single imports return artifact\.artifactId/);
+  assert.match(instructions, /results\[\]\.result\.artifact\.artifactId/);
+  assert.match(instructions, /retry only failed paths/);
+  assert.match(instructions, /cluster_check_source with writeProbe=true/);
+  assert.match(instructions, /existing parent directory/);
+  assert.match(instructions, /inspect the destination before retrying/);
+  assert.match(instructions, /maxImportMb bounds each imported or exported file/);
+});
+
+test("SMB discovery and schemas describe safe host-side workflows", async () => {
+  const { ctx, tools } = buildContext();
+  ctx.config.sources = [{ id: "images", type: "smb", server: "192.168.42.32", share: "VantaShare", root: "", enabled: true,
+    access: "read-only", maxImportMb: 128, credentialRef: "private" }];
+  const listed = () => call(tools, "cluster_list_sources", {}).then((result) => JSON.parse(body(result)).sources[0]);
+  assert.deepEqual((await listed()).operations, ["browse", "search", "stat"]);
+  ctx.config.artifacts = { enabled: true, storageNode: "cluster4" };
+  assert.deepEqual((await listed()).operations, ["browse", "search", "stat", "import"]);
+  assert.equal(parse(tools, "cluster_import_source", { sourceId: "images" }).success, false);
+  assert.equal(parse(tools, "cluster_import_source", { sourceId: "images", path: "" }).success, false);
+  assert.equal(parse(tools, "cluster_import_source", { sourceId: "images", path: "sub/image.png" }).success, true);
+  assert.equal(parse(tools, "cluster_browse_source", { sourceId: "images" }).data.path, "");
+  for (const name of ["cluster_list_sources", "cluster_browse_source", "cluster_search_source", "cluster_stat_source"]) {
+    assert.equal(tools.get(name).config.annotations.readOnlyHint, true);
+  }
+  for (const name of ["cluster_import_source", "cluster_import_sources"]) {
+    assert.equal(tools.get(name).config.annotations.readOnlyHint, false);
+    assert.equal(tools.get(name).config.annotations.idempotentHint, false);
+  }
+  assert.equal(tools.get("cluster_check_source").config.annotations.readOnlyHint, false);
+  assert.match(tools.get("cluster_check_source").config.description, /Linux.*encrypted CIFS mount/);
+  assert.match(tools.get("cluster_import_source").config.description, /artifact\.artifactId/);
+  assert.match(tools.get("cluster_import_sources").config.description, /results\[\]\.result\.artifact\.artifactId/);
+  assert.match(tools.get("cluster_import_sources").config.inputSchema.patterns.description, /not braces, extglobs or negation/);
+});
+
 test("monitor tool returns only a verified live console URL", async () => {
   const { ctx, tools } = buildContext();
   ctx.config.monitoring = { ...ctx.config.monitoring, enabled: true, web: true };

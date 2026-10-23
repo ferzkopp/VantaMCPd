@@ -97,6 +97,18 @@ The existing Windows implementation uses a no-replace rename instead. All mounts
 administrators/writers must remain trusted. Live Linux CIFS operation has not yet been validated;
 automated tests exercise mount validation and filesystem behavior using injected mount metadata.
 
+## Tool Discovery And Results
+
+Source tools run on the MCP host, not on nodes. `cluster_list_sources` returns each source's ID,
+`maxImportMb`, `writable` state and available `operations`: browse/search/stat always, import when
+artifacts are enabled, and export after a successful write probe.
+
+Omit `path` for the source root. Search matches filename substrings, not globs or contents; check
+`truncated`. Single imports return `artifact.artifactId`; batches return per-file `results` with IDs at
+`results[].result.artifact.artifactId`. Retry only failed paths. Pass IDs to compute modules, then
+export the output artifact ID. See the
+[tool reference](../modules/artifact-storage/ArtifactStorage.md#smb-source-tools).
+
 ## Conditional Export
 
 At MCP startup, enabled read-write sources receive a small create/write/rename/delete probe in their

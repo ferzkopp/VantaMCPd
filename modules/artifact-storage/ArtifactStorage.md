@@ -104,6 +104,12 @@ the shared directory is group-writable and setgid.
 
 ## Tools
 
+Built-in host tools handle local files and SMB sources. The `artifact_*` operations are module tools:
+fetch a schema with `cluster_list_module_tools` (`moduleId: "artifact-storage"`, `toolName`) and call
+them through `cluster_call_module_tool`.
+
+### Host File Upload
+
 For an existing file on the VantaMCPd host, prefer the built-in `cluster_upload_artifact` tool. It
 performs the complete protocol below with bounded reads, whole-file and chunk SHA-256 checks, and abort
 cleanup, then returns the committed artifact metadata:
@@ -115,6 +121,40 @@ cluster_upload_artifact { localPath: "./report.csv", mimeType: "text/csv", reten
 Use the lower-level operations directly when a client already supplies raw base64 bytes. Chat-only
 pasted images and documents are not automatically visible to MCP servers: when the client exposes no
 bytes or local path, save the content as a file before importing it.
+
+### SMB Source Tools
+
+Paths and patterns are slash-separated and relative to the source root, never UNC, local or node
+paths. Setup is covered in [SMB file sources](../../docs/Sources.md).
+
+| Tool | Purpose | Key arguments |
+| --- | --- | --- |
+| `cluster_list_sources` | Source IDs, limits, writability and per-source operations | None |
+| `cluster_check_source` | Check access; `writeProbe: true` refreshes export eligibility | `sourceId`, `writeProbe` |
+| `cluster_browse_source` | List a directory | `sourceId`, `path`, `limit`, `offset` |
+| `cluster_search_source` | Filename substring search, including subfolders | `sourceId`, `query`, `path` |
+| `cluster_stat_source` | File or directory metadata | `sourceId`, `path` |
+| `cluster_import_source` | Snapshot one file as an artifact | `sourceId`, file `path`, `name`, `retentionDays` |
+| `cluster_import_sources` | Import glob matches | `sourceId`, `patterns`, `maxFiles`, `maxTotalMb` |
+| `cluster_export_source` | Publish an artifact without overwriting | `sourceId`, `artifactId`, new file `path` |
+
+Imports require enabled artifacts. Export also requires a read-write source that passed its write
+probe; check each source's `operations`.
+
+```text
+cluster_import_source  { sourceId: "vanta-share", path: "reports/report.csv" }
+cluster_import_sources { sourceId: "vanta-share", patterns: ["Screenshot*.png", "**/*.jpg"] }
+cluster_export_source  { sourceId: "vanta-share", artifactId: "<id>", path: "results/summary.csv" }
+```
+
+A single import returns `artifact.artifactId`. A batch returns `complete` and per-file `results`;
+successful IDs are at `results[].result.artifact.artifactId`. Successful items are kept when others
+fail, so retry only failed paths. `Screenshot*.png` matches the root only; `**/*.jpg` recurses. See
+[batch imports](../../docs/Sources.md#batch-imports) for glob syntax and limits.
+
+Exports need an existing parent folder and verify checksums before atomic, no-overwrite publication.
+Transfers are foreground, not durable jobs; after cancellation near publication, inspect the
+destination before retrying.
 
 ### `artifact_upload`
 
@@ -161,11 +201,12 @@ and are removed after one hour without activity.
 { "operation": "info", "artifactId": "<artifact-id>" }
 ```
 
-`read` returns up to 524,288 bytes as base64, plus a SHA-256 for that chunk. Continue from
-`nextOffset` until `eof` is true:
+`read` returns base64 plus a chunk SHA-256. The protocol allows 524,288 bytes, but over MCP request at
+most **262,144 bytes**: base64 appears twice in each response, so larger reads can exceed the
+800,000-byte budget. Continue from `nextOffset` until `eof` is true:
 
 ```json
-{ "operation": "read", "artifactId": "<artifact-id>", "offset": 0, "length": 524288 }
+{ "operation": "read", "artifactId": "<artifact-id>", "offset": 0, "length": 262144 }
 ```
 
 Callers should verify each chunk hash and the complete artifact hash from `info`. An expired artifact
