@@ -208,6 +208,14 @@ Note: This requires enabled artifact storage, an artifact-aware Python Compute i
 read-write [SMB source](docs/Sources.md) that passes its write probe. The share copy remains after the
 temporary artifacts expire; publication is an explicit copy, not synchronization.
 
+**Cross-module prompt example:**
+
+[The Lensing Garden](docs/PromptExample.md) combines all seven non-OCR modules: research retrieval,
+parallel lensing simulations across ARM and x86 workers, shared artifacts, CPU ray tracing, image
+finishing, and verified PNG/WebP export to a configured share. The file includes usage instructions
+and prerequisites. It discovers healthy installed module replicas and assigns work by live node
+capabilities and available capacity; no hardcoded node names or inventory-specific edits are required.
+
 **Re-running the whole block on a working cluster is safe.** Every step is idempotent: an existing SSH
 key is reused, `authorized_keys` and `/etc/sudoers.d/99-vanta` are left alone once correct (so you are
 not even prompted for a password), and already-present packages are not upgraded. Module activation may
